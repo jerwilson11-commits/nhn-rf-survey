@@ -159,11 +159,64 @@ Resequenced 2026-08-28 so that no phase before 5 is blocked on SIM activation.
 | 6 | ✅ **Done 2026-08-31.** Foreground service, screen-off logging, thresholds and alarms | Survives a full site walk | No |
 | 7 | Reporting — statistics, floorplan mode, PDF / XLSX | A client-ready acceptance report comes out | No |
 | 8a | ✅ **Done 2026-09-01.** MCP server, stdio transport, 5 tools over the session corpus | An agent answers an acceptance question directly from recorded sessions | No |
-| 8b | Stateless `streamable-http` transport with CIMD client registration | Hosted deployment per MCP 2026-07-28 | No |
+| 8b | ✅ **Done 2026-09-01.** Stateless `streamable-http` transport, OAuth 2.1 Resource Server | Hosted deployment per MCP 2026-07-28 | No |
 
 The cellular collector moves to Phase 5 deliberately. By then the sampling loop, storage, export,
 and map are all validated against real Wi-Fi data, so when the SIM arrives we debug one module
 rather than ten simultaneously.
+
+### Phase 8b validation record — 2026-09-01
+
+Stateless HTTP transport and OAuth 2.1 Resource Server. Both transports register tools from the
+same `tools.register()`, so there is no per-transport tool code to drift.
+
+**Statelessness verified, not assumed.** `stateless_http=True` only asserts a property of the code;
+it holds because no tool retains anything between calls. Proof: a cold request carrying no prior
+`initialize` and no session header succeeded on its own, and no `Mcp-Session-Id` was issued.
+
+```
+initialize                          -> 200, Mcp-Session-Id: (none)
+tools/call, no init, no session id  -> 200, 4 sessions
+analyze_coverage over HTTP          -> 87.1% compliance, 2 holes (matches stdio exactly)
+```
+
+**A role correction the blueprint blurred.** CIMD is an *Authorization Server* feature, not a
+Resource Server one. Under CIMD a client hosts JSON metadata at a stable HTTPS URL and uses that
+URL as its `client_id`, replacing the deprecated Dynamic Client Registration round-trip. The party
+that fetches it is the AS during authorization; a Resource Server never sees a registration request
+at all — only a token whose `client_id` claim happens to be a URL.
+
+So the defensible claims are: Resource Server validating tokens from a CIMD-capable AS, handling
+URL-shaped `client_id` values, and **deliberately not implementing an Authorization Server**. That
+last is a decision — rolling your own OAuth AS is a known source of exploitable bugs, and real
+deployments delegate to Auth0, Okta, Entra or Keycloak. The SDK offers `auth_server_provider` for
+anyone who wants to; this does not use it.
+
+Auth verified end to end:
+
+```
+no token    -> 401, WWW-Authenticate carries resource_metadata pointer
+wrong token -> 401
+valid token -> 200
+RFC 9728 Protected Resource Metadata endpoint -> 200
+```
+
+Token validation pins algorithms (accepting the header's claim permits "alg":"none" and RS256->HS256
+confusion) and checks audience against this server's own resource identifier per RFC 8707, so a
+token minted for another resource cannot be replayed here.
+
+Security posture: binds loopback by default and **refuses** to bind wider with no auth configured
+rather than warning — an unauthenticated MCP server on 0.0.0.0 exposes every session file it can
+read. The dev verifier requires two separate environment switches to construct.
+
+Two SDK constraints found by hitting them:
+
+1. `FastMCP` was renamed to `MCPServer` in SDK 2.x. The first implementation targeted 1.x and
+   failed at import; migrated rather than pinning to a superseded version.
+2. `token_verifier` cannot be supplied without `auth` settings. Reasonable — a server that
+   validates tokens but publishes no Protected Resource Metadata gives a client no way to discover
+   where to obtain one. This surfaced only because the dev-auth path was actually exercised; the
+   auth code would otherwise have shipped untested.
 
 ### Phase 8a validation record — 2026-09-01
 

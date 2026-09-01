@@ -1,1 +1,3 @@
 mcp>=2.1.0
+# Resource Server JWT validation (http_server.py only)
+PyJWT[crypto]>=2.8.0
