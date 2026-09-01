@@ -7,6 +7,11 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
+    <!-- Cellular registration and NR state. Without it, cell identity and signal still arrive
+         via getAllCellInfo() under ACCESS_FINE_LOCATION, but NSA/SA cannot be distinguished —
+         which is precisely the thing worth knowing at a venue. Requested but not gated on. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Required to call startScan(). Does not actually change any Wi-Fi state. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
@@ -30,6 +35,7 @@
          required=true, so the app stays installable on hardware lacking one. -->
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
     <application
         android:allowBackup="true"

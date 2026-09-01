@@ -200,7 +200,7 @@ data class MeasurementSample(
     val timestampUtcMillis: Long,
     val location: GeoPoint?,
     val wifi: WifiSample?,
-    // TODO Phase 5: val cellular: CellularSample?
+    val cellular: CellularSample? = null,
     /** Present only on the sample written when a speed test completes, so the throughput row
      *  carries the position and RF conditions the test actually ran under. */
     val throughput: ThroughputSample? = null,

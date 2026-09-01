@@ -101,7 +101,11 @@ private val LOCATION_COLUMNS = listOf(
     "lat", "lon", "alt_m", "gps_accuracy_m", "speed_mps", "bearing_deg", "gps_provider",
 )
 
-/** Phase 5. Written empty until the cellular collector lands — see the note on COLUMNS. */
+/**
+ * Populated from Phase 5 onward. Order must match the emission order in toCsvRow() exactly — the
+ * size assertion catches a count mismatch but cannot catch a transposition, which would silently
+ * put RSRQ values in the RSRP column.
+ */
 private val CELLULAR_COLUMNS = listOf(
     "rat", "nr_state", "override_network_type", "is_roaming",
     "mcc", "mnc", "operator",
@@ -178,8 +182,43 @@ private fun MeasurementSample.toCsvRow(): String {
     cells += g?.bearingDeg?.let { String.format(Locale.US, "%.1f", it) }
     cells += g?.provider
 
-    // Cellular — empty until Phase 5. Count derived, never hardcoded.
-    repeat(CELLULAR_COLUMNS.size) { cells += null }
+    // Cellular. Column order must match CELLULAR_COLUMNS exactly; the assertion at the end of
+    // this function catches a count mismatch, but not a transposition — so the two lists are kept
+    // adjacent in this file deliberately.
+    val c = cellular
+    val lte = c?.lte
+    val nr = c?.nr
+    cells += c?.rat?.label
+    cells += c?.nrState?.label
+    cells += c?.overrideNetworkType
+    cells += c?.isRoaming?.toString()
+    cells += c?.mcc
+    cells += c?.mnc
+    cells += c?.operator
+    cells += lte?.ci?.toString()
+    cells += lte?.enbId?.toString()
+    cells += lte?.pci?.toString()
+    cells += lte?.tac?.toString()
+    cells += lte?.earfcn?.toString()
+    cells += lte?.band?.toString()
+    cells += lte?.bandwidthKhz?.toString()
+    cells += lte?.rsrpDbm?.toString()
+    cells += lte?.rsrqDb?.toString()
+    cells += lte?.rssnrDb?.toString()
+    cells += lte?.rssiDbm?.toString()
+    cells += lte?.cqi?.toString()
+    cells += lte?.timingAdvance?.toString()
+    cells += nr?.nci?.toString()
+    cells += nr?.pci?.toString()
+    cells += nr?.tac?.toString()
+    cells += nr?.nrarfcn?.toString()
+    cells += nr?.bandLabel
+    cells += nr?.ssRsrpDbm?.toString()
+    cells += nr?.ssRsrqDb?.toString()
+    cells += nr?.ssSinrDb?.toString()
+    cells += nr?.csiRsrpDbm?.toString()
+    cells += nr?.csiRsrqDb?.toString()
+    cells += nr?.csiSinrDb?.toString()
 
     cells += w?.ssid
     cells += w?.bssid

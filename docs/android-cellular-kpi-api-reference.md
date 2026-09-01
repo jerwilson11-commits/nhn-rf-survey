@@ -113,27 +113,50 @@ Two consequences:
    and vendor — this is the single biggest source of "why doesn't my app show 5G" confusion.
 2. To know NSA is even active, read the NR state rather than the cell list.
 
-### Reading NR state
+### Reading NR state — CORRECTED 2026-09-01
+
+**The approach originally documented here does not work for a third-party app.** This section
+previously recommended:
 
 ```
-val ss: ServiceState = telephonyManager.serviceState
-val nri = ss.getNetworkRegistrationInfo(
-    NetworkRegistrationInfo.DOMAIN_PS,
-    AccessNetworkConstants.TRANSPORT_TYPE_WWAN
-)
-val nrState = nri?.nrState   // NONE / RESTRICTED / NOT_RESTRICTED / CONNECTED
+ServiceState.getNetworkRegistrationInfo(DOMAIN_PS, TRANSPORT_TYPE_WWAN).nrState
 ```
 
-`NR_STATE_CONNECTED` means NSA is actively carrying data. `NOT_RESTRICTED` means the network
-advertises NR availability but no SCG is added. API 30+.
+Both `ServiceState.getNetworkRegistrationInfo()` and `NetworkRegistrationInfo.getNrState()` are
+**`@SystemApi`** — reachable only by system apps and privileged callers. This is not obvious from
+the public documentation, and it does not fail until compile time. It was written into this
+reference during planning and caught only when the collector was actually built against it.
 
-### Distinguishing SA
+Worth recording as a caution: an API that *appears* in the documentation is not necessarily one an
+app can call, and planning documents written from documentation alone will contain errors of this
+shape.
 
-If `nri.accessNetworkTechnology == TelephonyManager.NETWORK_TYPE_NR`, the device is registered
-**standalone** on NR. If it is `NETWORK_TYPE_LTE` and `nrState == CONNECTED`, it is NSA. This is
-the correct discriminator — the UI "5G" icon is not.
+### What actually works
 
-### `TelephonyDisplayInfo` (API 30+)
+Two public signals, combined:
+
+| Source | Tells you | Requires |
+|---|---|---|
+| `TelephonyManager.getDataNetworkType()` | `NETWORK_TYPE_NR` when registered **standalone** on NR | `READ_PHONE_STATE` |
+| `TelephonyDisplayInfo.getOverrideNetworkType()` | `NR_NSA` / `NR_ADVANCED` when an NR secondary cell group is carrying data | API 30+ |
+
+The discriminator:
+
+```
+data network type == NR                        -> 5G SA
+data network type == LTE && override says NR   -> 5G NSA
+data network type == LTE                       -> LTE
+```
+
+Neither signal is sufficient alone. `getDataNetworkType()` reports LTE under NSA, because the
+device genuinely is registered on the LTE anchor. `getOverrideNetworkType()` is a marketing-layer
+value that drives the status-bar icon and should never be used as the RAT on its own — but combined
+with the registered network type it is the best public discriminator available.
+
+Log both. The override is worth keeping in the CSV precisely so the icon a user sees can be
+compared against what the device is actually registered on.
+
+### `TelephonyDisplayInfo` (API 30+)### `TelephonyDisplayInfo` (API 30+)
 
 `getOverrideNetworkType()` returns the marketing-layer override the status bar uses:
 `OVERRIDE_NETWORK_TYPE_NR_NSA`, `NR_ADVANCED` (mmWave or high-band), `LTE_CA`, `LTE_ADVANCED_PRO`,

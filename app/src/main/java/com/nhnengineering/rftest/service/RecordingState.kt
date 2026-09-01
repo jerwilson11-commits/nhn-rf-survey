@@ -1,6 +1,7 @@
 package com.nhnengineering.rftest.service
 
 import com.nhnengineering.rftest.model.Breach
+import com.nhnengineering.rftest.model.CellularSample
 import com.nhnengineering.rftest.model.GeoPoint
 import com.nhnengineering.rftest.model.ThroughputSample
 import com.nhnengineering.rftest.model.Thresholds
@@ -25,6 +26,7 @@ object RecordingState {
 
     /** Live values, published by the service so the dashboard renders from one source. */
     val wifi = MutableStateFlow<WifiSample?>(null)
+    val cellular = MutableStateFlow<CellularSample?>(null)
     val fix = MutableStateFlow<GeoPoint?>(null)
 
     val rowCount = MutableStateFlow(0L)

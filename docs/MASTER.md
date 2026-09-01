@@ -155,7 +155,7 @@ Resequenced 2026-08-28 so that no phase before 5 is blocked on SIM activation.
 | 2 | ✅ **Done 2026-08-31.** GPS sampling loop, session record/stop, streaming CSV | A real walk produces a usable CSV | No |
 | 3 | ✅ **Done 2026-08-31.** Session browser, track plot, KML / GeoJSON export, share sheet | Route and RSSI render correctly | No |
 | 4 | ✅ **Done 2026-08-31.** Speedtest — DL / UL / latency / jitter / ICMP loss | Results within reason of Ookla over Wi-Fi | No |
-| 5 | **Cellular collector** plugged into the proven pipeline | LTE/NR values match Field Test Mode | **Yes** |
+| 5 | ⚠️ **Built 2026-09-01, UNVALIDATED.** Cellular collector, band derivation, UI card, CSV columns | LTE/NR values match Field Test Mode | **Yes — blocked on SIM** |
 | 6 | ✅ **Done 2026-08-31.** Foreground service, screen-off logging, thresholds and alarms | Survives a full site walk | No |
 | 7 | Reporting — statistics, floorplan mode, PDF / XLSX | A client-ready acceptance report comes out | No |
 | 8a | ✅ **Done 2026-09-01.** MCP server, stdio transport, 5 tools over the session corpus | An agent answers an acceptance question directly from recorded sessions | No |
@@ -164,6 +164,55 @@ Resequenced 2026-08-28 so that no phase before 5 is blocked on SIM activation.
 The cellular collector moves to Phase 5 deliberately. By then the sampling loop, storage, export,
 and map are all validated against real Wi-Fi data, so when the SIM arrives we debug one module
 rather than ten simultaneously.
+
+### Phase 5 build record — 2026-09-01 (NOT a validation record)
+
+Cellular collector built. **Nothing in it has met a live network.** The only part proven correct is
+`BandMapping`, which is pure arithmetic and carries 14 unit tests.
+
+What exists: `CellularCollector` (LTE and NR serving cell, neighbours, NSA/SA discrimination),
+`BandMapping` (EARFCN and NR-ARFCN to band and centre frequency), `CellularCard`, the 31 cellular
+CSV columns now populated, and `READ_PHONE_STATE` requested but not gated on.
+
+**Band derivation is tested and correct.** 14 unit tests against 3GPP TS 36.101 table 5.7.3-1 and
+TS 38.104 section 5.4.2.1. It exists because `getBands()` arrived at API 30 and is routinely empty —
+the framework reports what the modem hands it, and the Exynos modem in the test handset is exactly
+the kind that hands it nothing. The channel number is almost always present, so deriving the band
+turns "unknown" into data precisely where the vendor path fails.
+
+Two tests worth noting: NR-ARFCN 519000 resolves to 2595.0 MHz and n41 (the Margaritaville
+question), and 1950 MHz is reported as ambiguous between n2 and n25 rather than guessed — the
+channel number genuinely cannot resolve that overlap, and a confident wrong band in an acceptance
+report is worse than an honest "or".
+
+**A documentation error in this project, found by building against it.** The cellular API reference
+originally recommended `ServiceState.getNetworkRegistrationInfo()` and
+`NetworkRegistrationInfo.getNrState()` for NSA/SA discrimination. **Both are `@SystemApi`** and
+unreachable from a normal app. It compiled-errored rather than failing at runtime, which was luck.
+
+The working public-API path, now documented:
+
+```
+getDataNetworkType() == NETWORK_TYPE_NR                     -> 5G SA
+getDataNetworkType() == NETWORK_TYPE_LTE && override is NR  -> 5G NSA
+getDataNetworkType() == NETWORK_TYPE_LTE                    -> LTE
+```
+
+Neither signal suffices alone: `getDataNetworkType()` reports LTE under NSA because the device
+genuinely is on the LTE anchor, and `getOverrideNetworkType()` is the marketing value that drives
+the status-bar icon. Combined they are the best public discriminator available. The override is
+logged separately so the icon can be compared against actual registration.
+
+Generalisable lesson: **a planning document written from API documentation alone will contain
+errors of this shape.** An API appearing in the docs is not proof an app can call it.
+
+Separate `RsrpBucket` scale for cellular, deliberately not reusing the Wi-Fi `RssiBucket`. −70 dBm
+is marginal on Wi-Fi and unremarkable on cellular; one shared scale would paint a healthy DAS red.
+
+**Before the venue walk, in order:** SIM activates, local shakedown walk, cross-check serving RSRP /
+RSRQ / SINR / band / PCI against Field Test Mode (`*3001#12345#*`), fix what that exposes. Only then
+Margaritaville. Every prior collector produced believable wrong numbers on first contact with a real
+network and none of them crashed while doing it.
 
 ### Phase 8b validation record — 2026-09-01
 

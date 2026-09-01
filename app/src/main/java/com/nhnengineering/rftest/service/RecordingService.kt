@@ -15,6 +15,7 @@ import android.os.IBinder
 import android.util.Log
 import com.nhnengineering.rftest.MainActivity
 import com.nhnengineering.rftest.R
+import com.nhnengineering.rftest.cellular.CellularCollector
 import com.nhnengineering.rftest.location.LocationCollector
 import com.nhnengineering.rftest.model.MeasurementSample
 import com.nhnengineering.rftest.session.SessionCsvWriter
@@ -78,6 +79,7 @@ class RecordingService : Service() {
 
     private lateinit var wifi: WifiCollector
     private lateinit var locations: LocationCollector
+    private lateinit var cellular: CellularCollector
     private var writer: SessionCsvWriter? = null
 
     private var toneGenerator: ToneGenerator? = null
@@ -89,6 +91,7 @@ class RecordingService : Service() {
         super.onCreate()
         wifi = WifiCollector(this)
         locations = LocationCollector(this)
+        cellular = CellularCollector(this)
         createChannel()
     }
 
@@ -115,6 +118,7 @@ class RecordingService : Service() {
 
         wifi.start()
         locations.start()
+        cellular.start()
 
         loop = scope.launch {
             val w = runCatching { SessionCsvWriter.create(this@RecordingService, sessionName) }
@@ -134,8 +138,10 @@ class RecordingService : Service() {
                 wifi.requestScanRefresh()
                 val wifiNow = wifi.snapshot()
                 val fixNow = locations.snapshot()
+                val cellNow = cellular.snapshot()
                 RecordingState.wifi.value = wifiNow
                 RecordingState.fix.value = fixNow
+                RecordingState.cellular.value = cellNow
 
                 val throughput = RecordingState.pendingThroughput.value
                 if (throughput != null) RecordingState.pendingThroughput.value = null
@@ -148,6 +154,7 @@ class RecordingService : Service() {
                             timestampUtcMillis = System.currentTimeMillis(),
                             location = fixNow,
                             wifi = wifiNow,
+                            cellular = cellNow,
                             throughput = throughput,
                             note = if (throughput != null) "speedtest" else null,
                         )
@@ -223,6 +230,7 @@ class RecordingService : Service() {
 
         wifi.stop()
         locations.stop()
+        cellular.stop()
         RecordingState.breaches.value = emptyList()
 
         stopForeground(STOP_FOREGROUND_REMOVE)

@@ -58,12 +58,15 @@ private val REQUIRED_PERMISSIONS: Array<String> = buildList {
  * notification is suppressed, costing the visible indicator and the Stop action. That is a
  * degraded experience, not a broken app, so blocking every feature behind it would be wrong.
  */
-private val OPTIONAL_PERMISSIONS: Array<String> =
+private val OPTIONAL_PERMISSIONS: Array<String> = buildList {
+    // Cellular registration and NR state. Not gated on: without it the app still records Wi-Fi
+    // fully and still gets cell identity via location permission — only NSA/SA discrimination is
+    // lost. The cellular card says so explicitly rather than showing empty fields.
+    add(Manifest.permission.READ_PHONE_STATE)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        arrayOf(Manifest.permission.POST_NOTIFICATIONS)
-    } else {
-        emptyArray()
+        add(Manifest.permission.POST_NOTIFICATIONS)
     }
+}.toTypedArray()
 
 private fun hasAllPermissions(context: Context): Boolean = REQUIRED_PERMISSIONS.all {
     ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED

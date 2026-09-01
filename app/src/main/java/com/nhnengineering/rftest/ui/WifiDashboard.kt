@@ -33,7 +33,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.nhnengineering.rftest.cellular.CellularCollector
 import com.nhnengineering.rftest.location.LocationCollector
+import com.nhnengineering.rftest.model.CellularSample
 import com.nhnengineering.rftest.model.GeoPoint
 import com.nhnengineering.rftest.model.RssiBucket
 import com.nhnengineering.rftest.model.ThroughputSample
@@ -69,6 +71,7 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val recording by RecordingState.active.collectAsState()
     val serviceWifi by RecordingState.wifi.collectAsState()
     val serviceFix by RecordingState.fix.collectAsState()
+    val serviceCell by RecordingState.cellular.collectAsState()
     val rowCount by RecordingState.rowCount.collectAsState()
     val elapsedMs by RecordingState.elapsedMs.collectAsState()
     val distanceM by RecordingState.distanceM.collectAsState()
@@ -81,8 +84,10 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
 
     val collector = remember { WifiCollector(context) }
     val locations = remember { LocationCollector(context) }
+    val cellular = remember { CellularCollector(context) }
     var localWifi by remember { mutableStateOf<WifiSample?>(null) }
     var localFix by remember { mutableStateOf<GeoPoint?>(null) }
+    var localCell by remember { mutableStateOf<CellularSample?>(null) }
 
     var sessionName by remember { mutableStateOf("") }
 
@@ -98,11 +103,13 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
         if (!recording) {
             collector.start()
             locations.start()
+            cellular.start()
         }
         onDispose {
             if (!recording) {
                 collector.stop()
                 locations.stop()
+                cellular.stop()
             }
         }
     }
@@ -113,12 +120,14 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
             collector.requestScanRefresh()
             localWifi = collector.snapshot()
             localFix = locations.snapshot()
+            localCell = cellular.snapshot()
             delay(SAMPLE_INTERVAL_MS)
         }
     }
 
     val wifi = if (recording) serviceWifi else localWifi
     val fix = if (recording) serviceFix else localFix
+    val cell = if (recording) serviceCell else localCell
 
     LazyColumn(
         modifier = modifier
@@ -198,6 +207,7 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 },
             )
         }
+        item { CellularCard(cell) }
         item { GpsCard(fix, providersEnabled = locations.isAnyProviderEnabled()) }
 
         if (wifi == null) {
