@@ -158,11 +158,46 @@ Resequenced 2026-08-28 so that no phase before 5 is blocked on SIM activation.
 | 5 | **Cellular collector** plugged into the proven pipeline | LTE/NR values match Field Test Mode | **Yes** |
 | 6 | ✅ **Done 2026-08-31.** Foreground service, screen-off logging, thresholds and alarms | Survives a full site walk | No |
 | 7 | Reporting — statistics, floorplan mode, PDF / XLSX | A client-ready acceptance report comes out | No |
-| 8 | **MCP server over the session corpus** — session query, coverage analysis, threshold compliance, before/after comparison | An agent answers an acceptance question directly from recorded sessions | No |
+| 8a | ✅ **Done 2026-09-01.** MCP server, stdio transport, 5 tools over the session corpus | An agent answers an acceptance question directly from recorded sessions | No |
+| 8b | Stateless `streamable-http` transport with CIMD client registration | Hosted deployment per MCP 2026-07-28 | No |
 
 The cellular collector moves to Phase 5 deliberately. By then the sampling loop, storage, export,
 and map are all validated against real Wi-Fi data, so when the SIM arrives we debug one module
 rather than ten simultaneously.
+
+### Phase 8a validation record — 2026-09-01
+
+MCP server in `mcp-server/`, Python, MCP SDK 2.1.1, stdio transport. Verified with a real JSON-RPC
+handshake against actual recorded sessions, not mocks:
+
+```
+initialize        -> server 'rf-test-app', protocol 2025-06-18
+tools/list        -> 5 tools with correct JSON schemas
+analyze_coverage  -> walk_baseline @ -75 dBm: 87.1% compliance, 2 holes
+                     walk_baseline @ -70 dBm: 76.7% compliance, 1 hole
+query_samples     -> speedtest filter: dl 192.896 / ul 39.64 Mbps at -38 dBm
+error path        -> unknown session returns the error plus available sessions
+```
+
+Coverage-hole detection located the real thing: a 12-sample, 11.5 s run bottoming at −77 dBm at the
+westernmost point of the driveway track, 6.0 m extent — the far end, furthest from the AP.
+
+**Bucket distribution came out 50/18/24/24 — identical to the KML and GeoJSON exports.** That is a
+third independent implementation of the same scale agreeing, which is the payoff for defining
+`RssiBucket` once and mirroring it rather than reinventing it.
+
+**The comparability caveat earned itself immediately.** Comparing the driveway walk against a
+mostly stationary indoor session returned a +24 dB median delta and +12.9% compliance — which looks
+like a dramatic network improvement and is almost entirely route artefact. The tool returns sample
+counts, durations and an explicit caveat, and deliberately does not declare an improvement.
+
+Architecture note: `session_store.py` carries all parsing and analysis with no MCP dependency;
+`server.py` is a thin tool wrapper. The analysis is the valuable part and should not be reachable
+only through a protocol.
+
+SDK note: built against MCP Python SDK **2.x**, where `FastMCP` was renamed to `MCPServer`. The
+first implementation targeted the 1.x API and failed at import; migrated rather than pinning to a
+superseded version.
 
 ### Phase 6 validation record — 2026-08-31
 

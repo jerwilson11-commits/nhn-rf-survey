@@ -19,3 +19,8 @@ local.properties
 *.csv
 *.kml
 *.geojson
+
+# Local session data pulled from a handset for MCP server testing
+mcp-server/sessions/
+__pycache__/
+*.pyc
