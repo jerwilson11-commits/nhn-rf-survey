@@ -291,6 +291,45 @@ and no test can tell whether the legend collides with the scale bar on a real pa
 
 ---
 
+### Report render validation — 2026-09-01, first PDF anyone had looked at
+
+The previous entry ended "not yet seen by a human: the rendered PDF". It was generated and read the
+same day. **Two defects, neither reachable by reasoning about the code.**
+
+**1. Detection counts larger than the sample count.** The per-cell table reported PCI 216 as
+detected in **36 samples out of 28 analysed**. It was counting cell *observations*, not samples:
+eight rows of that session report the same PCI on two channels simultaneously, so 29 rows produced
+37 observations.
+
+Fixing it exposed a bigger problem. **PCI is unique only within a carrier** — 504 values for LTE,
+1008 for NR — so the same PCI on two channels is two different physical cells. Grouping by PCI
+alone merges them silently. Cells are now keyed by **PCI and channel together**. The result is
+better information, not merely correct information: the same session now shows PCI 216 and 865
+present on two carriers, the second in 8 of 28 samples, which the merged view hid completely.
+
+Worth noting the competitor's per-PCI columns carry the same ambiguity and nothing in their
+deliverable resolves it.
+
+**2. Explanatory text clipped at the right page edge.** Three paragraphs ran off the page —
+including, with some irony, the one explaining why detection rate must be shown. They were passed
+to a helper that does not wrap. `Ctx.para` now wraps on **measured width** (`Paint.measureText`)
+rather than the 96-character guess the methodology page used. Verified programmatically: zero text
+spans cross the right margin on any page.
+
+**The lesson, and it is not a new one.** Every subsystem in this project has produced believable
+wrong numbers on first contact with reality — Wi-Fi RSSI, Wi-Fi identity, GPS distance, cellular
+SINR, and now the report layer. The report was the last one still unexamined, and it broke in
+exactly the same way: **plausible output, wrong content.** Unit tests passed throughout, because
+the tests pinned arithmetic that was correct on data the analysis was mis-assembling upstream.
+
+> **A test that passes on synthetic input tells you the function is right. Only real output tells
+> you the input was.**
+
+**Tests: 49 → 54.** One states the property the broken version violated — detection rate can never
+exceed 100% — and one reproduces the two-channel case from the real session.
+
+---
+
 ### Cellular neighbour logging — 2026-09-01
 
 Cellular neighbours were displayed but **never logged**. The schema had `wifi_neighbors_json` and
