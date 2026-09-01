@@ -2,6 +2,7 @@ package com.nhnengineering.rftest.session
 
 import android.content.Context
 import com.nhnengineering.rftest.model.MeasurementSample
+import com.nhnengineering.rftest.model.NeighborCell
 import com.nhnengineering.rftest.model.WifiNeighbor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -113,6 +114,7 @@ private val CELLULAR_COLUMNS = listOf(
     "lte_rsrp", "lte_rsrq", "lte_rssnr", "lte_rssi", "lte_cqi", "lte_ta",
     "nr_nci", "nr_pci", "nr_tac", "nr_arfcn", "nr_band",
     "nr_ss_rsrp", "nr_ss_rsrq", "nr_ss_sinr", "nr_csi_rsrp", "nr_csi_rsrq", "nr_csi_sinr",
+    "cell_neighbor_count", "cell_neighbors_json",
 )
 
 private val WIFI_COLUMNS = listOf(
@@ -233,6 +235,8 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += nr?.csiRsrpDbm?.toString()
     cells += nr?.csiRsrqDb?.toString()
     cells += nr?.csiSinrDb?.toString()
+    cells += c?.neighbors?.size?.toString()
+    cells += c?.neighbors?.let { cellNeighborsToJson(it) }
 
     cells += w?.ssid
     cells += w?.bssid
@@ -275,6 +279,34 @@ internal fun MeasurementSample.toCsvRow(): String {
     }
     return cells.joinToString(",") { escapeCsv(it) }
 }
+
+/**
+ * Cellular neighbours, strongest first.
+ *
+ * `age_ms` is carried per neighbour and is the reason a retained entry cannot be mistaken for a
+ * fresh one: filter to `age_ms == 0` for only the cells present in that sample's own measurement
+ * report. Weak neighbours near the detection floor genuinely come and go, and that behaviour is
+ * itself information — smoothing it away without recording the age would hide it.
+ */
+private fun cellNeighborsToJson(neighbors: List<NeighborCell>): String =
+    neighbors.sortedByDescending { it.rsrpDbm ?: Int.MIN_VALUE }
+        .take(MAX_CELL_NEIGHBORS_IN_JSON)
+        .joinToString(",", prefix = "[", postfix = "]") { n ->
+            buildString {
+                append("{")
+                append("\"rat\":\"${escapeJson(n.rat)}\",")
+                append("\"pci\":${n.pci ?: -1},")
+                append("\"ch\":${n.channel ?: -1},")
+                append("\"band\":\"${escapeJson(n.band ?: "")}\",")
+                append("\"rsrp\":${n.rsrpDbm ?: 0},")
+                append("\"rsrq\":${n.rsrqDb ?: 0},")
+                append("\"age_ms\":${n.ageMs}")
+                append("}")
+            }
+        }
+
+/** Same reasoning as the Wi-Fi cap: bounded file size, with the true count in its own column. */
+private const val MAX_CELL_NEIGHBORS_IN_JSON = 12
 
 private fun neighborsToJson(neighbors: List<WifiNeighbor>): String =
     neighbors.sortedByDescending { it.rssiDbm }

@@ -68,8 +68,8 @@ class CsvSchemaTest {
 
     @Test
     fun `schema is the expected width`() {
-        assertEquals(71, CSV_COLUMN_COUNT)
-        assertEquals(71, CSV_HEADER.split(",").size)
+        assertEquals(73, CSV_COLUMN_COUNT)
+        assertEquals(73, CSV_HEADER.split(",").size)
     }
 
     @Test

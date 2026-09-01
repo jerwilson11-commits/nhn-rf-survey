@@ -24,6 +24,7 @@ import com.nhnengineering.rftest.model.NrCell
 import com.nhnengineering.rftest.model.NrState
 import com.nhnengineering.rftest.model.Rat
 import com.nhnengineering.rftest.model.SimState
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 
 /**
@@ -54,6 +55,25 @@ class CellularCollector(context: Context) {
 
         /** How often to force a cell info refresh, for OEMs that otherwise return stale data. */
         const val REFRESH_INTERVAL_MS = 5_000L
+
+        /**
+         * How long a neighbour cell stays in the list after it was last actually observed.
+         *
+         * Deliberately much shorter than the Wi-Fi equivalent (60 s), because the two problems
+         * are not the same. A Wi-Fi AP missing from a scan is an artefact — the OS swept a subset
+         * of channels and the AP is still there. A cellular neighbour vanishing is usually real:
+         * it crossed the detection floor. Retention here exists only to stop a weak neighbour
+         * flickering in and out of the display between reports, and every neighbour carries its
+         * age so that nothing is fabricated.
+         *
+         * At walking pace 10 s is roughly 14 m, which is short enough that a retained neighbour
+         * is still meaningfully "here".
+         */
+        const val NEIGHBOR_RETENTION_MS = 10_000L
+
+        /** Cap on neighbours serialised per sample, strongest first. The true count is logged
+         *  separately so the cap is visible rather than silent. */
+        const val MAX_NEIGHBORS_LOGGED = 12
     }
 
     private val appContext = context.applicationContext
@@ -63,6 +83,9 @@ class CellularCollector(context: Context) {
     @Volatile private var latestDisplayInfo: TelephonyDisplayInfo? = null
     @Volatile private var latestSignalStrength: SignalStrength? = null
     @Volatile private var lastRefreshElapsedMs = 0L
+
+    /** Keyed by rat|pci|channel, which identifies a cell uniquely enough within one locality. */
+    private val observedNeighbors = ConcurrentHashMap<String, Pair<NeighborCell, Long>>()
 
     private var started = false
     private var callback: TelephonyCallback? = null
@@ -153,10 +176,11 @@ class CellularCollector(context: Context) {
         val nrState = nrStateOf()
         val rat = ratOf(lte, nr, sim)
 
-        val neighbors = buildList {
+        val seenNow = buildList {
             lteCells.filter { it !== servingLte }.forEach { add(neighborFromLte(it)) }
             nrCells.filter { it !== servingNr }.forEach { add(neighborFromNr(it)) }
         }
+        val neighbors = mergeNeighbors(seenNow)
 
         return CellularSample(
             simState = sim,
@@ -344,12 +368,24 @@ class CellularCollector(context: Context) {
      * Applied to the **registered cell only**. Neighbours legitimately have no SINR, and borrowing
      * the serving cell's value for them would fabricate a measurement.
      */
+    private fun signalStrengthNow(): SignalStrength? = runCatching {
+        // PULLED at sample time, not taken from the callback cache.
+        //
+        // The callback version of this was measured pinning SS-SINR to a single value for 24
+        // consecutive samples while SS-RSRP moved across four values — onSignalStrengthsChanged
+        // simply did not fire. That is the same defect as the Wi-Fi RSSI freeze, in a third
+        // subsystem, and the same remedy applies: a push cache answers "what did I last hear",
+        // a pull answers "what is true now". The callback is retained only as a fallback for
+        // devices where the direct query is unavailable.
+        tm?.signalStrength ?: latestSignalStrength
+    }.getOrNull() ?: latestSignalStrength
+
     private fun servingNr(): CellSignalStrengthNr? = runCatching {
-        latestSignalStrength?.getCellSignalStrengths(CellSignalStrengthNr::class.java)?.firstOrNull()
+        signalStrengthNow()?.getCellSignalStrengths(CellSignalStrengthNr::class.java)?.firstOrNull()
     }.getOrNull()
 
     private fun servingLte(): CellSignalStrengthLte? = runCatching {
-        latestSignalStrength?.getCellSignalStrengths(CellSignalStrengthLte::class.java)?.firstOrNull()
+        signalStrengthNow()?.getCellSignalStrengths(CellSignalStrengthLte::class.java)?.firstOrNull()
     }.getOrNull()
 
     private fun toNr(info: CellInfoNr): NrCell {
@@ -405,6 +441,24 @@ class CellularCollector(context: Context) {
             mnc = id?.mncString,
             operator = id?.operatorAlphaLong?.toString()?.ifBlank { null },
         )
+    }
+
+    /**
+     * Merges this report's neighbours into the retained set and ages the rest out.
+     *
+     * Returns them strongest first, each stamped with how long ago it was actually seen. A
+     * neighbour observed in this report has `ageMs = 0`; one carried over reports its true age, so
+     * a stale entry can never be mistaken for a fresh measurement.
+     */
+    private fun mergeNeighbors(seenNow: List<NeighborCell>): List<NeighborCell> {
+        val now = SystemClock.elapsedRealtime()
+        for (n in seenNow) {
+            observedNeighbors["${n.rat}|${n.pci}|${n.channel}"] = n to now
+        }
+        observedNeighbors.entries.removeAll { now - it.value.second > NEIGHBOR_RETENTION_MS }
+        return observedNeighbors.values
+            .map { (cell, at) -> cell.copy(ageMs = now - at) }
+            .sortedByDescending { it.rsrpDbm ?: Int.MIN_VALUE }
     }
 
     private fun neighborFromLte(info: CellInfoLte): NeighborCell {

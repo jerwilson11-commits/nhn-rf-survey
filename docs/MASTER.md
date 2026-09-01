@@ -246,6 +246,48 @@ What these do **not** catch is a transposition — RSRQ values written into the 
 pass every test. That is why the emission order sits directly beneath the column list in the source
 rather than elsewhere in the file.
 
+### Cellular neighbour logging — 2026-09-01
+
+Cellular neighbours were displayed but **never logged**. The schema had `wifi_neighbors_json` and
+no cellular equivalent, so everything on the neighbour panel vanished when the sample was written.
+Added `cell_neighbor_count` and `cell_neighbors_json`; schema is now **73 columns**.
+
+**On the "bouncing" neighbours.** Weak cells near the detection floor appear and disappear between
+measurement reports. This looks like the Wi-Fi partial-sweep problem and is not the same thing: a
+Wi-Fi AP missing from a scan is an artefact, the AP is still there and accumulating is correct. A
+cellular neighbour vanishing is usually **real** — it crossed the detection floor, and that is
+itself information.
+
+So retention is deliberately short — **10 s versus 60 s for Wi-Fi**, roughly 14 m at walking pace —
+and exists only to stop the live display flickering. Every neighbour carries `age_ms`, so nothing
+is fabricated: filter to `age_ms == 0` for only the cells in that sample's own report. Measured on
+a stationary 24-sample session, retention held a median of one extra cell per sample, which
+quantifies the churn.
+
+### The staleness lesson, third occurrence — 2026-09-01
+
+The `SignalStrength` fallback added for SS-SINR was itself measured pinning **SS-SINR to 18 and
+SS-RSRQ to −10 across 24 consecutive samples** while SS-RSRP moved across four values. The
+callback simply never fired. Replacing "missing" with "stale" is an improvement and still not
+honest.
+
+Switched to pulling `TelephonyManager.getSignalStrength()` at sample time, matching the Wi-Fi fix.
+**This did not change the result** — SINR remained 18 across a fresh 29-sample session, so the
+constancy is not caused by caching in this app.
+
+Honest status: **inconclusive while stationary.** SINR and RSRQ are ratios and legitimately more
+stable than RSRP, and SINR has been observed at 21, 17 and 18 across sessions, so it does move on
+longer timescales. The pull is retained because it removes this app's caching as a variable.
+
+**The walk decides it.** If SS-SINR stays pinned while SS-RSRP swings 20+ dB during a moving test,
+it is stale and needs another source. If it tracks, it is real. This is the first thing to check in
+tomorrow's session.
+
+Three subsystems have now shown the same shape — Wi-Fi RSSI, cellular SINR, and the Wi-Fi
+NetworkCallback identity fields. **A push cache answers "what did I last hear"; a pull answers
+"what is true now".** Prefer the pull for anything volatile, and where a value must come from a
+push, record its age.
+
 ### Phase 5 VALIDATION record — 2026-09-01, live T-Mobile 5G SA
 
 SIM activated. First contact with a real network, at last.

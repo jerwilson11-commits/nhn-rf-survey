@@ -114,6 +114,17 @@ data class NeighborCell(
     val band: String?,
     val rsrpDbm: Int?,
     val rsrqDb: Int?,
+    /**
+     * How long ago this neighbour was actually observed, in milliseconds. Zero means it was in
+     * the measurement report for this very sample.
+     *
+     * Weak neighbours near the detection floor genuinely appear and disappear between reports —
+     * that is real radio behaviour, not a scanning artefact, and it is exactly what makes a live
+     * neighbour list unreadable while walking. A short retention window keeps the display stable,
+     * and recording the age means nothing is invented: an analyst can filter to `age_ms == 0` for
+     * only what was seen in that sample.
+     */
+    val ageMs: Long = 0,
 )
 
 data class CellularSample(

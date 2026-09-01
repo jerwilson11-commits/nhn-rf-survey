@@ -160,7 +160,11 @@ fun CellularCard(sample: CellularSample?) {
             KeyValue("NR state", sample.nrState.label)
             KeyValue("Status bar shows", sample.overrideNetworkType ?: "—")
             KeyValue("Roaming", if (sample.isRoaming) "yes" else "no")
-            KeyValue("Neighbours", sample.neighbors.size.toString())
+            KeyValue(
+                "Neighbours",
+                sample.neighbors.size.toString() +
+                    sample.neighbors.count { it.ageMs == 0L }.let { " ($it this report)" },
+            )
 
             if (sample.neighbors.isNotEmpty()) {
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
@@ -168,7 +172,14 @@ fun CellularCard(sample: CellularSample?) {
                     .forEach { n ->
                         Row(Modifier.fillMaxWidth()) {
                             Text(
-                                "${n.rat} PCI ${n.pci ?: "?"} ${n.band ?: ""} ch ${n.channel ?: "?"}",
+                                buildString {
+                                    append("${n.rat} PCI ${n.pci ?: "?"} ${n.band ?: ""} ")
+                                    append("ch ${n.channel ?: "?"}")
+                                    // Only shown once it is old enough to matter, so the common
+                                    // case stays uncluttered but a retained entry is never
+                                    // mistaken for a fresh measurement.
+                                    if (n.ageMs > 2000) append("  ${n.ageMs / 1000}s ago")
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace,
                                 modifier = Modifier.weight(1f),
