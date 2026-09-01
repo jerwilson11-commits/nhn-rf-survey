@@ -1,6 +1,7 @@
 package com.nhnengineering.rftest.ui
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.content.Intent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
@@ -33,13 +34,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import com.nhnengineering.rftest.model.RsrpBucket
 import com.nhnengineering.rftest.model.RssiBucket
+import com.nhnengineering.rftest.session.FloorplanStore
 import com.nhnengineering.rftest.session.SessionCsvWriter
 import com.nhnengineering.rftest.session.SessionReader
 import com.nhnengineering.rftest.session.SessionSummary
@@ -194,6 +201,12 @@ private fun SessionDetail(
                             } else "",
                     )
                     KeyValue("Duration", formatDuration(summary.durationMs))
+                    if (summary.hasIndoorTrack) {
+                        KeyValue("Floorplan points", summary.indoorPointCount.toString())
+                        if (summary.waypoints.isNotEmpty()) {
+                            KeyValue("Waypoints", summary.waypoints.joinToString(", "))
+                        }
+                    }
                     KeyValue(
                         "RSSI range",
                         if (summary.rssiMax != null && summary.rssiMin != null) {
@@ -203,6 +216,9 @@ private fun SessionDetail(
                     )
                 }
             }
+        }
+        if (summary.hasIndoorTrack) {
+            item { SessionFloorplanCard(summary, points) }
         }
         item {
             Card(Modifier.fillMaxWidth()) {
@@ -217,8 +233,14 @@ private fun SessionDetail(
                         RssiLegend()
                     } else {
                         Text(
-                            "No usable track — all fixes are at effectively the same point. " +
-                                "Stationary sessions still export fine.",
+                            if (summary.hasIndoorTrack) {
+                                "No GPS track — this session was positioned on a floorplan " +
+                                    "instead, which is expected indoors. KML and GeoJSON export " +
+                                    "only GPS-located samples, so they will be sparse or empty."
+                            } else {
+                                "No usable track — all fixes are at effectively the same point. " +
+                                    "Stationary sessions still export fine."
+                            },
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -285,12 +307,13 @@ private fun TrackPlot(summary: SessionSummary, points: List<TrackPoint>, modifie
         val offY = pad + (h - spanYm * scale).toFloat() / 2f
 
         fun project(p: TrackPoint) = Offset(
-            x = offX + ((p.longitudeDeg - summary.minLon) * mPerDegLon * scale).toFloat(),
+            x = offX + ((p.longitudeDeg!! - summary.minLon) * mPerDegLon * scale).toFloat(),
             // Screen y grows downward, latitude grows northward — hence maxLat minus.
-            y = offY + ((summary.maxLat - p.latitudeDeg) * mPerDegLat * scale).toFloat(),
+            y = offY + ((summary.maxLat - p.latitudeDeg!!) * mPerDegLat * scale).toFloat(),
         )
 
-        val projected = points.map { project(it) }
+        val geoPoints = points.filter { it.hasGpsPosition }
+        val projected = geoPoints.map { project(it) }
         for (i in 0 until projected.size - 1) {
             drawLine(
                 color = outline.copy(alpha = 0.5f),
@@ -299,7 +322,7 @@ private fun TrackPlot(summary: SessionSummary, points: List<TrackPoint>, modifie
                 strokeWidth = 2f,
             )
         }
-        points.forEachIndexed { i, p ->
+        geoPoints.forEachIndexed { i, p ->
             val bucket = RssiBucket.of(p.rssiDbm)
             drawCircle(
                 color = bucket?.let { Color(it.argb) } ?: Color.Gray.copy(alpha = 0.4f),
@@ -370,5 +393,79 @@ private fun formatDuration(ms: Long): String {
         String.format(Locale.US, "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60)
     } else {
         String.format(Locale.US, "%d:%02d", s / 60, s % 60)
+    }
+}
+
+/**
+ * A recorded session drawn back onto its floorplan.
+ *
+ * Recording indoor positions is only half the feature — a walk you cannot review afterwards
+ * produces no deliverable. Points are coloured by whichever radio was serving, cellular RSRP taking
+ * precedence over Wi-Fi RSSI, so the plan reads the way the venue was actually surveyed.
+ */
+@Composable
+private fun SessionFloorplanCard(summary: SessionSummary, points: List<TrackPoint>) {
+    val context = LocalContext.current
+    val planId = summary.floorplanIds.firstOrNull()
+    var bitmap by remember(planId) { mutableStateOf<ImageBitmap?>(null) }
+    var aspect by remember(planId) { mutableStateOf(1f) }
+
+    LaunchedEffect(planId) {
+        if (planId == null) return@LaunchedEffect
+        val f = FloorplanStore.file(context, planId)
+        val bmp = runCatching { BitmapFactory.decodeFile(f.absolutePath) }.getOrNull()
+        if (bmp != null) {
+            aspect = if (bmp.height > 0) bmp.width.toFloat() / bmp.height else 1f
+            bitmap = bmp.asImageBitmap()
+        }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Floorplan", style = MaterialTheme.typography.titleMedium)
+            val bmp = bitmap
+            val indoor = points.filter { it.hasIndoorPosition && it.floorplanId == planId }
+
+            if (planId == null) {
+                Text("No floorplan recorded.", style = MaterialTheme.typography.bodySmall)
+            } else if (bmp == null) {
+                // The image lives in app storage keyed by the filename in the CSV. If it is gone,
+                // say so plainly — the positions are still in the file and still valid, they just
+                // cannot be drawn.
+                Text(
+                    "Floorplan image \"$planId\" is not on this device. The positions are still " +
+                        "in the CSV; re-import the image to view them.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else {
+                Canvas(
+                    Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(aspect)
+                        .clip(RoundedCornerShape(6.dp))
+                ) {
+                    drawImage(
+                        image = bmp,
+                        dstOffset = IntOffset.Zero,
+                        dstSize = IntSize(size.width.toInt(), size.height.toInt()),
+                    )
+                    indoor.forEach { p ->
+                        val c = Offset(p.floorplanX!! * size.width, p.floorplanY!! * size.height)
+                        val argb = RsrpBucket.of(p.rsrpDbm)?.argb ?: RssiBucket.of(p.rssiDbm)?.argb
+                        drawCircle(
+                            color = argb?.let { Color(it) } ?: Color.Gray,
+                            radius = 8f,
+                            center = c,
+                        )
+                    }
+                }
+                Text(
+                    "$planId · ${indoor.size} positioned samples",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+                RssiLegend()
+            }
+        }
     }
 }

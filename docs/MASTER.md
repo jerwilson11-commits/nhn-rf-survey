@@ -195,6 +195,41 @@ Design decisions:
 Four CSV columns added: `floorplan_id`, `floorplan_x`, `floorplan_y`, `waypoint`. Schema is now
 **71 columns**.
 
+**Verified on device 2026-09-01:** image imports through the picker, renders, and taps land where
+the operator expects. That last point needed a human — the screen-to-image inverse transform is
+exactly the kind of arithmetic that can be subtly wrong in a way no automated check would notice
+and that would misplace every position in a session.
+
+Note for future testing: pushing a file into `files/floorplans/` over `adb` creates that directory
+owned by `shell`, which locks the app out of its own folder. Import through the picker instead.
+
+### Phase 7a follow-on — indoor sessions are reviewable and analysable, 2026-09-01
+
+Floorplan mode initially only *recorded*. A walk you cannot review afterwards produces no
+deliverable, and a Margaritaville session will be almost entirely indoor — so the read path needed
+the same treatment.
+
+- **`SessionReader` keeps a row placeable by GPS *or* by floorplan.** It previously required a
+  lat/lon, which would have silently discarded an entire indoor venue walk — precisely the case
+  floorplan mode exists to handle. `latitudeDeg`/`longitudeDeg` are now nullable, and `hasGpsPosition`
+  / `hasIndoorPosition` say which applies.
+- **Sessions tab renders a past session back onto its floorplan**, points coloured by whichever
+  radio was serving. If the image is missing from the device it says so plainly rather than showing
+  an empty panel — the positions are still in the CSV and still valid, they just cannot be drawn.
+- **KML and GeoJSON export GPS-located samples only.** They are geographic formats; forcing
+  floorplan coordinates into them would fabricate geography. An indoor session now explains why its
+  geographic export is sparse rather than appearing broken.
+- **MCP `analyze_coverage` is KPI-aware.** Defaults are −75 dBm for Wi-Fi RSSI and −105 dBm for
+  cellular RSRP, which differ by an order of magnitude — a Wi-Fi threshold applied to cellular data
+  would fail essentially every sample ever recorded. `kpi="auto"` picks cellular where present.
+- **Coverage holes carry an indoor position.** Outdoors a lat/lon; indoors a floorplan coordinate
+  plus the nearest waypoint label. Without that, a venue walk would report holes with no position
+  at all.
+- Bucket distribution is suppressed for RSRP, since that scale is Wi-Fi-specific.
+
+Regression checked: the existing Wi-Fi driveway session still resolves to `wifi_rssi` at −75 dBm
+with 87.1% compliance and 2 holes — identical to before the change.
+
 ### Test suite — 2026-09-01
 
 20 unit tests, all passing. The project had none until Phase 5.

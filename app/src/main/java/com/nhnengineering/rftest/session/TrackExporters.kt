@@ -19,10 +19,18 @@ object TrackExporters {
 
     /** Coordinates are lon,lat[,alt] in both formats — the reverse of how everyone says them. */
     private fun coord(p: TrackPoint) =
-        String.format(Locale.US, "%.6f,%.6f,0", p.longitudeDeg, p.latitudeDeg)
+        String.format(Locale.US, "%.6f,%.6f,0", p.longitudeDeg!!, p.latitudeDeg!!)
 
-    suspend fun writeKml(summary: SessionSummary, points: List<TrackPoint>, out: File): File =
+    /**
+     * KML and GeoJSON are geographic formats, so only GPS-located samples belong in them. An
+     * indoor session may legitimately produce none — its positions live on a floorplan instead,
+     * and forcing them into a coordinate system they were never in would fabricate geography.
+     */
+    private fun geoOnly(points: List<TrackPoint>) = points.filter { it.hasGpsPosition }
+
+    suspend fun writeKml(summary: SessionSummary, allPoints: List<TrackPoint>, out: File): File =
         withContext(Dispatchers.IO) {
+            val points = geoOnly(allPoints)
             val sb = StringBuilder(1 shl 16)
             sb.append("""<?xml version="1.0" encoding="UTF-8"?>""").append('\n')
             sb.append("""<kml xmlns="http://www.opengis.net/kml/2.2">""").append('\n')
@@ -83,8 +91,9 @@ object TrackExporters {
             out
         }
 
-    suspend fun writeGeoJson(summary: SessionSummary, points: List<TrackPoint>, out: File): File =
+    suspend fun writeGeoJson(summary: SessionSummary, allPoints: List<TrackPoint>, out: File): File =
         withContext(Dispatchers.IO) {
+            val points = geoOnly(allPoints)
             val sb = StringBuilder(1 shl 16)
             sb.append("{\"type\":\"FeatureCollection\",")
             sb.append("\"name\":").append(json(summary.displayName)).append(",")

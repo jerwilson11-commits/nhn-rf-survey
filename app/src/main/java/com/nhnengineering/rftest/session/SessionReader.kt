@@ -9,8 +9,9 @@ import java.time.Instant
 data class TrackPoint(
     val sequence: Long,
     val timestampUtcMillis: Long,
-    val latitudeDeg: Double,
-    val longitudeDeg: Double,
+    /** Null when GPS could not place this sample — normal indoors, not an error. */
+    val latitudeDeg: Double?,
+    val longitudeDeg: Double?,
     val accuracyM: Float?,
     val speedMps: Float?,
     val rssiDbm: Int?,
@@ -20,7 +21,23 @@ data class TrackPoint(
     val band: String?,
     val coChannel: Int?,
     val adjacentChannel: Int?,
-)
+    /** Cellular serving-cell RSRP, whichever radio was serving. */
+    val rsrpDbm: Int?,
+    val cellBand: String?,
+    val rat: String?,
+    /** Indoor position, present when the operator placed one on a floorplan. */
+    val floorplanId: String?,
+    val floorplanX: Float?,
+    val floorplanY: Float?,
+    val waypoint: String?,
+) {
+    /** True when this sample can be placed on a floorplan even though GPS could not place it. */
+    val hasIndoorPosition: Boolean
+        get() = floorplanId != null && floorplanX != null && floorplanY != null
+
+    val hasGpsPosition: Boolean
+        get() = latitudeDeg != null && longitudeDeg != null
+}
 
 data class SessionSummary(
     val file: File,
@@ -35,8 +52,18 @@ data class SessionSummary(
     val maxLat: Double,
     val minLon: Double,
     val maxLon: Double,
+    /** Floorplans referenced by this session, if any. */
+    val floorplanIds: List<String> = emptyList(),
+    val indoorPointCount: Int = 0,
+    val waypoints: List<String> = emptyList(),
 ) {
     val hasTrack: Boolean get() = pointCount >= 2 && (maxLat > minLat || maxLon > minLon)
+
+    /**
+     * An indoor session is not a broken session. A venue walk can legitimately produce zero usable
+     * GPS fixes and still be fully located, on a floorplan, by hand.
+     */
+    val hasIndoorTrack: Boolean get() = indoorPointCount > 0
 }
 
 /**
@@ -70,6 +97,10 @@ object SessionReader {
             val iBssid = idx("wifi_bssid"); val iCh = idx("wifi_channel")
             val iBand = idx("wifi_band")
             val iCo = idx("wifi_cochannel_count"); val iAdj = idx("wifi_adjacent_count")
+            val iRsrp = idx("lte_rsrp"); val iNrRsrp = idx("nr_ss_rsrp")
+            val iLteBand = idx("lte_band"); val iNrBand = idx("nr_band"); val iRat = idx("rat")
+            val iFp = idx("floorplan_id"); val iFpX = idx("floorplan_x")
+            val iFpY = idx("floorplan_y"); val iWp = idx("waypoint")
             if (iLat == null || iLon == null) return@withContext null
 
             val points = mutableListOf<TrackPoint>()
@@ -91,9 +122,15 @@ object SessionReader {
 
                 val lat = s(iLat)?.toDoubleOrNull()
                 val lon = s(iLon)?.toDoubleOrNull()
-                // Rows without a fix are perfectly valid — they still carry RF data — but they
-                // cannot be plotted, so they are counted and skipped rather than dropped silently.
-                if (lat == null || lon == null) continue
+                val fpX = s(iFpX)?.toFloatOrNull()
+                val fpY = s(iFpY)?.toFloatOrNull()
+                val fpId = s(iFp)
+
+                // A row is keepable if it can be placed EITHER by GPS or on a floorplan. Requiring
+                // a GPS fix would discard an entire indoor venue walk, which is precisely the case
+                // floorplan mode exists to handle.
+                val placeable = (lat != null && lon != null) || (fpId != null && fpX != null && fpY != null)
+                if (!placeable) continue
 
                 points += TrackPoint(
                     sequence = s(iSeq)?.toLongOrNull() ?: rows.toLong(),
@@ -109,23 +146,38 @@ object SessionReader {
                     band = s(iBand),
                     coChannel = s(iCo)?.toIntOrNull(),
                     adjacentChannel = s(iAdj)?.toIntOrNull(),
+                    rsrpDbm = s(iNrRsrp)?.toIntOrNull() ?: s(iRsrp)?.toIntOrNull(),
+                    cellBand = s(iNrBand) ?: s(iLteBand)?.let { "B" + it },
+                    rat = s(iRat),
+                    floorplanId = fpId,
+                    floorplanX = fpX,
+                    floorplanY = fpY,
+                    waypoint = s(iWp),
                 )
             }
 
             val rssis = points.mapNotNull { it.rssiDbm }
+            // Bounds are computed from GPS-located points only. Including indoor-only rows would
+            // be meaningless — they have no geographic position at all.
+            val gps = points.filter { it.hasGpsPosition }
+            val indoor = points.filter { it.hasIndoorPosition }
+
             val summary = SessionSummary(
                 file = file,
                 displayName = file.nameWithoutExtension,
                 startedAtUtcMillis = firstTime,
                 durationMs = if (firstTime != null && lastTime != null) lastTime - firstTime else 0L,
                 rowCount = rows,
-                pointCount = points.size,
+                pointCount = gps.size,
                 rssiMin = rssis.minOrNull(),
                 rssiMax = rssis.maxOrNull(),
-                minLat = points.minOfOrNull { it.latitudeDeg } ?: 0.0,
-                maxLat = points.maxOfOrNull { it.latitudeDeg } ?: 0.0,
-                minLon = points.minOfOrNull { it.longitudeDeg } ?: 0.0,
-                maxLon = points.maxOfOrNull { it.longitudeDeg } ?: 0.0,
+                minLat = gps.minOfOrNull { it.latitudeDeg!! } ?: 0.0,
+                maxLat = gps.maxOfOrNull { it.latitudeDeg!! } ?: 0.0,
+                minLon = gps.minOfOrNull { it.longitudeDeg!! } ?: 0.0,
+                maxLon = gps.maxOfOrNull { it.longitudeDeg!! } ?: 0.0,
+                floorplanIds = indoor.mapNotNull { it.floorplanId }.distinct(),
+                indoorPointCount = indoor.size,
+                waypoints = points.mapNotNull { it.waypoint }.distinct(),
             )
             summary to points
         }

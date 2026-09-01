@@ -91,9 +91,11 @@ def register(mcp: MCPServer, sessions_dir: str) -> None:
     def get_session_summary(session: str) -> str:
         """Full statistical summary of one session.
 
-        Includes RSSI min/p10/median/p90/max, sample counts, how many samples lacked a GPS fix, the
-        SSIDs and serving BSSIDs observed, geographic bounds, and how much of the track carried GPS
-        velocity. Every aggregate reports how many samples it was computed from — an average over
+        Includes RSSI and cellular RSRP min/p10/median/p90/max, sample counts, how many samples
+        lacked a GPS fix, the SSIDs and serving BSSIDs observed, RATs and cellular bands seen,
+        geographic bounds, how much of the track carried GPS velocity, and — for indoor walks — the
+        floorplans used, how many samples were positioned on them, and the waypoint labels
+        recorded. Every aggregate reports how many samples it was computed from — an average over
         3 samples is not the same claim as one over 400.
 
         Args:
@@ -106,7 +108,10 @@ def register(mcp: MCPServer, sessions_dir: str) -> None:
 
     @mcp.tool()
     def analyze_coverage(
-        session: str, rssi_threshold_dbm: int = -75, min_hole_samples: int = 3
+        session: str,
+        rssi_threshold_dbm: Optional[int] = None,
+        min_hole_samples: int = 3,
+        kpi: str = "auto",
     ) -> str:
         """Threshold compliance and coverage-hole detection for one session.
 
@@ -118,19 +123,26 @@ def register(mcp: MCPServer, sessions_dir: str) -> None:
         different problem from 8% concentrated in one stairwell, and only the second one tells an
         engineer where to walk back to.
 
+        Coverage holes carry a position. Outdoors that is a lat/lon; indoors, where there is no
+        GPS, it is a floorplan coordinate plus the nearest waypoint label the operator recorded.
+
         Args:
             session: session name.
-            rssi_threshold_dbm: pass/fail limit. -75 is a common Wi-Fi design target; -67 is
-                typical where voice or seamless roaming is required.
+            rssi_threshold_dbm: pass/fail limit. Leave unset to use the default for the KPI:
+                -75 dBm for Wi-Fi RSSI, -105 dBm for cellular RSRP. These differ by an order of
+                magnitude, so applying a Wi-Fi threshold to cellular data would fail essentially
+                every sample ever recorded.
             min_hole_samples: consecutive failing samples before a run counts as a hole. Raise it
                 to filter out momentary dips.
+            kpi: "auto" (default) uses cellular RSRP where the session has it and Wi-Fi RSSI
+                otherwise. Force one with "wifi_rssi" or "cell_rsrp".
         """
         path = _resolve(session)
         if not path:
             return _err(f"session '{session}' not found")
         s = store.load_session(path)
         return json.dumps(
-            store.coverage_analysis(s, rssi_threshold_dbm, min_hole_samples), indent=2
+            store.coverage_analysis(s, rssi_threshold_dbm, min_hole_samples, kpi), indent=2
         )
 
     @mcp.tool()
@@ -200,7 +212,9 @@ def register(mcp: MCPServer, sessions_dir: str) -> None:
         )
 
     @mcp.tool()
-    def compare_sessions(session_a: str, session_b: str, rssi_threshold_dbm: int = -75) -> str:
+    def compare_sessions(
+        session_a: str, session_b: str, rssi_threshold_dbm: Optional[int] = None
+    ) -> str:
         """Compare two sessions — the before/after question in DAS and Private 5G acceptance.
 
         Returns each session's coverage analysis plus the deltas in median RSSI, 10th-percentile
@@ -214,7 +228,7 @@ def register(mcp: MCPServer, sessions_dir: str) -> None:
         Args:
             session_a: baseline session, e.g. the pre-tuning walk.
             session_b: comparison session, e.g. the post-tuning walk.
-            rssi_threshold_dbm: pass/fail limit applied to both.
+            rssi_threshold_dbm: pass/fail limit applied to both. Leave unset for the KPI default.
         """
         pa, pb = _resolve(session_a), _resolve(session_b)
         if not pa:

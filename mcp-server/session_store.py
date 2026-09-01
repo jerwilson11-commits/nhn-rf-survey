@@ -13,8 +13,12 @@ this layer is what produces the numbers a client reads:
   it was actually computed from.
 - **Percentiles, not just means.** A mean RSSI of -62 dBm hides the 5% of a venue sitting at -85.
   Coverage arguments are won and lost in the tail.
-- **The schema evolved.** Files recorded before the throughput work carry 64 columns; later ones
-  carry 67. Columns are resolved by name and absence is tolerated, so old sessions stay readable.
+- **The schema evolved.** Files carry 64, 67 or 71 columns depending on when they were recorded —
+  cellular, throughput and indoor positioning were added over time. Columns are resolved by name
+  and absence is tolerated, so an old session stays readable.
+- **Indoors there is no GPS.** A venue walk can legitimately record zero usable fixes and still be
+  fully located, by hand, on a floorplan. Anything that requires a lat/lon would silently discard
+  such a session entirely.
 """
 
 from __future__ import annotations
@@ -79,6 +83,34 @@ class Sample:
     jitter_ms: Optional[float]
     loss_pct: Optional[float]
     note: Optional[str]
+    rat: Optional[str]
+    cell_rsrp: Optional[int]
+    cell_band: Optional[str]
+    cell_pci: Optional[int]
+    floorplan_id: Optional[str]
+    floorplan_x: Optional[float]
+    floorplan_y: Optional[float]
+    waypoint: Optional[str]
+
+    @property
+    def has_gps(self) -> bool:
+        return self.lat is not None and self.lon is not None
+
+    @property
+    def has_indoor(self) -> bool:
+        return (
+            self.floorplan_id is not None
+            and self.floorplan_x is not None
+            and self.floorplan_y is not None
+        )
+
+    def kpi(self, which: str) -> Optional[int]:
+        """Serving KPI by name. "auto" prefers cellular where present, else Wi-Fi."""
+        if which == "wifi_rssi":
+            return self.wifi_rssi
+        if which == "cell_rsrp":
+            return self.cell_rsrp
+        return self.cell_rsrp if self.cell_rsrp is not None else self.wifi_rssi
 
 
 @dataclass
@@ -143,6 +175,11 @@ def _ts(row: dict[str, str]) -> Optional[datetime]:
         return None
 
 
+def _lte_band(row: dict) -> Optional[str]:
+    b = _s(row, "lte_band")
+    return ("B" + b) if b else None
+
+
 def load_session(path: str) -> Session:
     """Parse one session CSV. csv.DictReader handles RFC 4180 quoting, which matters because
     SSIDs may contain commas and the neighbour JSON column always does."""
@@ -175,6 +212,14 @@ def load_session(path: str) -> Session:
                     jitter_ms=_f(row, "jitter_ms"),
                     loss_pct=_f(row, "loss_pct"),
                     note=_s(row, "note"),
+                    rat=_s(row, "rat"),
+                    cell_rsrp=_i(row, "nr_ss_rsrp") or _i(row, "lte_rsrp"),
+                    cell_band=_s(row, "nr_band") or _lte_band(row),
+                    cell_pci=_i(row, "nr_pci") or _i(row, "lte_pci"),
+                    floorplan_id=_s(row, "floorplan_id"),
+                    floorplan_x=_f(row, "floorplan_x"),
+                    floorplan_y=_f(row, "floorplan_y"),
+                    waypoint=_s(row, "waypoint"),
                 )
             )
     return session
@@ -270,6 +315,24 @@ def summarise(session: Session) -> dict[str, Any]:
     out["ssids_observed"] = sorted(ssids)
     out["serving_bssids_observed"] = sorted(bssids)
 
+    indoor = [s for s in session.samples if s.has_indoor]
+    if indoor:
+        out["indoor"] = {
+            "positioned_samples": len(indoor),
+            "floorplans": sorted({s.floorplan_id for s in indoor if s.floorplan_id}),
+            "waypoints": sorted({s.waypoint for s in session.samples if s.waypoint}),
+            "note": (
+                "Positions are normalised 0..1 to the floorplan image. A venue walk can "
+                "legitimately record no GPS at all and still be fully located."
+            ),
+        }
+
+    rsrp = [float(s.cell_rsrp) for s in session.samples if s.cell_rsrp is not None]
+    if rsrp:
+        out["cell_rsrp_dbm"] = kpi_stats(rsrp, n)
+        out["rats_observed"] = sorted({s.rat for s in session.samples if s.rat})
+        out["cell_bands_observed"] = sorted({s.cell_band for s in session.samples if s.cell_band})
+
     accs = [s.gps_accuracy_m for s in session.samples if s.gps_accuracy_m is not None]
     if accs:
         out["gps_accuracy_m"] = kpi_stats(accs, n)
@@ -282,10 +345,14 @@ def summarise(session: Session) -> dict[str, Any]:
     return out
 
 
+DEFAULT_THRESHOLDS = {"wifi_rssi": -75, "cell_rsrp": -105}
+
+
 def coverage_analysis(
     session: Session,
-    rssi_threshold_dbm: int = -75,
+    rssi_threshold_dbm: Optional[int] = None,
     min_hole_samples: int = 3,
+    kpi: str = "auto",
 ) -> dict[str, Any]:
     """
     Threshold compliance plus contiguous failing runs.
@@ -294,24 +361,36 @@ def coverage_analysis(
     a different problem from 8% concentrated in one stairwell. The runs are what someone walks back
     to and investigates.
     """
-    measured = [s for s in session.samples if s.wifi_rssi is not None]
-    if not measured:
-        return {"session": session.name, "note": "no RSSI measurements in this session"}
+    # Resolve the KPI before anything else, because the sensible threshold differs by an order of
+    # magnitude: -75 dBm is a normal Wi-Fi design target and would fail essentially every cellular
+    # sample ever recorded.
+    resolved = kpi
+    if resolved == "auto":
+        resolved = (
+            "cell_rsrp" if any(s.cell_rsrp is not None for s in session.samples) else "wifi_rssi"
+        )
+    threshold = (
+        rssi_threshold_dbm if rssi_threshold_dbm is not None else DEFAULT_THRESHOLDS[resolved]
+    )
 
-    failing = [s for s in measured if s.wifi_rssi < rssi_threshold_dbm]
+    measured = [s for s in session.samples if s.kpi(resolved) is not None]
+    if not measured:
+        return {"session": session.name, "kpi": resolved, "note": "no " + resolved + " measurements"}
+
+    failing = [s for s in measured if s.kpi(resolved) < threshold]
 
     holes: list[dict[str, Any]] = []
     run: list[Sample] = []
 
     def close_run() -> None:
         if len(run) >= min_hole_samples:
-            worst = min(run, key=lambda s: s.wifi_rssi)
+            worst = min(run, key=lambda s: s.kpi(resolved))
             located = [s for s in run if s.lat is not None]
             hole = {
                 "samples": len(run),
                 "start_seq": run[0].seq,
                 "end_seq": run[-1].seq,
-                "worst_rssi_dbm": worst.wifi_rssi,
+                "worst_dbm": worst.kpi(resolved),
                 "duration_s": (
                     round((run[-1].timestamp - run[0].timestamp).total_seconds(), 1)
                     if run[0].timestamp and run[-1].timestamp
@@ -325,32 +404,48 @@ def coverage_analysis(
                 hole["extent_m"] = round(
                     haversine_m(located[0].lat, located[0].lon, located[-1].lat, located[-1].lon), 1
                 )
+            # Indoors there is no GPS, so the hole is located on the floorplan instead.
+            # Without this a venue walk would report holes carrying no position at all, which is
+            # barely more useful than not reporting them.
+            if worst.has_indoor:
+                hole["worst_floorplan_position"] = {
+                    "floorplan_id": worst.floorplan_id,
+                    "x": round(worst.floorplan_x, 4),
+                    "y": round(worst.floorplan_y, 4),
+                }
+            wp = next((x.waypoint for x in run if x.waypoint), None)
+            if wp:
+                hole["nearest_waypoint"] = wp
             holes.append(hole)
 
     for s in measured:
-        if s.wifi_rssi < rssi_threshold_dbm:
+        if s.kpi(resolved) < threshold:
             run.append(s)
         else:
             close_run()
             run = []
     close_run()
 
+    # Bucket distribution is the Wi-Fi scale, so it is only meaningful for Wi-Fi. Applying it to
+    # RSRP would paint a healthy cellular venue red.
     distribution: dict[str, int] = {name: 0 for name, _, _ in RSSI_BUCKETS}
-    for s in measured:
-        b = bucket_of(s.wifi_rssi)
-        if b:
-            distribution[b] += 1
+    if resolved == "wifi_rssi":
+        for s in measured:
+            b = bucket_of(s.wifi_rssi)
+            if b:
+                distribution[b] += 1
 
     return {
         "session": session.name,
-        "threshold_dbm": rssi_threshold_dbm,
+        "kpi": resolved,
+        "threshold_dbm": threshold,
         "measured_samples": len(measured),
-        "samples_without_rssi": len(session.samples) - len(measured),
+        "samples_without_measurement": len(session.samples) - len(measured),
         "failing_samples": len(failing),
         "compliance_pct": round(100.0 * (len(measured) - len(failing)) / len(measured), 1),
-        "rssi_dbm": kpi_stats([float(s.wifi_rssi) for s in measured], len(session.samples)),
+        "kpi_dbm": kpi_stats([float(s.kpi(resolved)) for s in measured], len(session.samples)),
         "bucket_distribution": distribution,
-        "coverage_holes": sorted(holes, key=lambda h: h["worst_rssi_dbm"])[:20],
+        "coverage_holes": sorted(holes, key=lambda h: h["worst_dbm"])[:20],
         "coverage_hole_count": len(holes),
     }
 
@@ -386,7 +481,9 @@ def filter_samples(
     return out
 
 
-def compare(a: Session, b: Session, rssi_threshold_dbm: int = -75) -> dict[str, Any]:
+def compare(
+    a: Session, b: Session, rssi_threshold_dbm: Optional[int] = None
+) -> dict[str, Any]:
     """
     Before/after comparison — the actual DAS acceptance question.
 
@@ -418,8 +515,8 @@ def compare(a: Session, b: Session, rssi_threshold_dbm: int = -75) -> dict[str, 
             ),
         },
         "delta": {
-            "median_rssi_dbm": d(ca["rssi_dbm"].get("median"), cb["rssi_dbm"].get("median")),
-            "p10_rssi_dbm": d(ca["rssi_dbm"].get("p10"), cb["rssi_dbm"].get("p10")),
+            "median_dbm": d(ca["kpi_dbm"].get("median"), cb["kpi_dbm"].get("median")),
+            "p10_dbm": d(ca["kpi_dbm"].get("p10"), cb["kpi_dbm"].get("p10")),
             "compliance_pct": d(ca["compliance_pct"], cb["compliance_pct"]),
             "coverage_holes": cb["coverage_hole_count"] - ca["coverage_hole_count"],
         },
