@@ -18,13 +18,19 @@ import org.junit.Test
  */
 class SessionStatsTest {
 
-    private fun pt(seq: Long, rssi: Int? = null, rsrp: Int? = null, waypoint: String? = null) =
+    private fun pt(
+        seq: Long,
+        rssi: Int? = null,
+        rsrp: Int? = null,
+        waypoint: String? = null,
+        cellBand: String? = null,
+    ) =
         TrackPoint(
             sequence = seq, timestampUtcMillis = 1_756_000_000_000 + seq * 1000,
             latitudeDeg = null, longitudeDeg = null, accuracyM = null, speedMps = null,
             rssiDbm = rssi, ssid = null, bssid = null, channel = null, band = null,
             coChannel = null, adjacentChannel = null,
-            rsrpDbm = rsrp, cellBand = null, rat = null,
+            rsrpDbm = rsrp, cellBand = cellBand, rat = null,
             floorplanId = "plan.png", floorplanX = 0.5f, floorplanY = 0.5f, waypoint = waypoint,
         )
 
@@ -142,5 +148,93 @@ class SessionStatsTest {
         assertEquals(0, r.measured)
         assertEquals(0.0, r.compliancePct, 0.001)
         assertTrue(r.holes.isEmpty())
+    }
+
+    // ---- Breakdown -------------------------------------------------------
+    //
+    // These exist because of a specific defect in a competitor's deliverable: a cell detected in
+    // 9 of 495 samples was given a column indistinguishable from cells detected in nearly all of
+    // them, and the headline overlap metric was written as a fraction under a "%" heading. Both
+    // failure modes are pinned here.
+
+    @Test
+    fun `breakdown splits by band and shares sum to a hundred`() {
+        val points = List(7) { pt(it.toLong(), rsrp = -90, cellBand = "n41") } +
+            List(3) { pt((it + 7).toLong(), rsrp = -100, cellBand = "n25") }
+
+        val b = SessionStats.breakdown(points, { it.cellBand })
+
+        assertEquals(2, b.groups.size)
+        // Largest group first, not alphabetical.
+        assertEquals("n41", b.groups[0].label)
+        assertEquals(7, b.groups[0].measured)
+        assertEquals(70.0, b.groups[0].sharePct, 0.001)
+        assertEquals(30.0, b.groups[1].sharePct, 0.001)
+        assertEquals(100.0, b.groups.sumOf { it.sharePct }, 0.001)
+        assertEquals(0, b.unlabelled)
+    }
+
+    @Test
+    fun `unlabelled samples are counted, not folded into a band`() {
+        val points = List(4) { pt(it.toLong(), rsrp = -90, cellBand = "n41") } +
+            List(6) { pt((it + 4).toLong(), rsrp = -90, cellBand = null) }
+
+        val b = SessionStats.breakdown(points, { it.cellBand })
+
+        assertEquals(1, b.groups.size)
+        assertEquals(4, b.groups[0].measured)
+        assertEquals(6, b.unlabelled)
+        // The share is of measured samples overall, so a band seen in 4 of 10 reads as 40%, not
+        // 100% of the labelled subset. Otherwise a band present in a corner of the venue would
+        // report as covering all of it.
+        assertEquals(40.0, b.groups[0].sharePct, 0.001)
+    }
+
+    @Test
+    fun `a band covering a sliver of the survey is marked thin`() {
+        // The competitor's PCI 291 appeared in 9 of 495 samples and still got its own column.
+        // Same ratio here. Note the threshold is *under* 2%, so a group at exactly 2.0% is not
+        // thin — 9/495 is 1.82% and is.
+        val points = List(486) { pt(it.toLong(), rsrp = -90, cellBand = "n41") } +
+            List(9) { pt((it + 486).toLong(), rsrp = -70, cellBand = "n71") }
+
+        val b = SessionStats.breakdown(points, { it.cellBand })
+        val thin = b.groups.single { it.label == "n71" }
+
+        assertEquals(100.0 * 9 / 495, thin.sharePct, 0.001)
+        assertTrue("2% share must fall below the thin threshold", thin.thin)
+        assertTrue("the dominant band must not be marked thin", !b.groups.single { it.label == "n41" }.thin)
+        // The thin group has the *better* signal — so it would flatter the report if promoted,
+        // which is precisely why the share has to be shown next to it.
+        assertEquals(-70, thin.stats.median)
+    }
+
+    @Test
+    fun `compliance is a percentage, not a fraction`() {
+        // The competitor's sheet reports 285/495 as 0.5757..., labelled "%". A reader concludes
+        // half a percent where the truth is 57.6. This pins ours to the 0-100 convention.
+        val points = List(57) { pt(it.toLong(), rsrp = -90, cellBand = "b") } +
+            List(43) { pt((it + 57).toLong(), rsrp = -120, cellBand = "b") }
+
+        val g = SessionStats.breakdown(points, { it.cellBand }).groups.single()
+
+        assertEquals(57.0, g.compliancePct, 0.001)
+        assertTrue("a fraction would be <= 1.0 and read as half a percent", g.compliancePct > 1.0)
+    }
+
+    @Test
+    fun `breakdown of a session with no measurements is empty, not zeroed`() {
+        val b = SessionStats.breakdown(listOf(pt(0), pt(1)), { it.cellBand })
+
+        assertTrue(b.groups.isEmpty())
+        assertEquals(0, b.unlabelled)
+    }
+
+    @Test
+    fun `band label carries the RAT for cellular and the plain band for Wi-Fi`() {
+        val cell = pt(0, rsrp = -90, cellBand = "n41")
+        assertEquals("n41", SessionStats.bandOf(cell, SessionStats.Kpi.CELL_RSRP))
+        // A Wi-Fi session must not pick up the cellular band column.
+        assertNull(SessionStats.bandOf(cell, SessionStats.Kpi.WIFI_RSSI))
     }
 }

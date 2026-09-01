@@ -19,7 +19,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.cos
+import kotlin.math.floor
+import kotlin.math.log10
 import kotlin.math.max
+import kotlin.math.pow
 
 /**
  * Client-facing acceptance report.
@@ -105,6 +108,35 @@ object PdfReportGenerator {
             y += LINE
         }
 
+        /**
+         * Bordered two-column title block.
+         *
+         * A survey report is a document that gets emailed onward, printed, and quoted back months
+         * later. It has to say on its own face what site it is, when it was walked, and with what
+         * — the competitor deck that prompted this work shipped with `Site Name- Carrier/Report
+         * Type` and `DATE` still in the template.
+         */
+        fun titleBlock(rows: List<Pair<String, String>>) {
+            val canvas = canvas ?: return
+            val h = rows.size * LINE + 12f
+            ensure(h + 8f)
+            val top = y
+            val box = Paint().apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 0.8f
+                color = Color.rgb(120, 120, 120)
+                isAntiAlias = true
+            }
+            canvas.drawRect(MARGIN, top, PAGE_W - MARGIN, top + h, box)
+            y = top + 10f + LINE * 0.72f
+            for ((k, v) in rows) {
+                canvas.drawText(k, MARGIN + 10f, y, small)
+                canvas.drawText(v, MARGIN + 118f, y, body)
+                y += LINE
+            }
+            y = top + h + LINE * 0.6f
+        }
+
         fun finish() { page?.let { doc.finishPage(it) }; page = null; canvas = null }
     }
 
@@ -119,17 +151,23 @@ object PdfReportGenerator {
         val c = Ctx(doc)
         c.newPage()
 
-        // ---- Header -------------------------------------------------------
+        // ---- Title block --------------------------------------------------
         c.text("RF Coverage Survey Report", c.title)
-        c.gap()
-        c.text(summary.displayName, c.h2)
-        summary.startedAtUtcMillis?.let { c.text("Recorded ${DATE.format(Date(it))}", c.small) }
-        c.text(
-            "Device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}",
-            c.small,
+        c.gap(6f)
+        c.titleBlock(
+            listOf(
+                "Site / session" to summary.displayName,
+                "Survey date" to (summary.startedAtUtcMillis
+                    ?.let { DATE.format(Date(it)) } ?: "not recorded"),
+                "Duration" to formatDuration(summary.durationMs),
+                "Measurement" to report.kpi.label,
+                "Instrument" to
+                    "${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}",
+                "Prepared by" to "NHN Engineering & Consultants",
+                "Report generated" to DATE.format(Date(System.currentTimeMillis())),
+            ),
         )
-        c.text("NHN Engineering & Consultants", c.small)
-        c.gap(); c.rule()
+        c.rule()
 
         // ---- Summary ------------------------------------------------------
         c.text("Session summary", c.h2)
@@ -175,6 +213,38 @@ object PdfReportGenerator {
         }
         c.gap(); c.rule()
 
+        // ---- Per-band -----------------------------------------------------
+        val bands = SessionStats.breakdown(points, { SessionStats.bandOf(it, report.kpi) }, report.kpi, report.thresholdDbm)
+        if (bands.groups.size > 1 || bands.unlabelled > 0) {
+            c.ensure(140f)
+            c.text("By band", c.h2)
+            c.text(
+                "The same statistics as above, computed separately for each band the survey saw. " +
+                    "A single site-wide figure averages a band that covers the venue with one " +
+                    "that appears in a corridor, and hides the difference.",
+                c.small,
+            )
+            c.gap()
+            groupTable(c, bands, report.thresholdDbm)
+            c.gap(); c.rule()
+        }
+
+        // ---- Per-area -----------------------------------------------------
+        val areas = SessionStats.breakdown(points, { it.waypoint }, report.kpi, report.thresholdDbm)
+        if (areas.groups.isNotEmpty()) {
+            c.ensure(140f)
+            c.text("By area", c.h2)
+            c.text(
+                "Grouped by the waypoints marked during the walk. Only samples recorded while a " +
+                    "waypoint was set appear here; the remainder are counted as unlabelled rather " +
+                    "than assigned to the nearest one.",
+                c.small,
+            )
+            c.gap()
+            groupTable(c, areas, report.thresholdDbm)
+            c.gap(); c.rule()
+        }
+
         // ---- Coverage holes -----------------------------------------------
         c.ensure(120f)
         c.text("Coverage holes", c.h2)
@@ -217,7 +287,7 @@ object PdfReportGenerator {
         }
 
         // ---- Plot ---------------------------------------------------------
-        drawPlot(context, c, summary, points)
+        drawPlot(context, c, summary, points, report.kpi)
 
         // ---- Methodology --------------------------------------------------
         c.newPage()
@@ -236,6 +306,132 @@ object PdfReportGenerator {
     }
 
     /**
+     * Renders one breakdown as a fixed-width table.
+     *
+     * The `Share` column is the point of the table. Without it a band measured in 2% of samples
+     * presents identically to one measured in 90%, which is exactly the defect found in the
+     * competitor package this report is built to beat.
+     */
+    private fun groupTable(c: Ctx, b: SessionStats.Breakdown, thresholdDbm: Int) {
+        c.text(
+            String.format(
+                Locale.US, "%-22s %7s %7s %7s %7s %7s %8s",
+                "", "Samples", "Share", "Median", "p10", "Worst", "Pass",
+            ),
+            c.monoBold,
+        )
+        for (g in b.groups) {
+            c.ensure(LINE * 2)
+            c.text(
+                String.format(
+                    Locale.US, "%-22s %7d %6.1f%% %7s %7s %7s %7.1f%%",
+                    g.label.take(22),
+                    g.measured,
+                    g.sharePct,
+                    g.stats.median?.toString() ?: "—",
+                    g.stats.p10?.toString() ?: "—",
+                    g.stats.min?.toString() ?: "—",
+                    g.compliancePct,
+                ),
+                c.mono,
+            )
+        }
+        c.gap(4f)
+        c.text(
+            "Pass = share of that group's samples at or above $thresholdDbm dBm. Values in dBm.",
+            c.small,
+        )
+        val thin = b.groups.filter { it.thin }
+        if (thin.isNotEmpty()) {
+            c.text(
+                "Under ${SessionStats.THIN_GROUP_PCT.toInt()}% of the survey, so the statistics " +
+                    "are indicative only: " + thin.joinToString(", ") { it.label },
+                c.small,
+            )
+        }
+        if (b.unlabelled > 0) {
+            c.text(
+                "${b.unlabelled} measured samples carried no label and are excluded from this " +
+                    "table. They remain in the site-wide figures above.",
+                c.small,
+            )
+        }
+    }
+
+    /** Colour key for whichever scale this session is plotted on. */
+    private fun legendEntries(kpi: SessionStats.Kpi): List<Pair<String, Int>> =
+        if (kpi == SessionStats.Kpi.CELL_RSRP) {
+            com.nhnengineering.rftest.model.RsrpBucket.entries.map { it.label to it.argb }
+        } else {
+            com.nhnengineering.rftest.model.RssiBucket.entries.map { it.label to it.argb }
+        }
+
+    private fun drawLegend(c: Ctx, kpi: SessionStats.Kpi, left: Float, top: Float): Float {
+        val canvas = c.canvas ?: return 0f
+        val entries = legendEntries(kpi)
+        val swatch = Paint().apply { isAntiAlias = true }
+        val label = c.paint(8f)
+        var x = left
+        val boxH = 8f
+        for ((text, argb) in entries) {
+            swatch.color = argb
+            canvas.drawRect(x, top, x + 11f, top + boxH, swatch)
+            canvas.drawText(text, x + 15f, top + boxH - 0.5f, label)
+            x += 15f + label.measureText(text) + 16f
+        }
+        return boxH + 4f
+    }
+
+    /**
+     * A scale bar whose length is a round number of metres.
+     *
+     * Snapped to 1/2/5 x 10^n so the bar reads "25 m" rather than "23.7 m" — a bar nobody can
+     * mentally multiply is decoration, not a scale.
+     */
+    private fun drawScaleBar(c: Ctx, left: Float, bottom: Float, pxPerMetre: Double, maxPx: Float) {
+        val canvas = c.canvas ?: return
+        if (pxPerMetre <= 0.0) return
+        val targetM = maxPx / pxPerMetre
+        if (targetM <= 0.0 || !targetM.isFinite()) return
+        val exp = floor(log10(targetM))
+        val base = 10.0.pow(exp)
+        val niceM = listOf(5.0, 2.0, 1.0).map { it * base }.firstOrNull { it <= targetM } ?: base
+        val barPx = (niceM * pxPerMetre).toFloat()
+        if (barPx < 12f) return
+
+        val bar = Paint().apply { color = Color.BLACK; strokeWidth = 1.4f; isAntiAlias = true }
+        canvas.drawLine(left, bottom, left + barPx, bottom, bar)
+        canvas.drawLine(left, bottom - 3f, left, bottom + 3f, bar)
+        canvas.drawLine(left + barPx, bottom - 3f, left + barPx, bottom + 3f, bar)
+        val txt = if (niceM >= 1000) String.format(Locale.US, "%.0f km", niceM / 1000)
+                  else String.format(Locale.US, "%.0f m", niceM)
+        canvas.drawText(txt, left + barPx + 5f, bottom + 3f, c.paint(8f))
+    }
+
+    /**
+     * North arrow. **GPS plots only.**
+     *
+     * The equirectangular projection below puts north at the top by construction, so the arrow is
+     * a statement of fact. A floorplan's orientation is not known to this app — the operator
+     * uploads an image, not a georeferenced raster — so drawing one there would be an invention,
+     * and the floorplan branch says so in words instead.
+     */
+    private fun drawNorthArrow(c: Ctx, cx: Float, top: Float) {
+        val canvas = c.canvas ?: return
+        val ink = Paint().apply { color = Color.rgb(60, 60, 60); isAntiAlias = true }
+        val path = android.graphics.Path().apply {
+            moveTo(cx, top)
+            lineTo(cx - 4.5f, top + 13f)
+            lineTo(cx, top + 9.5f)
+            lineTo(cx + 4.5f, top + 13f)
+            close()
+        }
+        canvas.drawPath(path, ink)
+        val n = c.paint(8f, bold = true)
+        canvas.drawText("N", cx - n.measureText("N") / 2f, top + 23f, n)
+    }
+
+    /**
      * Plots the survey — the floorplan where one was used, otherwise the GPS track.
      *
      * Indoor sessions are plotted on the plan because they have no geography to plot; treating a
@@ -246,6 +442,7 @@ object PdfReportGenerator {
         c: Ctx,
         summary: SessionSummary,
         points: List<TrackPoint>,
+        kpi: SessionStats.Kpi,
     ) {
         val planId = summary.floorplanIds.firstOrNull()
         val indoor = points.filter { it.hasIndoorPosition }
@@ -257,7 +454,14 @@ object PdfReportGenerator {
 
         val canvas = c.canvas ?: return
         val availW = PAGE_W - 2 * MARGIN
-        val availH = 430f
+        val availH = 420f
+        val frame = Paint().apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 0.8f
+            color = Color.rgb(120, 120, 120)
+            isAntiAlias = true
+        }
+        val pad = 16f
 
         if (planId != null && indoor.isNotEmpty()) {
             val bmp = runCatching {
@@ -268,16 +472,31 @@ object PdfReportGenerator {
                 var w = availW
                 var h = w / aspect
                 if (h > availH) { h = availH; w = h * aspect }
-                val left = MARGIN
+                val left = MARGIN + (availW - w) / 2f
                 val top = c.y
-                canvas.drawBitmap(bmp, null, Rect(left.toInt(), top.toInt(), (left + w).toInt(), (top + h).toInt()), null)
+                canvas.drawBitmap(
+                    bmp, null,
+                    Rect(left.toInt(), top.toInt(), (left + w).toInt(), (top + h).toInt()), null,
+                )
+                canvas.drawRect(left, top, left + w, top + h, frame)
                 val dot = Paint().apply { isAntiAlias = true }
                 indoor.forEach { p ->
                     dot.color = pointColor(p)
                     canvas.drawCircle(left + p.floorplanX!! * w, top + p.floorplanY!! * h, 3.2f, dot)
                 }
                 c.y = top + h + LINE
-                c.text("$planId — ${indoor.size} positioned samples", c.small)
+                c.y += drawLegend(c, kpi, MARGIN, c.y)
+                c.gap(6f)
+                c.text("$planId — ${indoor.size} positioned samples.", c.small)
+                // Deliberately no north arrow and no scale bar. The operator supplies a plan image,
+                // not a georeferenced raster, so neither its orientation nor its scale is known to
+                // this app. Drawing either would be an invention the reader could not check.
+                c.text(
+                    "Positions were placed on the plan by the operator. The plan is not " +
+                        "georeferenced, so no north arrow or distance scale is shown — neither " +
+                        "its orientation nor its scale is known to the instrument.",
+                    c.small,
+                )
                 return
             }
             c.text("Floorplan image \"$planId\" was not available on this device.", c.small)
@@ -296,12 +515,19 @@ object PdfReportGenerator {
         val mLon = 111_320.0 * cos(Math.toRadians(midLat))
         val spanX = max((summary.maxLon - summary.minLon) * mLon, 0.5)
         val spanY = max((summary.maxLat - summary.minLat) * mLat, 0.5)
-        val scale = minOf(availW / spanX, availH / spanY)
-        val offX = MARGIN + (availW - spanX * scale).toFloat() / 2f
+        val plotW = availW - 2 * pad
+        val plotH = availH - 2 * pad
+        // One scale on both axes, so the plot is a map rather than a stretched scatter.
+        val scale = minOf(plotW / spanX, plotH / spanY)
         val top = c.y
-        val offY = top + (availH - spanY * scale).toFloat() / 2f
+        val offX = MARGIN + pad + (plotW - spanX * scale).toFloat() / 2f
+        val offY = top + pad + (plotH - spanY * scale).toFloat() / 2f
 
-        val line = Paint().apply { color = Color.rgb(180, 180, 180); strokeWidth = 1f; isAntiAlias = true }
+        canvas.drawRect(MARGIN, top, MARGIN + availW, top + availH, frame)
+
+        val line = Paint().apply {
+            color = Color.rgb(180, 180, 180); strokeWidth = 1f; isAntiAlias = true
+        }
         val projected = gps.map {
             floatArrayOf(
                 offX + ((it.longitudeDeg!! - summary.minLon) * mLon * scale).toFloat(),
@@ -316,8 +542,30 @@ object PdfReportGenerator {
             dot.color = pointColor(p)
             canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, dot)
         }
+
+        // Start and end, so a reader can tell which way the walk ran. Without them an
+        // out-and-back track is indistinguishable from a single pass.
+        val marker = Paint().apply {
+            style = Paint.Style.STROKE; strokeWidth = 1.3f
+            color = Color.BLACK; isAntiAlias = true
+        }
+        val tag = c.paint(8f, bold = true)
+        listOf(projected.first() to "S", projected.last() to "E").forEach { (pt, label) ->
+            canvas.drawCircle(pt[0], pt[1], 5.5f, marker)
+            canvas.drawText(label, pt[0] + 7f, pt[1] + 3f, tag)
+        }
+
+        drawNorthArrow(c, MARGIN + availW - 18f, top + 8f)
+        drawScaleBar(c, MARGIN + pad, top + availH - 10f, scale, plotW / 4f)
+
         c.y = top + availH + LINE
-        c.text("${gps.size} GPS-located samples. One scale on both axes.", c.small)
+        c.y += drawLegend(c, kpi, MARGIN, c.y)
+        c.gap(6f)
+        c.text(
+            "${gps.size} GPS-located samples, north up, equal scale on both axes. " +
+                "S marks the start of the walk and E the end.",
+            c.small,
+        )
     }
 
     private fun pointColor(p: TrackPoint): Int {

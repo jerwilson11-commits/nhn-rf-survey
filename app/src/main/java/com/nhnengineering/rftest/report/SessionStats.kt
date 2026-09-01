@@ -182,6 +182,95 @@ object SessionStats {
         )
     }
 
+    /**
+     * One row of a per-band or per-area breakdown.
+     *
+     * [sharePct] exists because of a specific failure seen in a competitor's deliverable: a cell
+     * detected in 9 of 495 samples was given its own column alongside cells detected in nearly all
+     * of them, with nothing to distinguish the two. A reader cannot judge a statistic without
+     * knowing how much of the survey produced it, so the share is reported next to every group and
+     * thin groups are marked rather than silently dropped.
+     */
+    data class Group(
+        val label: String,
+        val stats: Stats,
+        val measured: Int,
+        val failing: Int,
+        val compliancePct: Double,
+        /** This group's share of all measured samples, 0–100. */
+        val sharePct: Double,
+    ) {
+        /** True when this group covers too little of the survey to support conclusions. */
+        val thin: Boolean get() = sharePct < THIN_GROUP_PCT
+    }
+
+    data class Breakdown(
+        val groups: List<Group>,
+        /**
+         * Measured samples whose group label was absent. Reported rather than dropped: samples
+         * with a signal but no band are a real gap in what the handset told us, and folding them
+         * into a labelled group would overstate that group's coverage.
+         */
+        val unlabelled: Int,
+    )
+
+    /** Below this share of the survey, a group's statistics are labelled unreliable. */
+    const val THIN_GROUP_PCT = 2.0
+
+    /**
+     * Splits a session by any per-sample label — band, RAT, waypoint — and computes the same
+     * statistics for each part that [analyse] computes for the whole.
+     *
+     * Percentages here are percentages: 0–100, not 0–1. That is stated because the competitor
+     * package that prompted this work reports its headline overlap metric as `0.5757…` under a
+     * `%` heading, which understates a 57.6% figure by a factor of 100. `compliancePctIsPercent`
+     * in the test suite pins it.
+     */
+    fun breakdown(
+        points: List<TrackPoint>,
+        selector: (TrackPoint) -> String?,
+        kpi: Kpi = kpiFor(points),
+        thresholdDbm: Int? = null,
+    ): Breakdown {
+        val threshold = thresholdDbm ?: kpi.defaultThresholdDbm
+        val measured = points.filter { it.value(kpi) != null }
+        if (measured.isEmpty()) return Breakdown(emptyList(), 0)
+
+        val labelled = measured.mapNotNull { p -> selector(p)?.let { it to p } }
+        val groups = labelled.groupBy({ it.first }, { it.second }).map { (label, ps) ->
+            val values = ps.mapNotNull { it.value(kpi) }
+            val failing = values.count { it < threshold }
+            Group(
+                label = label,
+                stats = stats(values, ps.size),
+                measured = ps.size,
+                failing = failing,
+                compliancePct = 100.0 * (ps.size - failing) / ps.size,
+                sharePct = 100.0 * ps.size / measured.size,
+            )
+        }
+        // Largest first: the band or area carrying the survey should lead, not whichever sorts
+        // first alphabetically.
+        return Breakdown(
+            groups = groups.sortedByDescending { it.measured },
+            unlabelled = measured.size - labelled.size,
+        )
+    }
+
+    /**
+     * The band label for a sample, whichever radio the session is measuring.
+     *
+     * Cellular first: a session with both is a cellular session that happened to see Wi-Fi, and
+     * mixing the two into one band column would produce a table where "n41" and "5 GHz" sit in the
+     * same list as if they were comparable.
+     */
+    fun bandOf(p: TrackPoint, kpi: Kpi): String? =
+        if (kpi == Kpi.CELL_RSRP) {
+            p.cellBand?.let { b -> p.rat?.let { "$b  ($it)" } ?: b }
+        } else {
+            p.band
+        }
+
     /** One-line-per-session statistics, for anyone who wants the numbers in a spreadsheet. */
     fun summaryCsv(summary: SessionSummary, report: Report): String {
         val header = listOf(
