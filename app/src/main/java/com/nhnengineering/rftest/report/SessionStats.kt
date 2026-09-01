@@ -271,6 +271,107 @@ object SessionStats {
             p.band
         }
 
+    // ---- Dominance / best server -----------------------------------------
+
+    /** One cell's showing across the survey. */
+    data class ServerRow(
+        val pci: Int,
+        /** Samples in which this cell was seen with a usable level. */
+        val detectedIn: Int,
+        val detectionPct: Double,
+        /** Samples in which it was the strongest cell seen. */
+        val bestServerIn: Int,
+        val bestServerPct: Double,
+        val stats: Stats,
+    )
+
+    data class Dominance(
+        val windowDb: Int,
+        /** Samples that contributed: at least one cell with a level. */
+        val samples: Int,
+        /**
+         * Samples that saw cells but none with a usable level, so could not be ranked. Reported
+         * rather than dropped silently — an analysis that quietly discards a tenth of a survey
+         * and does not say so is not an analysis.
+         */
+        val excluded: Int,
+        /** Dominant-sector count -> number of samples, ascending by count. */
+        val countHistogram: List<Pair<Int, Int>>,
+        val meanCount: Double,
+        /** Share of contributing samples with two or more dominant sectors, 0-100. */
+        val overlapPct: Double,
+        val servers: List<ServerRow>,
+    )
+
+    /**
+     * Dominant-sector count, overlap and per-cell best-server share.
+     *
+     * A sample's dominant sectors are the cells within [windowDb] of its strongest. Two or more
+     * means pilot pollution: the handset has no clear server and will hand back and forth. This is
+     * the metric that drives DAS remediation, and it is the one the competitor package reports
+     * incorrectly by a factor of 100.
+     *
+     * **This is a lower bound, and the report must say so.** A scanner decodes every cell on air
+     * simultaneously; a handset reports its serving cell plus whatever partial neighbour list the
+     * modem chose to surface. Cells the modem did not report are invisible here, so a real
+     * overlap problem can only be understated, never overstated. That asymmetry is useful — a
+     * handset finding overlap is evidence; a handset finding none is not.
+     *
+     * @param maxAgeMs how stale a neighbour may be and still count. Defaults to 0: only cells in
+     *   that sample's own measurement report. Retained neighbours keep the live display readable
+     *   but counting them here would invent simultaneity that was never observed.
+     */
+    fun dominance(
+        points: List<TrackPoint>,
+        windowDb: Int = 6,
+        maxAgeMs: Long = 0L,
+    ): Dominance {
+        val withCells = points.filter { it.cells.isNotEmpty() }
+        val ranked = withCells.map { p ->
+            p.cells.filter { it.rsrpDbm != null && (it.serving || it.ageMs <= maxAgeMs) }
+        }
+        val contributing = ranked.filter { it.isNotEmpty() }
+        if (contributing.isEmpty()) {
+            return Dominance(windowDb, 0, withCells.size, emptyList(), 0.0, 0.0, emptyList())
+        }
+
+        val counts = contributing.map { cells ->
+            val best = cells.maxOf { it.rsrpDbm!! }
+            cells.count { it.rsrpDbm!! >= best - windowDb }
+        }
+        val histogram = counts.groupingBy { it }.eachCount().toList().sortedBy { it.first }
+
+        // Per-cell rows. A cell without a PCI cannot be identified across samples, so it is not
+        // given a row -- it would be indistinguishable from every other unidentified cell.
+        val byPci = mutableMapOf<Int, MutableList<Int>>()
+        val bestCount = mutableMapOf<Int, Int>()
+        for (cells in contributing) {
+            val best = cells.maxByOrNull { it.rsrpDbm!! }
+            best?.pci?.let { bestCount[it] = (bestCount[it] ?: 0) + 1 }
+            for (c in cells) c.pci?.let { byPci.getOrPut(it) { mutableListOf() } += c.rsrpDbm!! }
+        }
+        val servers = byPci.map { (pci, values) ->
+            ServerRow(
+                pci = pci,
+                detectedIn = values.size,
+                detectionPct = 100.0 * values.size / contributing.size,
+                bestServerIn = bestCount[pci] ?: 0,
+                bestServerPct = 100.0 * (bestCount[pci] ?: 0) / contributing.size,
+                stats = stats(values, values.size),
+            )
+        }.sortedByDescending { it.bestServerIn }
+
+        return Dominance(
+            windowDb = windowDb,
+            samples = contributing.size,
+            excluded = withCells.size - contributing.size,
+            countHistogram = histogram,
+            meanCount = counts.sum().toDouble() / counts.size,
+            overlapPct = 100.0 * counts.count { it >= 2 } / counts.size,
+            servers = servers,
+        )
+    }
+
     /** One-line-per-session statistics, for anyone who wants the numbers in a spreadsheet. */
     fun summaryCsv(summary: SessionSummary, report: Report): String {
         val header = listOf(

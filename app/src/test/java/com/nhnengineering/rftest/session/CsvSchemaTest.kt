@@ -15,6 +15,9 @@ import com.nhnengineering.rftest.model.WifiSecurity
 import com.nhnengineering.rftest.model.WifiStandard
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
+import com.nhnengineering.rftest.session.SessionReader
 import org.junit.Test
 
 /**
@@ -107,5 +110,47 @@ class CsvSchemaTest {
         val row = fullSample().toCsvRow()
         assertTrue("latitude should contain a decimal point", row.contains("26.05"))
         assertTrue("longitude should contain a decimal point", row.contains("-80.13"))
+    }
+
+    // ---- Neighbour JSON round-trip ---------------------------------------
+
+    @Test
+    fun `an absent neighbour level parses back as null, not as zero dBm`() {
+        // The writer emits JSON null for a missing level. If the parser turned that into 0 the
+        // cell would be the strongest reading in the file and would win every best-server and
+        // dominance ranking. This is the same null-as-zero class of bug that cost this project a
+        // walk of GPS distance data.
+        val json = """[{"rat":"NR","pci":42,"ch":501390,"band":"n41","rsrp":null,""" +
+            """"rsrq":null,"age_ms":0}]"""
+
+        val cells = SessionReader.parseCellNeighbors(json)
+
+        assertEquals(1, cells.size)
+        assertNull(cells[0].rsrpDbm)
+        assertEquals(42, cells[0].pci)
+        assertEquals("n41", cells[0].band)
+    }
+
+    @Test
+    fun `neighbour json parses negative levels and ages`() {
+        val json = """[{"rat":"NR","pci":1,"ch":2,"band":"n41","rsrp":-94,"rsrq":-11,"age_ms":0},""" +
+            """{"rat":"LTE","pci":300,"ch":5110,"band":"B66","rsrp":-118,"rsrq":-15,"age_ms":4200}]"""
+
+        val cells = SessionReader.parseCellNeighbors(json)
+
+        assertEquals(2, cells.size)
+        assertEquals(-94, cells[0].rsrpDbm)
+        assertEquals(0L, cells[0].ageMs)
+        assertEquals(-118, cells[1].rsrpDbm)
+        assertEquals(4200L, cells[1].ageMs)
+        // Parsed neighbours are never marked serving -- only the row's own cell columns are.
+        assertFalse(cells.any { it.serving })
+    }
+
+    @Test
+    fun `an empty or missing neighbour array yields no cells`() {
+        assertTrue(SessionReader.parseCellNeighbors("[]").isEmpty())
+        assertTrue(SessionReader.parseCellNeighbors("").isEmpty())
+        assertTrue(SessionReader.parseCellNeighbors(null).isEmpty())
     }
 }

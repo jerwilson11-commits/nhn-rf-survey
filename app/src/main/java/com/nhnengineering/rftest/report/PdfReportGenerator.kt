@@ -245,6 +245,95 @@ object PdfReportGenerator {
             c.gap(); c.rule()
         }
 
+        // ---- Dominance / best server --------------------------------------
+        val dom = SessionStats.dominance(points)
+        if (dom.samples > 0 && dom.servers.isNotEmpty()) {
+            c.ensure(200f)
+            c.text("Sector dominance and overlap", c.h2)
+            c.text(
+                "A sample's dominant sectors are the cells within ${dom.windowDb} dB of its " +
+                    "strongest. Two or more means the handset has no clear server and will hand " +
+                    "back and forth between them, which is the usual driver of remediation work " +
+                    "on an in-building system.",
+                c.small,
+            )
+            c.gap()
+            c.kv("Samples analysed", dom.samples.toString())
+            c.kv("Mean dominant sectors", String.format(Locale.US, "%.2f", dom.meanCount))
+            c.kv(
+                "Overlap (2 or more within ${dom.windowDb} dB)",
+                String.format(Locale.US, "%.1f %% of samples", dom.overlapPct),
+            )
+            if (dom.excluded > 0) {
+                c.kv("Samples excluded", "${dom.excluded}  (cells seen, none with a level)")
+            }
+            c.gap()
+            c.text(
+                String.format(Locale.US, "%-22s %9s %9s", "Dominant sectors", "Samples", "Share"),
+                c.monoBold,
+            )
+            for ((n, count) in dom.countHistogram) {
+                c.text(
+                    String.format(
+                        Locale.US, "%-22d %9d %8.1f%%",
+                        n, count, 100.0 * count / dom.samples,
+                    ),
+                    c.mono,
+                )
+            }
+
+            c.gap()
+            c.ensure(120f)
+            c.text("By cell", c.h2)
+            c.text(
+                "Detection rate is shown against every cell. Without it a cell seen in a handful " +
+                    "of samples presents identically to one seen throughout, and a reader cannot " +
+                    "tell a genuine server from a statistical accident.",
+                c.small,
+            )
+            c.gap()
+            c.text(
+                String.format(
+                    Locale.US, "%-8s %9s %9s %9s %7s %7s",
+                    "PCI", "Detected", "Best srv", "Best srv", "Median", "Best",
+                ),
+                c.monoBold,
+            )
+            c.text(
+                String.format(
+                    Locale.US, "%-8s %9s %9s %9s %7s %7s",
+                    "", "samples", "samples", "share", "dBm", "dBm",
+                ),
+                c.monoBold,
+            )
+            for (r in dom.servers.take(20)) {
+                c.ensure(LINE * 2)
+                c.text(
+                    String.format(
+                        Locale.US, "%-8d %9d %9d %8.1f%% %7s %7s",
+                        r.pci, r.detectedIn, r.bestServerIn, r.bestServerPct,
+                        r.stats.median?.toString() ?: "—",
+                        r.stats.max?.toString() ?: "—",
+                    ),
+                    c.mono,
+                )
+            }
+            if (dom.servers.size > 20) {
+                c.gap(4f)
+                c.text("${dom.servers.size - 20} further cells omitted; all are in the CSV.", c.small)
+            }
+            c.gap(4f)
+            c.text(
+                "Lower bound. A scanning receiver decodes every cell on air at once; this handset " +
+                    "reports its serving cell plus whatever partial neighbour list the modem chose " +
+                    "to surface, and only cells present in a sample's own measurement report are " +
+                    "counted. Cells the modem did not report are invisible here, so overlap can " +
+                    "be understated but not overstated.",
+                c.small,
+            )
+            c.gap(); c.rule()
+        }
+
         // ---- Coverage holes -----------------------------------------------
         c.ensure(120f)
         c.text("Coverage holes", c.h2)

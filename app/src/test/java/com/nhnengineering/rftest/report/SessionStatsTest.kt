@@ -1,5 +1,6 @@
 package com.nhnengineering.rftest.report
 
+import com.nhnengineering.rftest.session.ObservedCell
 import com.nhnengineering.rftest.session.TrackPoint
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -24,6 +25,7 @@ class SessionStatsTest {
         rsrp: Int? = null,
         waypoint: String? = null,
         cellBand: String? = null,
+        cells: List<ObservedCell> = emptyList(),
     ) =
         TrackPoint(
             sequence = seq, timestampUtcMillis = 1_756_000_000_000 + seq * 1000,
@@ -32,6 +34,7 @@ class SessionStatsTest {
             coChannel = null, adjacentChannel = null,
             rsrpDbm = rsrp, cellBand = cellBand, rat = null,
             floorplanId = "plan.png", floorplanX = 0.5f, floorplanY = 0.5f, waypoint = waypoint,
+            cells = cells,
         )
 
     @Test
@@ -236,5 +239,115 @@ class SessionStatsTest {
         assertEquals("n41", SessionStats.bandOf(cell, SessionStats.Kpi.CELL_RSRP))
         // A Wi-Fi session must not pick up the cellular band column.
         assertNull(SessionStats.bandOf(cell, SessionStats.Kpi.WIFI_RSSI))
+    }
+
+    // ---- Dominance -------------------------------------------------------
+
+    private fun cell(pci: Int?, rsrp: Int?, serving: Boolean = false, ageMs: Long = 0) =
+        ObservedCell(pci = pci, rsrpDbm = rsrp, band = null, serving = serving, ageMs = ageMs)
+
+    @Test
+    fun `dominant sectors are the cells within the window of the strongest`() {
+        // Strongest -80. Window 6 dB, so -80, -84 and -86 are dominant; -90 is not.
+        val p = pt(
+            0, rsrp = -80,
+            cells = listOf(
+                cell(1, -80, serving = true), cell(2, -84), cell(3, -86), cell(4, -90),
+            ),
+        )
+
+        val d = SessionStats.dominance(listOf(p))
+
+        assertEquals(1, d.samples)
+        assertEquals(listOf(3 to 1), d.countHistogram)
+        assertEquals(3.0, d.meanCount, 0.001)
+    }
+
+    @Test
+    fun `the window boundary is inclusive`() {
+        // Exactly 6 dB down counts; 7 dB does not.
+        val p = pt(0, rsrp = -80, cells = listOf(cell(1, -80, serving = true), cell(2, -86), cell(3, -87)))
+        assertEquals(listOf(2 to 1), SessionStats.dominance(listOf(p)).countHistogram)
+    }
+
+    @Test
+    fun `overlap is the share of samples with two or more dominant sectors`() {
+        // The competitor's exact shape: 285 of 495 samples with 2+ dominant sectors. They report
+        // it as 0.5757..., labelled "%". The correct answer is 57.58.
+        val overlapping = List(285) {
+            pt(it.toLong(), rsrp = -80, cells = listOf(cell(1, -80, serving = true), cell(2, -82)))
+        }
+        val clean = List(210) {
+            pt((it + 285).toLong(), rsrp = -80, cells = listOf(cell(1, -80, serving = true), cell(2, -95)))
+        }
+
+        val d = SessionStats.dominance(overlapping + clean)
+
+        assertEquals(495, d.samples)
+        assertEquals(57.58, d.overlapPct, 0.01)
+        // The assertion that matters: a fraction here would read as half a percent.
+        assertTrue("overlap must be on 0-100, not 0-1", d.overlapPct > 1.0)
+    }
+
+    @Test
+    fun `a cell with no level is excluded, never treated as zero dBm`() {
+        // 0 dBm would be the strongest reading in the file and would win every ranking. The
+        // levelled cells must decide the outcome alone.
+        val p = pt(0, rsrp = -80, cells = listOf(cell(1, -80, serving = true), cell(2, null), cell(3, -95)))
+
+        val d = SessionStats.dominance(listOf(p))
+
+        assertEquals(listOf(1 to 1), d.countHistogram)
+        assertEquals(1, d.servers.single { it.pci == 1 }.bestServerIn)
+        assertTrue("the unlevelled cell must not appear", d.servers.none { it.pci == 2 })
+    }
+
+    @Test
+    fun `stale neighbours do not count as simultaneous by default`() {
+        // Retained for the live display, but it was not in this sample's report, so counting it
+        // would invent a simultaneity that was never observed.
+        val p = pt(0, rsrp = -80, cells = listOf(cell(1, -80, serving = true), cell(2, -81, ageMs = 4_000)))
+
+        assertEquals(listOf(1 to 1), SessionStats.dominance(listOf(p)).countHistogram)
+        // ...but the caller can widen the window deliberately.
+        assertEquals(listOf(2 to 1), SessionStats.dominance(listOf(p), maxAgeMs = 10_000).countHistogram)
+    }
+
+    @Test
+    fun `samples whose cells all lack levels are counted as excluded`() {
+        val p = pt(0, cells = listOf(cell(1, null), cell(2, null)))
+
+        val d = SessionStats.dominance(listOf(p))
+
+        assertEquals(0, d.samples)
+        assertEquals(1, d.excluded)
+    }
+
+    @Test
+    fun `detection rate distinguishes a real server from a statistical accident`() {
+        // PCI 291 in 9 of 495 samples -- the competitor gave it a column with nothing to say so.
+        val common = List(486) {
+            pt(it.toLong(), rsrp = -80, cells = listOf(cell(101, -80, serving = true)))
+        }
+        val rare = List(9) {
+            pt((it + 486).toLong(), rsrp = -80, cells = listOf(cell(101, -80, serving = true), cell(291, -110)))
+        }
+
+        val d = SessionStats.dominance(common + rare)
+
+        assertEquals(100.0, d.servers.single { it.pci == 101 }.detectionPct, 0.001)
+        assertEquals(100.0 * 9 / 495, d.servers.single { it.pci == 291 }.detectionPct, 0.001)
+        // It is never the best server, so it must not head the table.
+        assertEquals(0, d.servers.single { it.pci == 291 }.bestServerIn)
+        assertEquals(101, d.servers.first().pci)
+    }
+
+    @Test
+    fun `a session with no cellular cells yields an empty dominance result`() {
+        val d = SessionStats.dominance(listOf(pt(0, rssi = -60), pt(1, rssi = -65)))
+
+        assertEquals(0, d.samples)
+        assertEquals(0, d.excluded)
+        assertTrue(d.servers.isEmpty())
     }
 }

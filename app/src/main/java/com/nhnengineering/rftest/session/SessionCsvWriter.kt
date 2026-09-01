@@ -294,12 +294,17 @@ private fun cellNeighborsToJson(neighbors: List<NeighborCell>): String =
         .joinToString(",", prefix = "[", postfix = "]") { n ->
             buildString {
                 append("{")
+                // Missing values are emitted as JSON null, never as a number. An absent RSRP
+                // written as 0 would be the strongest reading in the file -- 0 dBm -- and would
+                // outrank every real cell in any dominance or best-server calculation. This is
+                // the same null-as-zero mistake that cost this project a walk of GPS distance
+                // data; it is not repeated here.
                 append("\"rat\":\"${escapeJson(n.rat)}\",")
-                append("\"pci\":${n.pci ?: -1},")
-                append("\"ch\":${n.channel ?: -1},")
-                append("\"band\":\"${escapeJson(n.band ?: "")}\",")
-                append("\"rsrp\":${n.rsrpDbm ?: 0},")
-                append("\"rsrq\":${n.rsrqDb ?: 0},")
+                append("\"pci\":${n.pci ?: "null"},")
+                append("\"ch\":${n.channel ?: "null"},")
+                append("\"band\":${n.band?.let { "\"${escapeJson(it)}\"" } ?: "null"},")
+                append("\"rsrp\":${n.rsrpDbm ?: "null"},")
+                append("\"rsrq\":${n.rsrqDb ?: "null"},")
                 append("\"age_ms\":${n.ageMs}")
                 append("}")
             }

@@ -5,6 +5,23 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.Instant
 
+/**
+ * One cell observed in a sample: the serving cell or one of its neighbours.
+ *
+ * [rsrpDbm] is nullable and stays nullable all the way through. A cell the modem reported without
+ * a level is a cell whose level is unknown, and substituting any number for it — 0, −140, the
+ * serving level — invents a measurement. Dominance analysis simply excludes them and says how
+ * many it excluded.
+ */
+data class ObservedCell(
+    val pci: Int?,
+    val rsrpDbm: Int?,
+    val band: String?,
+    val serving: Boolean,
+    /** Milliseconds since this cell was actually in a measurement report. 0 means this sample. */
+    val ageMs: Long,
+)
+
 /** One plotted sample: what the map and the exporters need, nothing more. */
 data class TrackPoint(
     val sequence: Long,
@@ -30,6 +47,13 @@ data class TrackPoint(
     val floorplanX: Float?,
     val floorplanY: Float?,
     val waypoint: String?,
+    /** Serving-cell PCI, whichever radio was serving. */
+    val servingPci: Int? = null,
+    /**
+     * Every cell this sample saw, serving first, strongest first thereafter. Empty for Wi-Fi
+     * sessions and for cellular sessions recorded before neighbour logging existed.
+     */
+    val cells: List<ObservedCell> = emptyList(),
 ) {
     /** True when this sample can be placed on a floorplan even though GPS could not place it. */
     val hasIndoorPosition: Boolean
@@ -99,6 +123,8 @@ object SessionReader {
             val iCo = idx("wifi_cochannel_count"); val iAdj = idx("wifi_adjacent_count")
             val iRsrp = idx("lte_rsrp"); val iNrRsrp = idx("nr_ss_rsrp")
             val iLteBand = idx("lte_band"); val iNrBand = idx("nr_band"); val iRat = idx("rat")
+            val iNrPci = idx("nr_pci"); val iLtePci = idx("lte_pci")
+            val iCells = idx("cell_neighbors_json")
             val iFp = idx("floorplan_id"); val iFpX = idx("floorplan_x")
             val iFpY = idx("floorplan_y"); val iWp = idx("waypoint")
             if (iLat == null || iLon == null) return@withContext null
@@ -132,6 +158,16 @@ object SessionReader {
                 val placeable = (lat != null && lon != null) || (fpId != null && fpX != null && fpY != null)
                 if (!placeable) continue
 
+                val servingRsrp = s(iNrRsrp)?.toIntOrNull() ?: s(iRsrp)?.toIntOrNull()
+                val servingPci = s(iNrPci)?.toIntOrNull() ?: s(iLtePci)?.toIntOrNull()
+                val servingBand = s(iNrBand) ?: s(iLteBand)?.let { "B" + it }
+                val cells = buildList {
+                    if (servingPci != null || servingRsrp != null) {
+                        add(ObservedCell(servingPci, servingRsrp, servingBand, serving = true, ageMs = 0))
+                    }
+                    addAll(parseCellNeighbors(s(iCells)))
+                }
+
                 points += TrackPoint(
                     sequence = s(iSeq)?.toLongOrNull() ?: rows.toLong(),
                     timestampUtcMillis = t ?: 0L,
@@ -146,13 +182,15 @@ object SessionReader {
                     band = s(iBand),
                     coChannel = s(iCo)?.toIntOrNull(),
                     adjacentChannel = s(iAdj)?.toIntOrNull(),
-                    rsrpDbm = s(iNrRsrp)?.toIntOrNull() ?: s(iRsrp)?.toIntOrNull(),
-                    cellBand = s(iNrBand) ?: s(iLteBand)?.let { "B" + it },
+                    rsrpDbm = servingRsrp,
+                    cellBand = servingBand,
                     rat = s(iRat),
                     floorplanId = fpId,
                     floorplanX = fpX,
                     floorplanY = fpY,
                     waypoint = s(iWp),
+                    servingPci = servingPci,
+                    cells = cells,
                 )
             }
 
@@ -181,6 +219,50 @@ object SessionReader {
             )
             summary to points
         }
+
+    /**
+     * Reads `cell_neighbors_json` back into typed cells.
+     *
+     * Deliberately a small hand-rolled scan rather than a JSON library: the writer produces this
+     * exact shape and nothing else, the array is capped at twelve entries, and this runs once per
+     * row over a whole session.
+     *
+     * `null` in the file stays null here. The writer emits JSON null for an absent level precisely
+     * so that it cannot be mistaken for a measurement, and parsing it back to 0 would undo that.
+     */
+    internal fun parseCellNeighbors(json: String?): List<ObservedCell> {
+        if (json.isNullOrBlank() || json == "[]") return emptyList()
+        val out = mutableListOf<ObservedCell>()
+        var i = 0
+        while (true) {
+            val open = json.indexOf('{', i)
+            if (open < 0) break
+            val close = json.indexOf('}', open)
+            if (close < 0) break
+            val fields = mutableMapOf<String, String>()
+            for (part in json.substring(open + 1, close).split(',')) {
+                val colon = part.indexOf(':')
+                if (colon < 0) continue
+                val key = part.substring(0, colon).trim().trim('"')
+                val raw = part.substring(colon + 1).trim()
+                // "null" stays out of the map entirely, so every read of a missing field yields
+                // null rather than a parsed zero. The writer emits JSON null for an absent level
+                // precisely so it cannot be mistaken for a measurement; turning it into 0 here
+                // would make it 0 dBm -- the strongest reading in the file -- and it would win
+                // every best-server and dominance ranking.
+                if (raw != "null") fields[key] = raw.trim('"')
+            }
+            out += ObservedCell(
+                pci = fields["pci"]?.toIntOrNull(),
+                rsrpDbm = fields["rsrp"]?.toIntOrNull(),
+                band = fields["band"]?.takeIf { it.isNotEmpty() },
+                serving = false,
+                ageMs = fields["age_ms"]?.toLongOrNull() ?: 0L,
+            )
+            i = close + 1
+        }
+        return out
+    }
 
     /**
      * RFC 4180 field splitter.
