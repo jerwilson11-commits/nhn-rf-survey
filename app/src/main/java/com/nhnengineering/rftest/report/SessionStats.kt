@@ -273,10 +273,23 @@ object SessionStats {
 
     // ---- Dominance / best server -----------------------------------------
 
-    /** One cell's showing across the survey. */
+    /**
+     * One cell's showing across the survey.
+     *
+     * Identified by PCI **and channel**, because a PCI is unique only within a carrier — 504
+     * values for LTE, 1008 for NR. The same PCI on two channels is two different physical cells,
+     * and merging them would attribute one cell's coverage to another.
+     */
     data class ServerRow(
         val pci: Int,
-        /** Samples in which this cell was seen with a usable level. */
+        val channel: Int?,
+        val band: String?,
+        /**
+         * Samples in which this cell was seen with a usable level — samples, not observations.
+         * A cell can legitimately appear more than once in one sample; counting each occurrence
+         * produced a detection count larger than the number of samples in the survey, which is
+         * the kind of figure that ends an argument with a client badly.
+         */
         val detectedIn: Int,
         val detectionPct: Double,
         /** Samples in which it was the strongest cell seen. */
@@ -290,9 +303,10 @@ object SessionStats {
         /** Samples that contributed: at least one cell with a level. */
         val samples: Int,
         /**
-         * Samples that saw cells but none with a usable level, so could not be ranked. Reported
-         * rather than dropped silently — an analysis that quietly discards a tenth of a survey
-         * and does not say so is not an analysis.
+         * Samples that saw cells but none with a usable level, so could not be ranked — whether
+         * the level was absent or outside the physically possible range. Reported rather than
+         * dropped silently: an analysis that quietly discards a tenth of a survey and does not
+         * say so is not an analysis.
          */
         val excluded: Int,
         /** Dominant-sector count -> number of samples, ascending by count. */
@@ -321,6 +335,20 @@ object SessionStats {
      *   that sample's own measurement report. Retained neighbours keep the live display readable
      *   but counting them here would invent simultaneity that was never observed.
      */
+    /**
+     * Physically possible RSRP, generously bounded.
+     *
+     * 3GPP reportable ranges are −140..−44 dBm for LTE RSRP and −156..−31 for NR SS-RSRP; this
+     * window is wider than both so it rejects only values that cannot be measurements at all.
+     *
+     * It exists because a level of exactly 0 dBm — one milliwatt at the antenna — would be the
+     * strongest reading in any file and would win every ranking it entered. Earlier builds wrote
+     * that as the sentinel for "the modem gave no level". No session on disk turned out to contain
+     * one, so this guards the analysis rather than repairing data; the point is that the ranking
+     * should not depend on every upstream writer having got its sentinel right.
+     */
+    private fun plausibleRsrp(dbm: Int?): Boolean = dbm != null && dbm in -160..-30
+
     fun dominance(
         points: List<TrackPoint>,
         windowDb: Int = 6,
@@ -328,7 +356,7 @@ object SessionStats {
     ): Dominance {
         val withCells = points.filter { it.cells.isNotEmpty() }
         val ranked = withCells.map { p ->
-            p.cells.filter { it.rsrpDbm != null && (it.serving || it.ageMs <= maxAgeMs) }
+            p.cells.filter { plausibleRsrp(it.rsrpDbm) && (it.serving || it.ageMs <= maxAgeMs) }
         }
         val contributing = ranked.filter { it.isNotEmpty() }
         if (contributing.isEmpty()) {
@@ -341,25 +369,40 @@ object SessionStats {
         }
         val histogram = counts.groupingBy { it }.eachCount().toList().sortedBy { it.first }
 
-        // Per-cell rows. A cell without a PCI cannot be identified across samples, so it is not
-        // given a row -- it would be indistinguishable from every other unidentified cell.
-        val byPci = mutableMapOf<Int, MutableList<Int>>()
-        val bestCount = mutableMapOf<Int, Int>()
+        // Per-cell rows, keyed by PCI and channel. A cell without a PCI gets no row -- it would
+        // be indistinguishable from every other unidentified cell.
+        data class Key(val pci: Int, val channel: Int?)
+
+        val byCell = mutableMapOf<Key, MutableList<Int>>()
+        val bands = mutableMapOf<Key, String>()
+        val bestCount = mutableMapOf<Key, Int>()
         for (cells in contributing) {
-            val best = cells.maxByOrNull { it.rsrpDbm!! }
-            best?.pci?.let { bestCount[it] = (bestCount[it] ?: 0) + 1 }
-            for (c in cells) c.pci?.let { byPci.getOrPut(it) { mutableListOf() } += c.rsrpDbm!! }
+            cells.maxByOrNull { it.rsrpDbm!! }?.let { best ->
+                best.pci?.let { bestCount.merge(Key(it, best.channel), 1, Int::plus) }
+            }
+            // One entry per cell per sample, taking its strongest observation. A cell can appear
+            // twice in one sample -- the same PCI on two channels, or the serving cell also
+            // present in the neighbour list -- and counting both would report it as detected in
+            // more samples than the survey contains.
+            cells.filter { it.pci != null }
+                .groupBy { Key(it.pci!!, it.channel) }
+                .forEach { (key, obs) ->
+                    byCell.getOrPut(key) { mutableListOf() } += obs.maxOf { it.rsrpDbm!! }
+                    obs.firstNotNullOfOrNull { it.band }?.let { bands.putIfAbsent(key, it) }
+                }
         }
-        val servers = byPci.map { (pci, values) ->
+        val servers = byCell.map { (key, values) ->
             ServerRow(
-                pci = pci,
+                pci = key.pci,
+                channel = key.channel,
+                band = bands[key],
                 detectedIn = values.size,
                 detectionPct = 100.0 * values.size / contributing.size,
-                bestServerIn = bestCount[pci] ?: 0,
-                bestServerPct = 100.0 * (bestCount[pci] ?: 0) / contributing.size,
+                bestServerIn = bestCount[key] ?: 0,
+                bestServerPct = 100.0 * (bestCount[key] ?: 0) / contributing.size,
                 stats = stats(values, values.size),
             )
-        }.sortedByDescending { it.bestServerIn }
+        }.sortedWith(compareByDescending<ServerRow> { it.bestServerIn }.thenByDescending { it.detectedIn })
 
         return Dominance(
             windowDb = windowDb,

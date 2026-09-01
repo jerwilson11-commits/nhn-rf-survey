@@ -15,6 +15,15 @@ import java.time.Instant
  */
 data class ObservedCell(
     val pci: Int?,
+    /**
+     * Channel number (EARFCN or NR-ARFCN).
+     *
+     * Carried because **PCI alone does not identify a cell.** A PCI is unique only within a
+     * carrier — 504 values for LTE, 1008 for NR — so the same PCI on two channels is two different
+     * physical cells. Grouping a survey by PCI alone silently merges them, and this session
+     * contains eight samples that saw one PCI on two channels at once.
+     */
+    val channel: Int?,
     val rsrpDbm: Int?,
     val band: String?,
     val serving: Boolean,
@@ -124,6 +133,7 @@ object SessionReader {
             val iRsrp = idx("lte_rsrp"); val iNrRsrp = idx("nr_ss_rsrp")
             val iLteBand = idx("lte_band"); val iNrBand = idx("nr_band"); val iRat = idx("rat")
             val iNrPci = idx("nr_pci"); val iLtePci = idx("lte_pci")
+            val iNrArfcn = idx("nr_arfcn"); val iEarfcn = idx("lte_earfcn")
             val iCells = idx("cell_neighbors_json")
             val iFp = idx("floorplan_id"); val iFpX = idx("floorplan_x")
             val iFpY = idx("floorplan_y"); val iWp = idx("waypoint")
@@ -163,7 +173,16 @@ object SessionReader {
                 val servingBand = s(iNrBand) ?: s(iLteBand)?.let { "B" + it }
                 val cells = buildList {
                     if (servingPci != null || servingRsrp != null) {
-                        add(ObservedCell(servingPci, servingRsrp, servingBand, serving = true, ageMs = 0))
+                        add(
+                            ObservedCell(
+                                pci = servingPci,
+                                channel = s(iNrArfcn)?.toIntOrNull() ?: s(iEarfcn)?.toIntOrNull(),
+                                rsrpDbm = servingRsrp,
+                                band = servingBand,
+                                serving = true,
+                                ageMs = 0,
+                            ),
+                        )
                     }
                     addAll(parseCellNeighbors(s(iCells)))
                 }
@@ -254,6 +273,7 @@ object SessionReader {
             }
             out += ObservedCell(
                 pci = fields["pci"]?.toIntOrNull(),
+                channel = fields["ch"]?.toIntOrNull(),
                 rsrpDbm = fields["rsrp"]?.toIntOrNull(),
                 band = fields["band"]?.takeIf { it.isNotEmpty() },
                 serving = false,

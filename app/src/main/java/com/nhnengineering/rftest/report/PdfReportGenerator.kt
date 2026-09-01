@@ -109,6 +109,30 @@ object PdfReportGenerator {
         }
 
         /**
+         * A paragraph, wrapped to the page.
+         *
+         * Wraps on measured width rather than a character count, because a character count is a
+         * guess about a proportional font, and that guess is what pushed explanatory text off the
+         * right-hand edge of the first report this generator produced. `measureText` knows.
+         */
+        fun para(sentence: String, p: Paint = small, indent: Float = 0f) {
+            val width = PAGE_W - 2 * MARGIN - indent
+            val line = StringBuilder()
+            for (word in sentence.split(' ')) {
+                val candidate = if (line.isEmpty()) word else "$line $word"
+                if (p.measureText(candidate) > width && line.isNotEmpty()) {
+                    text(line.toString(), p, indent)
+                    line.setLength(0)
+                    line.append(word)
+                } else {
+                    line.setLength(0)
+                    line.append(candidate)
+                }
+            }
+            if (line.isNotEmpty()) text(line.toString(), p, indent)
+        }
+
+        /**
          * Bordered two-column title block.
          *
          * A survey report is a document that gets emailed onward, printed, and quoted back months
@@ -193,10 +217,9 @@ object PdfReportGenerator {
         c.kv("Worst", s.min?.let { "$it dBm" } ?: "—")
         c.kv("Mean", s.mean?.let { String.format(Locale.US, "%.1f dBm", it) } ?: "—")
         c.gap()
-        c.text(
+        c.para(
             "Percentiles are reported alongside the mean because a mean conceals the tail, and " +
                 "coverage is judged on the worst areas rather than the average one.",
-            c.small,
         )
         c.gap(); c.rule()
 
@@ -218,11 +241,10 @@ object PdfReportGenerator {
         if (bands.groups.size > 1 || bands.unlabelled > 0) {
             c.ensure(140f)
             c.text("By band", c.h2)
-            c.text(
+            c.para(
                 "The same statistics as above, computed separately for each band the survey saw. " +
                     "A single site-wide figure averages a band that covers the venue with one " +
                     "that appears in a corridor, and hides the difference.",
-                c.small,
             )
             c.gap()
             groupTable(c, bands, report.thresholdDbm)
@@ -234,11 +256,10 @@ object PdfReportGenerator {
         if (areas.groups.isNotEmpty()) {
             c.ensure(140f)
             c.text("By area", c.h2)
-            c.text(
+            c.para(
                 "Grouped by the waypoints marked during the walk. Only samples recorded while a " +
                     "waypoint was set appear here; the remainder are counted as unlabelled rather " +
                     "than assigned to the nearest one.",
-                c.small,
             )
             c.gap()
             groupTable(c, areas, report.thresholdDbm)
@@ -248,14 +269,13 @@ object PdfReportGenerator {
         // ---- Dominance / best server --------------------------------------
         val dom = SessionStats.dominance(points)
         if (dom.samples > 0 && dom.servers.isNotEmpty()) {
-            c.ensure(200f)
+            c.ensure(130f)
             c.text("Sector dominance and overlap", c.h2)
-            c.text(
+            c.para(
                 "A sample's dominant sectors are the cells within ${dom.windowDb} dB of its " +
                     "strongest. Two or more means the handset has no clear server and will hand " +
                     "back and forth between them, which is the usual driver of remediation work " +
                     "on an in-building system.",
-                c.small,
             )
             c.gap()
             c.kv("Samples analysed", dom.samples.toString())
@@ -285,24 +305,24 @@ object PdfReportGenerator {
             c.gap()
             c.ensure(120f)
             c.text("By cell", c.h2)
-            c.text(
-                "Detection rate is shown against every cell. Without it a cell seen in a handful " +
-                    "of samples presents identically to one seen throughout, and a reader cannot " +
-                    "tell a genuine server from a statistical accident.",
-                c.small,
+            c.para(
+                "Detection rate is shown against every cell. A cell is identified by PCI and " +
+                    "channel together, because a PCI is unique only within a carrier -- the same " +
+                    "PCI on two channels is two different cells. Without a detection rate a cell " +
+                    "seen in a handful of samples presents identically to one seen throughout.",
             )
             c.gap()
             c.text(
                 String.format(
-                    Locale.US, "%-8s %9s %9s %9s %7s %7s",
-                    "PCI", "Detected", "Best srv", "Best srv", "Median", "Best",
+                    Locale.US, "%-6s %-6s %-8s %9s %8s %9s %7s %7s",
+                    "PCI", "Band", "Channel", "Detected", "Detect", "Best srv", "Median", "Best",
                 ),
                 c.monoBold,
             )
             c.text(
                 String.format(
-                    Locale.US, "%-8s %9s %9s %9s %7s %7s",
-                    "", "samples", "samples", "share", "dBm", "dBm",
+                    Locale.US, "%-6s %-6s %-8s %9s %8s %9s %7s %7s",
+                    "", "", "", "samples", "rate", "share", "dBm", "dBm",
                 ),
                 c.monoBold,
             )
@@ -310,8 +330,11 @@ object PdfReportGenerator {
                 c.ensure(LINE * 2)
                 c.text(
                     String.format(
-                        Locale.US, "%-8d %9d %9d %8.1f%% %7s %7s",
-                        r.pci, r.detectedIn, r.bestServerIn, r.bestServerPct,
+                        Locale.US, "%-6d %-6s %-8s %9d %7.1f%% %8.1f%% %7s %7s",
+                        r.pci,
+                        r.band?.take(6) ?: "—",
+                        r.channel?.toString() ?: "—",
+                        r.detectedIn, r.detectionPct, r.bestServerPct,
                         r.stats.median?.toString() ?: "—",
                         r.stats.max?.toString() ?: "—",
                     ),
@@ -323,13 +346,12 @@ object PdfReportGenerator {
                 c.text("${dom.servers.size - 20} further cells omitted; all are in the CSV.", c.small)
             }
             c.gap(4f)
-            c.text(
+            c.para(
                 "Lower bound. A scanning receiver decodes every cell on air at once; this handset " +
                     "reports its serving cell plus whatever partial neighbour list the modem chose " +
                     "to surface, and only cells present in a sample's own measurement report are " +
                     "counted. Cells the modem did not report are invisible here, so overlap can " +
                     "be understated but not overstated.",
-                c.small,
             )
             c.gap(); c.rule()
         }
@@ -340,11 +362,10 @@ object PdfReportGenerator {
         if (report.holes.isEmpty()) {
             c.text("No contiguous run of samples fell below the threshold.", c.body)
         } else {
-            c.text(
+            c.para(
                 "Contiguous runs below threshold, worst first. A compliance percentage alone " +
                     "cannot distinguish failures spread thinly across a site from failures " +
                     "concentrated in one place; only the latter tells an engineer where to return.",
-                c.small,
             )
             c.gap()
             c.text(
@@ -384,7 +405,7 @@ object PdfReportGenerator {
         c.gap()
         methodologyNotes(summary, points, report).forEach {
             c.text("•  ${it.first}", c.body)
-            wrap(it.second, 96).forEach { line -> c.text(line, c.small, indent = 12f) }
+            c.para(it.second, c.small, indent = 12f)
             c.gap(4f)
         }
 
@@ -426,23 +447,20 @@ object PdfReportGenerator {
             )
         }
         c.gap(4f)
-        c.text(
+        c.para(
             "Pass = share of that group's samples at or above $thresholdDbm dBm. Values in dBm.",
-            c.small,
         )
         val thin = b.groups.filter { it.thin }
         if (thin.isNotEmpty()) {
-            c.text(
+            c.para(
                 "Under ${SessionStats.THIN_GROUP_PCT.toInt()}% of the survey, so the statistics " +
                     "are indicative only: " + thin.joinToString(", ") { it.label },
-                c.small,
             )
         }
         if (b.unlabelled > 0) {
-            c.text(
+            c.para(
                 "${b.unlabelled} measured samples carried no label and are excluded from this " +
                     "table. They remain in the site-wide figures above.",
-                c.small,
             )
         }
     }
@@ -580,11 +598,10 @@ object PdfReportGenerator {
                 // Deliberately no north arrow and no scale bar. The operator supplies a plan image,
                 // not a georeferenced raster, so neither its orientation nor its scale is known to
                 // this app. Drawing either would be an invention the reader could not check.
-                c.text(
+                c.para(
                     "Positions were placed on the plan by the operator. The plan is not " +
                         "georeferenced, so no north arrow or distance scale is shown — neither " +
                         "its orientation nor its scale is known to the instrument.",
-                    c.small,
                 )
                 return
             }
@@ -650,10 +667,9 @@ object PdfReportGenerator {
         c.y = top + availH + LINE
         c.y += drawLegend(c, kpi, MARGIN, c.y)
         c.gap(6f)
-        c.text(
+        c.para(
             "${gps.size} GPS-located samples, north up, equal scale on both axes. " +
                 "S marks the start of the walk and E the end.",
-            c.small,
         )
     }
 
@@ -737,21 +753,6 @@ object PdfReportGenerator {
                     "time. It is not a substitute for a multi-device or multi-operator assessment, " +
                     "and conditions vary with load, time of day and occupancy."
         )
-    }
-
-    private fun wrap(text: String, width: Int): List<String> {
-        val words = text.split(" ")
-        val lines = mutableListOf<String>()
-        var line = StringBuilder()
-        for (w in words) {
-            if (line.isNotEmpty() && line.length + 1 + w.length > width) {
-                lines += line.toString(); line = StringBuilder()
-            }
-            if (line.isNotEmpty()) line.append(' ')
-            line.append(w)
-        }
-        if (line.isNotEmpty()) lines += line.toString()
-        return lines
     }
 
     private fun formatDuration(ms: Long): String {

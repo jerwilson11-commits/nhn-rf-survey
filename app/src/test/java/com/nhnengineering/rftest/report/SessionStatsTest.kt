@@ -243,8 +243,16 @@ class SessionStatsTest {
 
     // ---- Dominance -------------------------------------------------------
 
-    private fun cell(pci: Int?, rsrp: Int?, serving: Boolean = false, ageMs: Long = 0) =
-        ObservedCell(pci = pci, rsrpDbm = rsrp, band = null, serving = serving, ageMs = ageMs)
+    private fun cell(
+        pci: Int?,
+        rsrp: Int?,
+        serving: Boolean = false,
+        ageMs: Long = 0,
+        channel: Int? = 1,
+    ) = ObservedCell(
+        pci = pci, channel = channel, rsrpDbm = rsrp, band = null,
+        serving = serving, ageMs = ageMs,
+    )
 
     @Test
     fun `dominant sectors are the cells within the window of the strongest`() {
@@ -349,5 +357,97 @@ class SessionStatsTest {
         assertEquals(0, d.samples)
         assertEquals(0, d.excluded)
         assertTrue(d.servers.isEmpty())
+    }
+
+    @Test
+    fun `a physically impossible level is rejected, not ranked`() {
+        // 0 dBm is one milliwatt at the antenna. Earlier builds wrote it as the sentinel for "no
+        // level"; if it reached the ranking it would beat every real cell in the survey.
+        val p = pt(0, rsrp = -95, cells = listOf(cell(1, -95, serving = true), cell(2, 0), cell(3, -99)))
+
+        val d = SessionStats.dominance(listOf(p))
+
+        assertEquals(1, d.servers.single { it.pci == 1 }.bestServerIn)
+        assertTrue("0 dBm must never be treated as a measurement", d.servers.none { it.pci == 2 })
+        assertEquals(listOf(2 to 1), d.countHistogram)
+    }
+
+    @Test
+    fun `levels at the edge of the reportable range are kept`() {
+        // -140 is the bottom of LTE's reportable RSRP range and -44 the top. Both are real
+        // measurements and the guard must not discard them.
+        val p = pt(0, rsrp = -44, cells = listOf(cell(1, -44, serving = true), cell(2, -140)))
+
+        val d = SessionStats.dominance(listOf(p))
+
+        assertEquals(2, d.servers.size)
+        assertEquals(1, d.samples)
+    }
+
+    // Both of the following were found by rendering a report and reading it, not by reasoning
+    // about the code. The first generated PDF reported PCI 216 as "detected in 36 samples" out of
+    // 28 analysed -- a number that cannot be true, sitting in a client deliverable.
+
+    @Test
+    fun `a cell seen twice in one sample is detected in one sample`() {
+        // Real data from session_20260901_152732: eight of its rows report the same PCI on two
+        // channels at once. Counting occurrences rather than samples produced 37 detections
+        // across 29 samples.
+        val p = pt(
+            0, rsrp = -95,
+            cells = listOf(
+                cell(206, -95, serving = true, channel = 501390),
+                cell(216, -108, channel = 501390),
+                cell(216, -110, channel = 521310),
+            ),
+        )
+
+        val d = SessionStats.dominance(listOf(p))
+
+        // Two distinct cells, because PCI 216 on two channels is two cells -- but each is
+        // detected in exactly one sample, never two.
+        assertTrue(d.servers.all { it.detectedIn <= d.samples })
+        assertEquals(1, d.servers.first { it.pci == 216 && it.channel == 501390 }.detectedIn)
+        assertEquals(1, d.servers.first { it.pci == 216 && it.channel == 521310 }.detectedIn)
+    }
+
+    @Test
+    fun `the same PCI on two channels is two cells, not one`() {
+        // A PCI is unique only within a carrier -- 504 values for LTE, 1008 for NR. Merging by
+        // PCI alone would attribute one cell's coverage to another.
+        val p = pt(
+            0, rsrp = -90,
+            cells = listOf(cell(216, -90, serving = true, channel = 100), cell(216, -120, channel = 200)),
+        )
+
+        val d = SessionStats.dominance(listOf(p))
+
+        assertEquals(2, d.servers.size)
+        assertEquals(setOf(100, 200), d.servers.map { it.channel }.toSet())
+        // Only the strong one is the best server; the weak one must not inherit its share.
+        assertEquals(1, d.servers.first { it.channel == 100 }.bestServerIn)
+        assertEquals(0, d.servers.first { it.channel == 200 }.bestServerIn)
+    }
+
+    @Test
+    fun `detection rate can never exceed one hundred percent`() {
+        // The property the broken version violated, stated directly.
+        val points = List(20) {
+            pt(
+                it.toLong(), rsrp = -95,
+                cells = listOf(
+                    cell(1, -95, serving = true, channel = 10),
+                    cell(2, -100, channel = 10),
+                    cell(2, -101, channel = 10),
+                ),
+            )
+        }
+
+        val d = SessionStats.dominance(points)
+
+        assertTrue(d.servers.all { it.detectionPct <= 100.0 })
+        assertEquals(20, d.servers.first { it.pci == 2 }.detectedIn)
+        // The stronger of the two duplicate observations is the one kept.
+        assertEquals(-100, d.servers.first { it.pci == 2 }.stats.median)
     }
 }
