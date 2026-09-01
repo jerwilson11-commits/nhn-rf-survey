@@ -18,6 +18,7 @@ import com.nhnengineering.rftest.R
 import com.nhnengineering.rftest.cellular.CellularCollector
 import com.nhnengineering.rftest.location.LocationCollector
 import com.nhnengineering.rftest.model.MeasurementSample
+import com.nhnengineering.rftest.ui.indoorPointColor
 import com.nhnengineering.rftest.session.SessionCsvWriter
 import com.nhnengineering.rftest.wifi.WifiCollector
 import kotlinx.coroutines.CoroutineScope
@@ -155,6 +156,7 @@ class RecordingService : Service() {
                             location = fixNow,
                             wifi = wifiNow,
                             cellular = cellNow,
+                            indoor = RecordingState.indoorPosition.value,
                             throughput = throughput,
                             note = if (throughput != null) "speedtest" else null,
                         )
@@ -162,6 +164,18 @@ class RecordingService : Service() {
                 }.onFailure {
                     Log.e(TAG, "write failed", it)
                     RecordingState.error.value = it.message ?: "write failed"
+                }
+
+                // Record each distinct placed position once, with the KPI observed there, so the
+                // floorplan shows where the walk actually went rather than every duplicate dwell
+                // sample.
+                RecordingState.indoorPosition.value?.let { pos ->
+                    val existing = RecordingState.placedPositions.value
+                    if (existing.lastOrNull()?.first != pos && existing.size < 2000) {
+                        RecordingState.placedPositions.value = existing + (
+                            pos to indoorPointColor(wifiNow?.rssiDbm, cellNow?.servingRsrpDbm)
+                            )
+                    }
                 }
 
                 RecordingState.rowCount.value = sequence

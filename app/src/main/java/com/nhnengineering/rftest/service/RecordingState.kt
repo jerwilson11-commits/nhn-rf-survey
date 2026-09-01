@@ -3,6 +3,7 @@ package com.nhnengineering.rftest.service
 import com.nhnengineering.rftest.model.Breach
 import com.nhnengineering.rftest.model.CellularSample
 import com.nhnengineering.rftest.model.GeoPoint
+import com.nhnengineering.rftest.model.IndoorPosition
 import com.nhnengineering.rftest.model.ThroughputSample
 import com.nhnengineering.rftest.model.Thresholds
 import com.nhnengineering.rftest.model.WifiSample
@@ -45,6 +46,20 @@ object RecordingState {
     val thresholds = MutableStateFlow(Thresholds())
 
     /**
+     * Operator-placed indoor position. Sticky by design: set by tapping the floorplan and carried
+     * by every subsequent sample until moved or cleared, because a thirty-second dwell should
+     * produce thirty located samples rather than one located sample and twenty-nine orphans.
+     */
+    val indoorPosition = MutableStateFlow<IndoorPosition?>(null)
+
+    /**
+     * Positions logged this session, paired with the serving KPI colour recorded there, for
+     * drawing on the floorplan. Capped so a long session cannot grow this without bound — the
+     * authoritative record is the CSV, this is only what the plan draws.
+     */
+    val placedPositions = MutableStateFlow<List<Pair<IndoorPosition, Int?>>>(emptyList())
+
+    /**
      * Handed over by the UI when a speed test finishes; consumed by the service on its next tick.
      *
      * Routed through the service rather than written directly so the file has exactly one writer
@@ -60,5 +75,6 @@ object RecordingState {
         fixesWithoutVelocity.value = 0
         breaches.value = emptyList()
         error.value = null
+        placedPositions.value = emptyList()
     }
 }

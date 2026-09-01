@@ -136,6 +136,15 @@ private val THROUGHPUT_COLUMNS = listOf(
     "loss_pct", "speedtest_server",
 )
 
+/**
+ * Indoor positioning. Coordinates are normalised 0..1 to the floorplan image rather than stored in
+ * pixels, so they remain valid at any display size or export resolution. `floorplan_id` is the
+ * image filename, so an exported session and its floorplan can be handed over together.
+ */
+private val INDOOR_COLUMNS = listOf(
+    "floorplan_id", "floorplan_x", "floorplan_y", "waypoint",
+)
+
 private val TRAILING_COLUMNS = listOf("note")
 
 /**
@@ -154,13 +163,15 @@ private val TRAILING_COLUMNS = listOf("note")
  */
 private val COLUMNS =
     CORE_COLUMNS + LOCATION_COLUMNS + CELLULAR_COLUMNS + WIFI_COLUMNS + THROUGHPUT_COLUMNS +
-        TRAILING_COLUMNS
+        INDOOR_COLUMNS + TRAILING_COLUMNS
 
-private val HEADER = COLUMNS.joinToString(",")
+internal val CSV_HEADER = COLUMNS.joinToString(",")
+private val HEADER = CSV_HEADER
+internal val CSV_COLUMN_COUNT = COLUMNS.size
 
 private val TIMESTAMP: DateTimeFormatter = DateTimeFormatter.ISO_INSTANT
 
-private fun MeasurementSample.toCsvRow(): String {
+internal fun MeasurementSample.toCsvRow(): String {
     val g = location
     val w = wifi
     val cells = mutableListOf<String?>()
@@ -247,6 +258,12 @@ private fun MeasurementSample.toCsvRow(): String {
     cells += tp?.jitterMs?.let { String.format(Locale.US, "%.2f", it) }
     cells += tp?.lossPct?.let { String.format(Locale.US, "%.1f", it) }
     cells += tp?.server
+
+    val ind = indoor
+    cells += ind?.floorplanId
+    cells += ind?.let { String.format(Locale.US, "%.4f", it.xNorm) }
+    cells += ind?.let { String.format(Locale.US, "%.4f", it.yNorm) }
+    cells += ind?.label
 
     cells += note
 

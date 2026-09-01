@@ -157,13 +157,59 @@ Resequenced 2026-08-28 so that no phase before 5 is blocked on SIM activation.
 | 4 | ✅ **Done 2026-08-31.** Speedtest — DL / UL / latency / jitter / ICMP loss | Results within reason of Ookla over Wi-Fi | No |
 | 5 | ⚠️ **Built 2026-09-01, UNVALIDATED.** Cellular collector, band derivation, UI card, CSV columns | LTE/NR values match Field Test Mode | **Yes — blocked on SIM** |
 | 6 | ✅ **Done 2026-08-31.** Foreground service, screen-off logging, thresholds and alarms | Survives a full site walk | No |
-| 7 | Reporting — statistics, floorplan mode, PDF / XLSX | A client-ready acceptance report comes out | No |
+| 7a | ✅ **Done 2026-09-01.** Floorplan mode — indoor positioning by hand, waypoint labels | Indoor samples carry a usable position | No |
+| 7b | Reporting — statistics, PDF / XLSX | A client-ready acceptance report comes out | No |
 | 8a | ✅ **Done 2026-09-01.** MCP server, stdio transport, 5 tools over the session corpus | An agent answers an acceptance question directly from recorded sessions | No |
 | 8b | ✅ **Done 2026-09-01.** Stateless `streamable-http` transport, OAuth 2.1 Resource Server | Hosted deployment per MCP 2026-07-28 | No |
 
 The cellular collector moves to Phase 5 deliberately. By then the sampling loop, storage, export,
 and map are all validated against real Wi-Fi data, so when the SIM arrives we debug one module
 rather than ten simultaneously.
+
+### Phase 7a — floorplan mode, 2026-09-01
+
+Indoor positioning by hand, because GPS cannot do it. Inside a venue, accuracy collapses from the
+±3 m measured on the driveway to tens of metres or no fix at all, and a coverage measurement that
+cannot be placed on a plan is most of the way to useless.
+
+Load a floorplan image, tap where you are. **The position is sticky**, carried by every subsequent
+sample until moved or cleared — which matches how an indoor walk actually goes. A one-shot marker
+would turn a thirty-second dwell into one located sample and twenty-nine orphans.
+
+Design decisions:
+
+- **Coordinates are normalised 0..1 to the image, not stored in pixels.** Pixel coordinates would
+  be bound to the display size at the moment of capture and would break silently at a different
+  zoom, on a different screen, or after re-export at another resolution.
+- **Images are copied into app storage, not referenced by URI.** A picked `content://` URI is a
+  revocable grant that breaks if the source moves or a cloud provider goes offline. A session whose
+  floorplan cannot be reopened is a session whose positions mean nothing. The stored filename goes
+  in the CSV so a session and its plan can be handed over together.
+- **The canvas is sized to the image aspect ratio** so the bitmap exactly fills it. Letterboxing
+  would make screen and image coordinates diverge, placing every tap slightly wrong — an error
+  invisible on screen that would corrupt every position in the session.
+- Dimensions are read with `inJustDecodeBounds`, header only. A resort floorplan can be a very
+  large image and decoding pixels merely to learn the aspect ratio risks OutOfMemory under Android
+  17's per-app RAM limits.
+
+Four CSV columns added: `floorplan_id`, `floorplan_x`, `floorplan_y`, `waypoint`. Schema is now
+**71 columns**.
+
+### Test suite — 2026-09-01
+
+20 unit tests, all passing. The project had none until Phase 5.
+
+- **BandMapping, 14 tests.** Verified against 3GPP TS 36.101 and TS 38.104. The only part of the
+  cellular work provable without a SIM.
+- **CsvSchemaTest, 5 tests.** Guards the Phase 2 defect directly: the row builder once emitted 29
+  empty cellular cells against a 31-column header, shifting every later field by two. A runtime
+  assertion caught it only after the app had written a session and crashed. These catch it at build
+  time — including the all-null case, which is the one that actually shifted, and a check that
+  locale-sensitive numbers use a decimal point rather than a comma.
+
+What these do **not** catch is a transposition — RSRQ values written into the RSRP column would
+pass every test. That is why the emission order sits directly beneath the column list in the source
+rather than elsewhere in the file.
 
 ### Phase 5 build record — 2026-09-01 (NOT a validation record)
 

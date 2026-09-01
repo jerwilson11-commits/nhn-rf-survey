@@ -201,6 +201,8 @@ data class MeasurementSample(
     val location: GeoPoint?,
     val wifi: WifiSample?,
     val cellular: CellularSample? = null,
+    /** Operator-placed indoor position, where GPS cannot help. */
+    val indoor: IndoorPosition? = null,
     /** Present only on the sample written when a speed test completes, so the throughput row
      *  carries the position and RF conditions the test actually ran under. */
     val throughput: ThroughputSample? = null,
