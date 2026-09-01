@@ -13,3 +13,9 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Recorded sessions and their exports are raw location history — never commit them.
+# A single session CSV contains a precise track of wherever the handset has been.
+*.csv
+*.kml
+*.geojson
