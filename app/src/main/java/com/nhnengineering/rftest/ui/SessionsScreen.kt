@@ -21,6 +21,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -39,12 +40,16 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.nhnengineering.rftest.model.RsrpBucket
+import com.nhnengineering.rftest.report.PdfReportGenerator
+import com.nhnengineering.rftest.report.SessionStats
 import com.nhnengineering.rftest.model.RssiBucket
 import com.nhnengineering.rftest.session.FloorplanStore
 import com.nhnengineering.rftest.session.SessionCsvWriter
@@ -113,6 +118,21 @@ fun SessionsScreen(modifier: Modifier = Modifier) {
                 }
             },
             onShareCsv = { share(context, current.first.file, "text/csv") },
+            onGenerateReport = { threshold ->
+                scope.launch {
+                    val (summary, points) = current
+                    val report = SessionStats.analyse(points, thresholdDbm = threshold)
+                    val pdf = exportFile(context, summary.displayName + "-report", "pdf")
+                    PdfReportGenerator.generate(context, summary, points, report, pdf)
+                    // The summary CSV rides alongside for anyone who wants the numbers in a
+                    // spreadsheet. Apache POI would be a very large dependency to produce
+                    // something Excel already opens.
+                    exportFile(context, summary.displayName + "-summary", "csv")
+                        .writeText(SessionStats.summaryCsv(summary, report))
+                    status = "Wrote " + pdf.name
+                    share(context, pdf, "application/pdf")
+                }
+            },
         )
     }
 }
@@ -174,7 +194,11 @@ private fun SessionDetail(
     onExportKml: () -> Unit,
     onExportGeoJson: () -> Unit,
     onShareCsv: () -> Unit,
+    onGenerateReport: (Int?) -> Unit,
 ) {
+    // Blank means "use the default for whichever KPI this session carries" — -75 dBm for Wi-Fi,
+    // -105 dBm for cellular. Those differ by roughly 30 dB and must not share a default.
+    var thresholdText by remember(summary.displayName) { mutableStateOf("") }
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -244,6 +268,33 @@ private fun SessionDetail(
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
+                }
+            }
+        }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Acceptance report", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "A client-facing PDF: statistics, threshold compliance, coverage holes, " +
+                            "the survey plot, and a methodology page stating what the measurement " +
+                            "does not know.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    OutlinedTextField(
+                        value = thresholdText,
+                        onValueChange = { thresholdText = it },
+                        label = { Text("Pass/fail threshold dBm (blank = default)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Button(
+                        onClick = {
+                            onGenerateReport(thresholdText.trim().toIntOrNull())
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Generate PDF report") }
                 }
             }
         }

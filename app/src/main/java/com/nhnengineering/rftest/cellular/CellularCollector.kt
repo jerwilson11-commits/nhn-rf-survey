@@ -9,6 +9,7 @@ import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
 import android.telephony.CellSignalStrengthLte
 import android.telephony.CellSignalStrengthNr
+import android.telephony.SignalStrength
 import android.telephony.CellIdentityLte
 import android.telephony.CellIdentityNr
 import android.telephony.TelephonyCallback
@@ -60,6 +61,7 @@ class CellularCollector(context: Context) {
     private val executor: Executor = Executor { it.run() }
 
     @Volatile private var latestDisplayInfo: TelephonyDisplayInfo? = null
+    @Volatile private var latestSignalStrength: SignalStrength? = null
     @Volatile private var lastRefreshElapsedMs = 0L
 
     private var started = false
@@ -81,10 +83,15 @@ class CellularCollector(context: Context) {
 
     private inner class Callback :
         TelephonyCallback(),
-        TelephonyCallback.DisplayInfoListener {
+        TelephonyCallback.DisplayInfoListener,
+        TelephonyCallback.SignalStrengthsListener {
 
         override fun onDisplayInfoChanged(displayInfo: TelephonyDisplayInfo) {
             latestDisplayInfo = displayInfo
+        }
+
+        override fun onSignalStrengthsChanged(signalStrength: SignalStrength) {
+            latestSignalStrength = signalStrength
         }
     }
 
@@ -291,6 +298,7 @@ class CellularCollector(context: Context) {
     private fun toLte(info: CellInfoLte): LteCell {
         val id: CellIdentityLte = info.cellIdentity
         val ss: CellSignalStrengthLte = info.cellSignalStrength
+        val fb = if (info.isRegistered) servingLte() else null
         val ci = id.ci.orNull()
         val earfcn = id.earfcn.orNull()
 
@@ -312,28 +320,66 @@ class CellularCollector(context: Context) {
             bandLabel = band?.let { b -> "B$b" + (derived?.label?.let { " ($it)" } ?: "") },
             dlFreqMhz = earfcn?.let { BandMapping.lteDownlinkMhz(it) },
             bandwidthKhz = id.bandwidth.orNull(),
-            rsrpDbm = ss.rsrp.orNull(),
-            rsrqDb = ss.rsrq.orNull(),
-            rssnrDb = ss.rssnr.orNull(),
-            rssiDbm = ss.rssi.orNull(),
-            cqi = ss.cqi.orNull(),
-            timingAdvance = ss.timingAdvance.orNull(),
+            rsrpDbm = ss.rsrp.orNull() ?: fb?.rsrp?.orNull(),
+            rsrqDb = ss.rsrq.orNull() ?: fb?.rsrq?.orNull(),
+            rssnrDb = ss.rssnr.orNull() ?: fb?.rssnr?.orNull(),
+            rssiDbm = ss.rssi.orNull() ?: fb?.rssi?.orNull(),
+            cqi = ss.cqi.orNull() ?: fb?.cqi?.orNull(),
+            timingAdvance = ss.timingAdvance.orNull() ?: fb?.timingAdvance?.orNull(),
             mcc = id.mccString,
             mnc = id.mncString,
             operator = id.operatorAlphaLong?.toString()?.ifBlank { null },
         )
     }
 
+    /**
+     * Serving-cell signal from the SignalStrength callback, used to fill gaps in getAllCellInfo().
+     *
+     * The two sources do not agree about what is available. Measured on T-Mobile 5G SA:
+     * `getAllCellInfo()` returned `ssSinr = 2147483647` (UNAVAILABLE) while `SignalStrength`
+     * carried `ssSinr = 21` for the same serving cell at the same moment. Reading only the former
+     * loses SINR entirely — and SINR is the KPI that separates "strong signal" from "usable
+     * signal", so losing it silently is worse than most alternatives.
+     *
+     * Applied to the **registered cell only**. Neighbours legitimately have no SINR, and borrowing
+     * the serving cell's value for them would fabricate a measurement.
+     */
+    private fun servingNr(): CellSignalStrengthNr? = runCatching {
+        latestSignalStrength?.getCellSignalStrengths(CellSignalStrengthNr::class.java)?.firstOrNull()
+    }.getOrNull()
+
+    private fun servingLte(): CellSignalStrengthLte? = runCatching {
+        latestSignalStrength?.getCellSignalStrengths(CellSignalStrengthLte::class.java)?.firstOrNull()
+    }.getOrNull()
+
     private fun toNr(info: CellInfoNr): NrCell {
         // getCellIdentity() returns the base type on CellInfoNr, so the cast is required.
         val id = info.cellIdentity as? CellIdentityNr
         val ss = info.cellSignalStrength as? CellSignalStrengthNr
+        // Only the registered cell may borrow from SignalStrength; see servingNr().
+        val fb = if (info.isRegistered) servingNr() else null
         val nrarfcn = id?.nrarfcn?.orNull()
 
         val reported = id?.bands?.map { "n$it" }.orEmpty()
         val derived = nrarfcn?.let { BandMapping.nrBandsFor(it) }.orEmpty()
-        val bands = if (reported.isNotEmpty()) reported else derived.map { it.band }
+        val derivedNames = derived.map { it.band }
+        val bands = if (reported.isNotEmpty()) reported else derivedNames
+
+        // Cross-check the modem's band claim against the band its own channel number implies.
+        // These disagree in practice — observed on T-Mobile 5G SA, a registered cell reporting
+        // band 25 with an ARFCN mapping to 2606.55 MHz, which is n41. Reporting one silently
+        // would put an internally incoherent figure in a client document.
+        val conflict = if (
+            reported.isNotEmpty() && derivedNames.isNotEmpty() &&
+            reported.none { it in derivedNames }
+        ) {
+            "ARFCN $nrarfcn implies ${derivedNames.joinToString("/")}"
+        } else {
+            null
+        }
+
         val label = when {
+            conflict != null -> reported.joinToString("/") + " ⚠"
             reported.isNotEmpty() -> reported.joinToString("/")
             nrarfcn != null -> BandMapping.nrBandLabel(nrarfcn)
             else -> null
@@ -347,13 +393,14 @@ class CellularCollector(context: Context) {
             nrarfcn = nrarfcn,
             bands = bands,
             bandLabel = label,
+            bandConflict = conflict,
             dlFreqMhz = nrarfcn?.let { BandMapping.nrArfcnToMhz(it) },
-            ssRsrpDbm = ss?.ssRsrp?.orNull(),
-            ssRsrqDb = ss?.ssRsrq?.orNull(),
-            ssSinrDb = ss?.ssSinr?.orNull(),
-            csiRsrpDbm = ss?.csiRsrp?.orNull(),
-            csiRsrqDb = ss?.csiRsrq?.orNull(),
-            csiSinrDb = ss?.csiSinr?.orNull(),
+            ssRsrpDbm = ss?.ssRsrp?.orNull() ?: fb?.ssRsrp?.orNull(),
+            ssRsrqDb = ss?.ssRsrq?.orNull() ?: fb?.ssRsrq?.orNull(),
+            ssSinrDb = ss?.ssSinr?.orNull() ?: fb?.ssSinr?.orNull(),
+            csiRsrpDbm = ss?.csiRsrp?.orNull() ?: fb?.csiRsrp?.orNull(),
+            csiRsrqDb = ss?.csiRsrq?.orNull() ?: fb?.csiRsrq?.orNull(),
+            csiSinrDb = ss?.csiSinr?.orNull() ?: fb?.csiSinr?.orNull(),
             mcc = id?.mccString,
             mnc = id?.mncString,
             operator = id?.operatorAlphaLong?.toString()?.ifBlank { null },

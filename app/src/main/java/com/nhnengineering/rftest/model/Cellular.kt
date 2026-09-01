@@ -85,6 +85,15 @@ data class NrCell(
     /** From `CellIdentityNr.getBands()` when the modem supplies it; otherwise derived. */
     val bands: List<String>,
     val bandLabel: String?,
+    /**
+     * Set when the modem's reported band contradicts the band implied by its own channel number.
+     *
+     * Observed live on T-Mobile 5G SA: a registered cell reporting `mBands=[25]` while its
+     * NR-ARFCN mapped to 2606.55 MHz, which is n41 — n25 spans 1930–1995 MHz. One of the two
+     * fields is stale or wrong and the handset does not say which. A report stating "n25 at
+     * 2606 MHz" is internally incoherent, so the disagreement is carried rather than resolved.
+     */
+    val bandConflict: String?,
     val dlFreqMhz: Double?,
     val ssRsrpDbm: Int?,
     val ssRsrqDb: Int?,

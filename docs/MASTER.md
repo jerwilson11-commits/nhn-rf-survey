@@ -155,7 +155,7 @@ Resequenced 2026-08-28 so that no phase before 5 is blocked on SIM activation.
 | 2 | ✅ **Done 2026-08-31.** GPS sampling loop, session record/stop, streaming CSV | A real walk produces a usable CSV | No |
 | 3 | ✅ **Done 2026-08-31.** Session browser, track plot, KML / GeoJSON export, share sheet | Route and RSSI render correctly | No |
 | 4 | ✅ **Done 2026-08-31.** Speedtest — DL / UL / latency / jitter / ICMP loss | Results within reason of Ookla over Wi-Fi | No |
-| 5 | ⚠️ **Built 2026-09-01, UNVALIDATED.** Cellular collector, band derivation, UI card, CSV columns | LTE/NR values match Field Test Mode | **Yes — blocked on SIM** |
+| 5 | ✅ **Validated 2026-09-01** on live T-Mobile 5G SA. Cellular collector, band derivation, UI card, CSV columns | NR values match OS ground truth | Done |
 | 6 | ✅ **Done 2026-08-31.** Foreground service, screen-off logging, thresholds and alarms | Survives a full site walk | No |
 | 7a | ✅ **Done 2026-09-01.** Floorplan mode — indoor positioning by hand, waypoint labels | Indoor samples carry a usable position | No |
 | 7b | Reporting — statistics, PDF / XLSX | A client-ready acceptance report comes out | No |
@@ -246,7 +246,54 @@ What these do **not** catch is a transposition — RSRQ values written into the 
 pass every test. That is why the emission order sits directly beneath the column list in the source
 rather than elsewhere in the file.
 
-### Phase 5 build record — 2026-09-01 (NOT a validation record)
+### Phase 5 VALIDATION record — 2026-09-01, live T-Mobile 5G SA
+
+SIM activated. First contact with a real network, at last.
+
+**What was correct on first run** — unusual for this project, and worth recording:
+
+```
+5G SA · T-Mobile (310/260) · −94 dBm SS-RSRP
+Band n41 · NR-ARFCN 501390 · 2507.0 MHz · PCI 206 · NCI 6592188719 · TAC 8517888
+```
+
+- **RAT discrimination correct.** Identified SA, not NSA, via the public-API path
+  (`getDataNetworkType()` + display-info override) that replaced the `@SystemApi` approach the
+  planning doc wrongly recommended.
+- **Band maths correct against a live network.** NR-ARFCN 501390 x 5 kHz = 2506.95 MHz, displayed
+  2507.0, inside n41 (2496–2690). Exactly what the unit tests predicted.
+- **`Integer.MAX_VALUE` guards worked.** The raw dump carried `ssSinr = 2147483647`,
+  `csiRsrp = 2147483647`. None reached the UI or the CSV.
+- **Band derivation earned its place.** Every NR *neighbour* reported `mBands = []` — the modem
+  supplies no band at all — yet the app showed n41 for each, derived from the ARFCN. This is
+  precisely the case `BandMapping` exists for, confirmed live.
+- Five to six NR neighbours reported, better than expected from an Exynos modem.
+
+**Defect 1 — SS-SINR silently lost.** `getAllCellInfo()` returned `ssSinr = UNAVAILABLE` while the
+`SignalStrength` callback carried `ssSinr = 21` for the same serving cell at the same instant. The
+collector read only the former. This is the cellular twin of the Wi-Fi RSSI staleness bug, and SINR
+is the KPI separating "strong signal" from "usable signal", so losing it silently is worse than
+most alternatives. Fixed by overlaying `SignalStrength` for the **registered cell only** —
+neighbours legitimately have no SINR and borrowing the serving value would fabricate a measurement.
+Verified: app now reports 17 dB against a ground-truth 17 dB.
+
+**Defect 2 — the modem contradicts itself.** A registered cell reported `mBands = [25]` while its
+own NR-ARFCN mapped to 2606.55 MHz, which is n41; n25 spans 1930–1995 MHz. The neighbour list
+showed the same PCI at ARFCN 396250 (1981.25 MHz, genuinely n25), so one of the two fields in that
+record is stale or wrong and the handset does not say which.
+
+Unresolvable from the device, so it is **not resolved** — it is surfaced. The band label carries a
+warning marker and the UI explains that the band for that sample is unreliable. A report stating
+"n25 at 2606 MHz" is internally incoherent and would destroy credibility faster than an admitted
+uncertainty. The CSV keeps the plain band without the marker, because a symbol inside a categorical
+field breaks grouping for analysis; the conflict stays derivable since `nr_arfcn` sits in the same
+row.
+
+Generalisable: **cross-check fields that should agree.** Band and channel number are derivable from
+one another, so a mismatch is detectable — and detecting it is the difference between a tool that
+reports what the modem said and one that reports what is true.
+
+### Phase 5 build record — 2026-09-01 (written before validation; kept for the record)
 
 Cellular collector built. **Nothing in it has met a live network.** The only part proven correct is
 `BandMapping`, which is pure arithmetic and carries 14 unit tests.

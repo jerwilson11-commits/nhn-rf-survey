@@ -223,7 +223,10 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += nr?.pci?.toString()
     cells += nr?.tac?.toString()
     cells += nr?.nrarfcn?.toString()
-    cells += nr?.bandLabel
+    // The plain band, without the UI's conflict marker — a warning symbol inside a categorical
+    // field breaks grouping for anyone analysing the file. A band/ARFCN conflict stays derivable
+    // because nr_arfcn is in the row alongside it.
+    cells += nr?.bands?.joinToString("/")
     cells += nr?.ssRsrpDbm?.toString()
     cells += nr?.ssRsrqDb?.toString()
     cells += nr?.ssSinrDb?.toString()

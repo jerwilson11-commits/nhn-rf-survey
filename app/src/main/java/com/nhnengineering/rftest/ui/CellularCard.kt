@@ -110,6 +110,15 @@ fun CellularCard(sample: CellularSample?) {
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                 Text("NR", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 KeyValue("Band", nr.bandLabel ?: "—")
+                nr.bandConflict?.let {
+                    Text(
+                        "⚠ Band mismatch: the modem reports this band but $it. One of the two " +
+                            "fields is wrong and the handset does not say which — treat the band " +
+                            "for this sample as unreliable.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFEF6C00),
+                    )
+                }
                 KeyValue("NR-ARFCN", nr.nrarfcn?.toString() ?: "—")
                 KeyValue("Frequency", nr.dlFreqMhz?.let { "%.1f MHz".format(it) } ?: "—")
                 KeyValue("PCI", nr.pci?.toString() ?: "—")
