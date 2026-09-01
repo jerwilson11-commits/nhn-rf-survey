@@ -246,6 +246,51 @@ What these do **not** catch is a transposition — RSRQ values written into the 
 pass every test. That is why the emission order sits directly beneath the column list in the source
 rather than elsewhere in the file.
 
+### Report presentation and dominance analysis — 2026-09-01
+
+Built against a specific competitor deliverable (Wireless Data Collections, analysed in
+`OneDrive/Documents/DAS/WDC/`) rather than against a general sense of "better".
+
+**Added:** bordered title block; per-band and per-area statistics; sector dominance, overlap
+percentage and per-cell best-server table; plot frame, colour legend, north arrow, scale bar
+snapped to a round number of metres, and start/end markers.
+
+**Deliberately absent: no north arrow or scale bar on floorplan plots.** The operator uploads a
+plan image, not a georeferenced raster, so neither its orientation nor its scale is known to the
+app. Drawing either would be an invention the reader cannot check. The plot says so in words.
+
+**Defect found and fixed: null-as-zero in the neighbour JSON.** `cellNeighborsToJson` wrote
+`"rsrp":${n.rsrpDbm ?: 0}`. A neighbour the modem reported without a level was serialised as
+**0 dBm** — the strongest value in the file. Any best-server or dominance calculation built on top
+of it would have ranked an unmeasured cell above every real one. Fixed to emit JSON null, parse
+back as null, and exclude unlevelled cells from the analysis while reporting how many were
+excluded.
+
+This is **the same mistake as the GPS distance work**, where a missing Doppler velocity treated as
+zero silently deleted an entire outbound leg. It is now the second occurrence, so it is worth
+stating as a rule alongside the staleness lesson:
+
+> **A missing measurement is not a zero. Zero is a measurement, and usually an extreme one.**
+
+The difference this time is that it was caught by writing the consumer before shipping the
+producer, not by a walk that produced numbers that could not be true.
+
+**Honesty constraint carried into the report:** dominance from a handset is a **lower bound**. A
+scanner decodes every cell on air simultaneously; a handset reports its serving cell plus whatever
+partial neighbour list the modem chose to surface. Only cells in a sample's own measurement report
+are counted — retained neighbours keep the live display readable but counting them would assert a
+simultaneity never observed. The asymmetry is the useful part: **a handset finding overlap is
+evidence; a handset finding none is not.**
+
+**Tests: 31 → 49.** The one worth naming reproduces the competitor's exact 285-of-495 and pins the
+result at 57.58, not 0.5757. Their sheet reports that figure as `0.5757575757575757` under a `%`
+heading — a 100x understatement on the single metric that most drives DAS remediation.
+
+**Not yet seen by a human: the rendered PDF.** The statistics are unit-tested; the layout is not,
+and no test can tell whether the legend collides with the scale bar on a real page.
+
+---
+
 ### Cellular neighbour logging — 2026-09-01
 
 Cellular neighbours were displayed but **never logged**. The schema had `wifi_neighbors_json` and
