@@ -1,0 +1,62 @@
+package com.nhnengineering.rftest.service
+
+import com.nhnengineering.rftest.model.Breach
+import com.nhnengineering.rftest.model.GeoPoint
+import com.nhnengineering.rftest.model.ThroughputSample
+import com.nhnengineering.rftest.model.Thresholds
+import com.nhnengineering.rftest.model.WifiSample
+import kotlinx.coroutines.flow.MutableStateFlow
+
+/**
+ * Shared state between [RecordingService] and the UI.
+ *
+ * A process-scoped object rather than a bound service or a DI graph. Both of those are defensible;
+ * this is the smallest thing that works, and the lifetimes genuinely are process-scoped — a
+ * recording outlives every Activity and Composable in the app, which is the entire point of moving
+ * it into a service.
+ *
+ * The service is the only writer for everything except [thresholds] and [pendingThroughput], which
+ * the UI sets and the service consumes.
+ */
+object RecordingState {
+
+    /** True while a session is being written. */
+    val active = MutableStateFlow(false)
+
+    /** Live values, published by the service so the dashboard renders from one source. */
+    val wifi = MutableStateFlow<WifiSample?>(null)
+    val fix = MutableStateFlow<GeoPoint?>(null)
+
+    val rowCount = MutableStateFlow(0L)
+    val elapsedMs = MutableStateFlow(0L)
+    val distanceM = MutableStateFlow(0.0)
+    val fixesWithVelocity = MutableStateFlow(0L)
+    val fixesWithoutVelocity = MutableStateFlow(0L)
+
+    val lastSavedFile = MutableStateFlow<String?>(null)
+    val error = MutableStateFlow<String?>(null)
+
+    /** Breaches on the most recent sample. Empty when thresholds are off or nothing is breached. */
+    val breaches = MutableStateFlow<List<Breach>>(emptyList())
+
+    /** Set by the UI, read by the service on each sample. */
+    val thresholds = MutableStateFlow(Thresholds())
+
+    /**
+     * Handed over by the UI when a speed test finishes; consumed by the service on its next tick.
+     *
+     * Routed through the service rather than written directly so the file has exactly one writer
+     * and rows cannot interleave.
+     */
+    val pendingThroughput = MutableStateFlow<ThroughputSample?>(null)
+
+    fun resetCounters() {
+        rowCount.value = 0
+        elapsedMs.value = 0
+        distanceM.value = 0.0
+        fixesWithVelocity.value = 0
+        fixesWithoutVelocity.value = 0
+        breaches.value = emptyList()
+        error.value = null
+    }
+}
