@@ -80,6 +80,9 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val lastFile by RecordingState.lastSavedFile.collectAsState()
     val breaches by RecordingState.breaches.collectAsState()
     val areaLabel by RecordingState.areaLabel.collectAsState()
+    val walkThroughput by RecordingState.walkThroughputEnabled.collectAsState()
+    val liveView by RecordingState.liveViewEnabled.collectAsState()
+    val liveViewError by RecordingState.liveServerError.collectAsState()
     val thresholds by RecordingState.thresholds.collectAsState()
     val serviceError by RecordingState.error.collectAsState()
 
@@ -150,6 +153,11 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 lastFile = lastFile,
                 areaLabel = areaLabel,
                 onAreaLabelChange = { RecordingState.areaLabel.value = it },
+                walkThroughput = walkThroughput,
+                onWalkThroughputChange = { RecordingState.walkThroughputEnabled.value = it },
+                liveView = liveView,
+                onLiveViewChange = { RecordingState.liveViewEnabled.value = it },
+                liveViewError = liveViewError,
                 onStart = { RecordingService.start(context, sessionName) },
                 onStop = { RecordingService.stop(context) },
             )

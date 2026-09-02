@@ -68,6 +68,32 @@ object RecordingState {
      */
     val placedPositions = MutableStateFlow<List<Pair<IndoorPosition, Int?>>>(emptyList())
 
+    /** True while a walk throughput burst is transferring, so the UI can say the radio is loaded. */
+    val throughputBusy = MutableStateFlow(false)
+
+    /** Most recent walk throughput result, for the live display. */
+    val lastThroughput = MutableStateFlow<ThroughputSample?>(null)
+
+    /** Set by the UI before recording starts; read by the service when it launches the burst loop. */
+    val walkThroughputEnabled = MutableStateFlow(false)
+
+    /** Set by the UI; the service starts and stops the loopback live-view server to match. */
+    val liveViewEnabled = MutableStateFlow(false)
+
+    /** Non-null when the live-view server could not bind, so the failure is visible rather than
+     *  presenting as a laptop that simply never connects. */
+    val liveServerError = MutableStateFlow<String?>(null)
+
+    /**
+     * Recent GPS-located samples, for the live map on a connected laptop.
+     *
+     * Capped and thinned rather than unbounded: this is a display aid, and the CSV remains the
+     * authoritative record. A viewer that joins late still receives the whole retained trail, which
+     * is the point — the operator needs to see where they have already walked in order not to walk
+     * it twice.
+     */
+    val liveTrack = MutableStateFlow<List<LiveFix>>(emptyList())
+
     /**
      * Handed over by the UI when a speed test finishes; consumed by the service on its next tick.
      *
@@ -75,6 +101,15 @@ object RecordingState {
      * and rows cannot interleave.
      */
     val pendingThroughput = MutableStateFlow<ThroughputSample?>(null)
+
+    /** One point on the live trail. Deliberately flat and small — it is serialised per poll. */
+    data class LiveFix(
+        val lat: Double,
+        val lon: Double,
+        val rsrpDbm: Int?,
+        val rssiDbm: Int?,
+        val timestampUtcMillis: Long,
+    )
 
     fun resetCounters() {
         rowCount.value = 0
@@ -86,5 +121,8 @@ object RecordingState {
         error.value = null
         placedPositions.value = emptyList()
         areaLabel.value = null
+        liveTrack.value = emptyList()
+        lastThroughput.value = null
+        throughputBusy.value = false
     }
 }

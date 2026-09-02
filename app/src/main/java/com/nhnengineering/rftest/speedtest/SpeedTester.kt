@@ -65,6 +65,10 @@ data class LatencyStats(
  */
 class SpeedTester(private val config: SpeedTestConfig = SpeedTestConfig()) {
 
+    /** The host being measured against. Recorded on every sample, because a throughput figure
+     *  without its endpoint is uninterpretable — LAN and internet answer different questions. */
+    val serverLabel: String get() = config.serverLabel
+
     private companion object {
         const val TAG = "SpeedTester"
 

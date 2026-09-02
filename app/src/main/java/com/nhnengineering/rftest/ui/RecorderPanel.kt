@@ -2,6 +2,7 @@ package com.nhnengineering.rftest.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -13,7 +14,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +47,11 @@ fun RecorderPanel(
     /** Current operator area label, applied to every sample until changed. */
     areaLabel: String?,
     onAreaLabelChange: (String?) -> Unit,
+    walkThroughput: Boolean,
+    onWalkThroughputChange: (Boolean) -> Unit,
+    liveView: Boolean,
+    onLiveViewChange: (Boolean) -> Unit,
+    liveViewError: String?,
     onStart: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -108,6 +116,12 @@ fun RecorderPanel(
             if (recording) {
                 HorizontalDivider()
                 AreaControl(areaLabel, onAreaLabelChange)
+            } else {
+                HorizontalDivider()
+                WalkOptions(
+                    walkThroughput, onWalkThroughputChange,
+                    liveView, onLiveViewChange, liveViewError,
+                )
             }
 
             Button(
@@ -138,6 +152,61 @@ fun RecorderPanel(
 }
 
 /**
+ * Options that have to be chosen before the session starts.
+ *
+ * Both are read once, when the service launches its loops, so neither can be toggled mid-recording.
+ * That is deliberate rather than a limitation: a session where throughput ran for half the walk
+ * produces a throughput series with an unexplained gap, and a reader cannot tell that gap from a
+ * stretch where the network failed.
+ */
+@Composable
+private fun WalkOptions(
+    walkThroughput: Boolean,
+    onWalkThroughputChange: (Boolean) -> Unit,
+    liveView: Boolean,
+    onLiveViewChange: (Boolean) -> Unit,
+    liveViewError: String?,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Throughput during walk", style = MaterialTheme.typography.bodyMedium)
+        Switch(checked = walkThroughput, onCheckedChange = onWalkThroughputChange)
+    }
+    Text(
+        "Download then upload, with a 30-second idle gap between bursts — about one reading " +
+            "every 40 seconds in practice, since the burst itself takes time. Each is logged " +
+            "with the position and RF conditions it ran under. Between bursts the radio is " +
+            "idle, so the rest of the survey is not measured under load. Uses mobile data.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Live view on laptop", style = MaterialTheme.typography.bodyMedium)
+        Switch(checked = liveView, onCheckedChange = onLiveViewChange)
+    }
+    Text(
+        "Serves a live map and readings over the USB cable. On the laptop run " +
+            "\"adb forward tcp:8787 tcp:8787\" and open http://localhost:8787 — the phone " +
+            "listens on loopback only, so nothing is exposed to the venue network.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    liveViewError?.let {
+        Text(
+            "Live view failed to start: $it",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(0xFFEF6C00),
+        )
+    }
+}
+
+/**
  * Area labelling during a walk.
  *
  * The label is written to the `waypoint` column of every subsequent sample and drives the report's
@@ -153,30 +222,41 @@ fun RecorderPanel(
 private fun AreaControl(areaLabel: String?, onAreaLabelChange: (String?) -> Unit) {
     var typed by remember { mutableStateOf("") }
 
-    Text(
-        text = "Area: " + (areaLabel ?: "not set"),
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.SemiBold,
-    )
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Area: " + (areaLabel ?: "not set"),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (areaLabel != null) {
+            TextButton(onClick = { onAreaLabelChange(null) }) { Text("Clear") }
+        }
+    }
     Text(
         "Written to the waypoint column of every sample from now until changed.",
         style = MaterialTheme.typography.bodySmall,
     )
 
+    // Two buttons, not three. "Outdoor" wrapped to "Outd / oor" at one third of the panel width,
+    // which is exactly the sort of detail a client notices in a screenshot. Clear moved up beside
+    // the label, where it also only appears when there is something to clear.
     Row(
         Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         listOf("Indoor", "Outdoor").forEach { preset ->
             OutlinedButton(
                 onClick = { onAreaLabelChange(preset) },
                 modifier = Modifier.weight(1f),
-            ) { Text(preset) }
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+            ) {
+                Text(preset, maxLines = 1, style = MaterialTheme.typography.labelLarge)
+            }
         }
-        OutlinedButton(
-            onClick = { onAreaLabelChange(null) },
-            modifier = Modifier.weight(1f),
-        ) { Text("Clear") }
     }
 
     Row(

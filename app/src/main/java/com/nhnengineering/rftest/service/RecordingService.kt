@@ -60,6 +60,12 @@ class RecordingService : Service() {
         /** Minimum gap between audible alarms, so a sustained breach does not become a siren. */
         private const val ALARM_COOLDOWN_MS = 5_000L
 
+        /** Live-trail thinning. One point per two seconds is plenty for a walking pace. */
+        private const val LIVE_TRACK_MIN_GAP_MS = 2_000L
+
+        /** About two hours of trail at the thinning rate above. */
+        private const val MAX_LIVE_TRACK_POINTS = 3_600
+
         fun start(context: Context, sessionName: String) {
             val i = Intent(context, RecordingService::class.java).apply {
                 action = ACTION_START
@@ -76,6 +82,8 @@ class RecordingService : Service() {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val walkThroughput = com.nhnengineering.rftest.speedtest.WalkThroughput()
+    private val liveServer = com.nhnengineering.rftest.live.LiveServer()
     private var loop: Job? = null
 
     private lateinit var wifi: WifiCollector
@@ -121,6 +129,12 @@ class RecordingService : Service() {
         locations.start()
         cellular.start()
 
+        if (RecordingState.walkThroughputEnabled.value) walkThroughput.start(scope)
+        if (RecordingState.liveViewEnabled.value) {
+            RecordingState.liveServerError.value = null
+            liveServer.start()
+        }
+
         loop = scope.launch {
             val w = runCatching { SessionCsvWriter.create(this@RecordingService, sessionName) }
                 .onFailure {
@@ -165,6 +179,26 @@ class RecordingService : Service() {
                 }.onFailure {
                     Log.e(TAG, "write failed", it)
                     RecordingState.error.value = it.message ?: "write failed"
+                }
+
+                // Live trail for the laptop viewer. Thinned to roughly one point per two
+                // seconds and capped: this drives a display, and the CSV is the record.
+                fixNow?.let { fix ->
+                    val trail = RecordingState.liveTrack.value
+                    val last = trail.lastOrNull()
+                    val due = last == null ||
+                        fix.fixTimeUtcMillis - last.timestampUtcMillis >= LIVE_TRACK_MIN_GAP_MS
+                    if (due) {
+                        val point = RecordingState.LiveFix(
+                            lat = fix.latitudeDeg,
+                            lon = fix.longitudeDeg,
+                            rsrpDbm = cellNow?.servingRsrpDbm,
+                            rssiDbm = wifiNow?.rssiDbm,
+                            timestampUtcMillis = fix.fixTimeUtcMillis,
+                        )
+                        RecordingState.liveTrack.value =
+                            (trail + point).takeLast(MAX_LIVE_TRACK_POINTS)
+                    }
                 }
 
                 // Record each distinct placed position once, with the KPI observed there, so the
@@ -237,6 +271,9 @@ class RecordingService : Service() {
 
         val w = writer
         writer = null
+        walkThroughput.stop()
+        liveServer.stop()
+
         // New scope: the recording scope is being torn down, and the file still needs closing.
         CoroutineScope(Dispatchers.IO).launch {
             w?.close()
