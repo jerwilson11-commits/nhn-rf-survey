@@ -156,7 +156,7 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 walkThroughput = walkThroughput,
                 onWalkThroughputChange = { RecordingState.walkThroughputEnabled.value = it },
                 liveView = liveView,
-                onLiveViewChange = { RecordingState.liveViewEnabled.value = it },
+                onLiveViewChange = { com.nhnengineering.rftest.live.LiveView.set(it) },
                 liveViewError = liveViewError,
                 onStart = { RecordingService.start(context, sessionName) },
                 onStop = { RecordingService.stop(context) },

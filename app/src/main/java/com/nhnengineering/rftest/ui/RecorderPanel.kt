@@ -113,16 +113,16 @@ fun RecorderPanel(
                 }
             }
 
+            HorizontalDivider()
             if (recording) {
-                HorizontalDivider()
                 AreaControl(areaLabel, onAreaLabelChange)
-            } else {
                 HorizontalDivider()
-                WalkOptions(
-                    walkThroughput, onWalkThroughputChange,
-                    liveView, onLiveViewChange, liveViewError,
-                )
             }
+            WalkOptions(
+                walkThroughput, onWalkThroughputChange,
+                liveView, onLiveViewChange, liveViewError,
+                throughputLocked = recording,
+            )
 
             Button(
                 onClick = if (recording) onStop else onStart,
@@ -166,6 +166,7 @@ private fun WalkOptions(
     liveView: Boolean,
     onLiveViewChange: (Boolean) -> Unit,
     liveViewError: String?,
+    throughputLocked: Boolean,
 ) {
     Row(
         Modifier.fillMaxWidth(),
@@ -173,7 +174,13 @@ private fun WalkOptions(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text("Throughput during walk", style = MaterialTheme.typography.bodyMedium)
-        Switch(checked = walkThroughput, onCheckedChange = onWalkThroughputChange)
+        // Read once when the session starts, so it cannot be changed mid-recording: a throughput
+        // series with an unexplained gap is indistinguishable from one where the network failed.
+        Switch(
+            checked = walkThroughput,
+            onCheckedChange = onWalkThroughputChange,
+            enabled = !throughputLocked,
+        )
     }
     Text(
         "Download then upload, with a 30-second idle gap between bursts — about one reading " +
@@ -193,10 +200,25 @@ private fun WalkOptions(
     }
     Text(
         "Serves a live map and readings over the USB cable. On the laptop run " +
-            "\"adb forward tcp:8787 tcp:8787\" and open http://localhost:8787 — the phone " +
+            "\"adb forward tcp:8787 tcp:8787\" then open http://localhost:8787 — the phone " +
             "listens on loopback only, so nothing is exposed to the venue network.",
         style = MaterialTheme.typography.bodySmall,
     )
+    // Named explicitly because "adb is not recognised" is the first thing that goes wrong on a
+    // Windows laptop, and on a venue floor it reads as the app being broken.
+    Text(
+        "If the laptop says adb is not recognised, it is not on PATH — run it by full path, " +
+            "usually %LOCALAPPDATA%\\Android\\Sdk\\platform-tools\\adb.exe",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    if (liveView) {
+        Text(
+            "Serving now. Open the page before you start walking to check the cable and the " +
+                "port forward — it will show \"connected — not recording\" until you start.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(0xFF2E7D32),
+        )
+    }
     liveViewError?.let {
         Text(
             "Live view failed to start: $it",

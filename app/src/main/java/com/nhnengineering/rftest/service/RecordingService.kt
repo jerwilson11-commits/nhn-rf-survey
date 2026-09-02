@@ -83,7 +83,6 @@ class RecordingService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val walkThroughput = com.nhnengineering.rftest.speedtest.WalkThroughput()
-    private val liveServer = com.nhnengineering.rftest.live.LiveServer()
     private var loop: Job? = null
 
     private lateinit var wifi: WifiCollector
@@ -130,10 +129,8 @@ class RecordingService : Service() {
         cellular.start()
 
         if (RecordingState.walkThroughputEnabled.value) walkThroughput.start(scope)
-        if (RecordingState.liveViewEnabled.value) {
-            RecordingState.liveServerError.value = null
-            liveServer.start()
-        }
+        // The live server is deliberately not started or stopped here — see [LiveView]. Tying it
+        // to the recording made the setup unverifiable until a walk was already underway.
 
         loop = scope.launch {
             val w = runCatching { SessionCsvWriter.create(this@RecordingService, sessionName) }
@@ -272,7 +269,6 @@ class RecordingService : Service() {
         val w = writer
         writer = null
         walkThroughput.stop()
-        liveServer.stop()
 
         // New scope: the recording scope is being torn down, and the file still needs closing.
         CoroutineScope(Dispatchers.IO).launch {
