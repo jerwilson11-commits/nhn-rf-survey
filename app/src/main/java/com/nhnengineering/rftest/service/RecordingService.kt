@@ -157,6 +157,7 @@ class RecordingService : Service() {
                             wifi = wifiNow,
                             cellular = cellNow,
                             indoor = RecordingState.indoorPosition.value,
+                            areaLabel = RecordingState.areaLabel.value,
                             throughput = throughput,
                             note = if (throughput != null) "speedtest" else null,
                         )

@@ -79,6 +79,7 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val withoutVel by RecordingState.fixesWithoutVelocity.collectAsState()
     val lastFile by RecordingState.lastSavedFile.collectAsState()
     val breaches by RecordingState.breaches.collectAsState()
+    val areaLabel by RecordingState.areaLabel.collectAsState()
     val thresholds by RecordingState.thresholds.collectAsState()
     val serviceError by RecordingState.error.collectAsState()
 
@@ -147,6 +148,8 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 fixesWithVelocity = withVel,
                 fixesWithoutVelocity = withoutVel,
                 lastFile = lastFile,
+                areaLabel = areaLabel,
+                onAreaLabelChange = { RecordingState.areaLabel.value = it },
                 onStart = { RecordingService.start(context, sessionName) },
                 onStop = { RecordingService.stop(context) },
             )

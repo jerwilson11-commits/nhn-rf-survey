@@ -270,7 +270,8 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += ind?.floorplanId
     cells += ind?.let { String.format(Locale.US, "%.4f", it.xNorm) }
     cells += ind?.let { String.format(Locale.US, "%.4f", it.yNorm) }
-    cells += ind?.label
+    // The indoor label is the more specific of the two, so it wins where both are set.
+    cells += ind?.label ?: areaLabel
 
     cells += note
 

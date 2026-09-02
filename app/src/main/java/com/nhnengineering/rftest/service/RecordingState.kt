@@ -53,6 +53,15 @@ object RecordingState {
     val indoorPosition = MutableStateFlow<IndoorPosition?>(null)
 
     /**
+     * Operator-set area label, applied to every subsequent sample until changed or cleared.
+     *
+     * Sticky for the same reason [indoorPosition] is: an operator marks "Indoor" once on the way
+     * in, not once per sample. It needs no floorplan, which is the point — it is what makes the
+     * report's per-area breakdown reachable on an ordinary GPS walk.
+     */
+    val areaLabel = MutableStateFlow<String?>(null)
+
+    /**
      * Positions logged this session, paired with the serving KPI colour recorded there, for
      * drawing on the floorplan. Capped so a long session cannot grow this without bound — the
      * authoritative record is the CSV, this is only what the plan draws.
@@ -76,5 +85,6 @@ object RecordingState {
         breaches.value = emptyList()
         error.value = null
         placedPositions.value = emptyList()
+        areaLabel.value = null
     }
 }

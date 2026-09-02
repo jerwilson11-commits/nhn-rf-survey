@@ -153,4 +153,65 @@ class CsvSchemaTest {
         assertTrue(SessionReader.parseCellNeighbors("").isEmpty())
         assertTrue(SessionReader.parseCellNeighbors(null).isEmpty())
     }
+
+    // ---- Area label ------------------------------------------------------
+    //
+    // The area label shares the `waypoint` column with the indoor label rather than adding a
+    // column, which keeps the schema at 73 and keeps every existing consumer working. That makes
+    // the precedence between them worth pinning: a silent swap would relabel a whole survey.
+
+    private fun waypointOf(sample: MeasurementSample): String {
+        val i = CSV_HEADER.split(",").indexOf("waypoint")
+        assertTrue("the schema must still have a waypoint column", i >= 0)
+        return SessionReader.splitCsv(sample.toCsvRow())[i]
+    }
+
+    @Test
+    fun `an area label reaches the waypoint column on a walk with no floorplan`() {
+        // The case this was built for: an outdoor walk, no floorplan, indoor position impossible.
+        val sample = MeasurementSample(
+            sessionId = "t", sequence = 0, timestampUtcMillis = 1_756_000_000_000,
+            location = null, wifi = null, areaLabel = "Driveway",
+        )
+
+        assertEquals("Driveway", waypointOf(sample))
+        assertEquals(CSV_COLUMN_COUNT, sample.toCsvRow().split(",").size)
+    }
+
+    @Test
+    fun `the indoor label wins over the area label when both are set`() {
+        // A floorplan tap is the more specific statement of where the operator was, so it must
+        // not be overwritten by a sticky area label set on the way in.
+        val sample = MeasurementSample(
+            sessionId = "t", sequence = 0, timestampUtcMillis = 1_756_000_000_000,
+            location = null, wifi = null,
+            indoor = IndoorPosition("plan.png", 0.5f, 0.5f, "Ballroom"),
+            areaLabel = "Indoor",
+        )
+
+        assertEquals("Ballroom", waypointOf(sample))
+    }
+
+    @Test
+    fun `an unset area label leaves the waypoint column empty, not the string null`() {
+        val sample = MeasurementSample(
+            sessionId = "t", sequence = 0, timestampUtcMillis = 1_756_000_000_000,
+            location = null, wifi = null,
+        )
+
+        assertEquals("", waypointOf(sample))
+    }
+
+    @Test
+    fun `an area label containing a comma does not shift the row`() {
+        // "Lobby, east" is a name an operator would plausibly type, and an unquoted comma would
+        // shift every column after it -- the exact Phase 2 failure, reintroduced by a text field.
+        val sample = MeasurementSample(
+            sessionId = "t", sequence = 0, timestampUtcMillis = 1_756_000_000_000,
+            location = null, wifi = null, areaLabel = "Lobby, east",
+        )
+
+        assertEquals(CSV_COLUMN_COUNT, SessionReader.splitCsv(sample.toCsvRow()).size)
+        assertEquals("Lobby, east", waypointOf(sample))
+    }
 }

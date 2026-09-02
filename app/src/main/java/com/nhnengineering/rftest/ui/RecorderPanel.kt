@@ -11,9 +11,14 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -36,6 +41,9 @@ fun RecorderPanel(
     fixesWithVelocity: Long,
     fixesWithoutVelocity: Long,
     lastFile: String?,
+    /** Current operator area label, applied to every sample until changed. */
+    areaLabel: String?,
+    onAreaLabelChange: (String?) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -97,6 +105,11 @@ fun RecorderPanel(
                 }
             }
 
+            if (recording) {
+                HorizontalDivider()
+                AreaControl(areaLabel, onAreaLabelChange)
+            }
+
             Button(
                 onClick = if (recording) onStop else onStart,
                 modifier = Modifier.fillMaxWidth(),
@@ -121,6 +134,70 @@ fun RecorderPanel(
                 )
             }
         }
+    }
+}
+
+/**
+ * Area labelling during a walk.
+ *
+ * The label is written to the `waypoint` column of every subsequent sample and drives the report's
+ * per-area breakdown. Before this existed, waypoints could only be set by tapping a floorplan, so
+ * an ordinary outdoor walk could not be segmented at all — which meant the one split that matters
+ * most on a mixed walk, indoor versus outdoor, was unrecordable.
+ *
+ * Presets rather than typing alone: the operator is walking, holding the phone, and the moment
+ * that needs marking is the moment they cross a threshold. One tap has to be enough. The free-text
+ * field stays for venue-specific names, and is what a real site walk will use.
+ */
+@Composable
+private fun AreaControl(areaLabel: String?, onAreaLabelChange: (String?) -> Unit) {
+    var typed by remember { mutableStateOf("") }
+
+    Text(
+        text = "Area: " + (areaLabel ?: "not set"),
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+    )
+    Text(
+        "Written to the waypoint column of every sample from now until changed.",
+        style = MaterialTheme.typography.bodySmall,
+    )
+
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        listOf("Indoor", "Outdoor").forEach { preset ->
+            OutlinedButton(
+                onClick = { onAreaLabelChange(preset) },
+                modifier = Modifier.weight(1f),
+            ) { Text(preset) }
+        }
+        OutlinedButton(
+            onClick = { onAreaLabelChange(null) },
+            modifier = Modifier.weight(1f),
+        ) { Text("Clear") }
+    }
+
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = typed,
+            onValueChange = { typed = it },
+            label = { Text("Custom area") },
+            singleLine = true,
+            modifier = Modifier.weight(2f),
+        )
+        Button(
+            onClick = {
+                onAreaLabelChange(typed.trim().ifBlank { null })
+                typed = ""
+            },
+            modifier = Modifier.weight(1f),
+        ) { Text("Set") }
     }
 }
 
