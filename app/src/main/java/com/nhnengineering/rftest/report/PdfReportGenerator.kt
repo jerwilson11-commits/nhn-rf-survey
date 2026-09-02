@@ -740,6 +740,31 @@ object PdfReportGenerator {
             )
         }
         if (report.kpi == SessionStats.Kpi.CELL_RSRP) {
+            // Only stated when this session actually shows the disparity. A session where the
+            // fields track one another should not carry a caveat that does not apply to it.
+            val rsrp = SessionStats.cadence(points) { it.rsrpDbm }
+            val quality = listOf(
+                "SINR" to SessionStats.cadence(points) { it.sinrDb },
+                "RSRQ" to SessionStats.cadence(points) { it.rsrqDb },
+            ).filter { (_, c) -> c.samples > 0 && c.changes * 2 <= rsrp.changes }
+
+            if (quality.isNotEmpty() && rsrp.changes > 0) {
+                val detail = quality.joinToString("; ") { (name, c) ->
+                    val held = c.longestRunSeconds
+                        ?.let { s -> " and held one value for ${s.toInt()} s" }
+                        ?: " and held one value for ${c.longestRunSamples} samples"
+                    "$name changed ${c.changes} times$held"
+                }
+                add(
+                    "Measurement cadence" to
+                        "Every field is written on every sample, but the modem does not refresh " +
+                            "them all at the same rate. Over this session RSRP changed " +
+                            "${rsrp.changes} times, while $detail. The quality metrics are " +
+                            "therefore not simultaneous with the RSRP printed beside them, and a " +
+                            "single sample should not be read as one instant across all columns."
+                )
+            }
+
             add(
                 "Cellular measurement" to
                     "Cellular values are read from the handset's own radio interface. Neighbour " +

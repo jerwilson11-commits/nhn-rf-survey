@@ -49,6 +49,16 @@ data class TrackPoint(
     val adjacentChannel: Int?,
     /** Cellular serving-cell RSRP, whichever radio was serving. */
     val rsrpDbm: Int?,
+    /**
+     * Serving-cell SINR and RSRQ, whichever radio was serving.
+     *
+     * Read back for one specific purpose: measuring how often they change relative to RSRP. On the
+     * 2026-09-02 walk SINR held a single value for 99 consecutive samples while RSRP moved 88
+     * times, so presenting the two side by side implies a simultaneity the handset does not
+     * deliver. The report states that, measured per session rather than asserted.
+     */
+    val sinrDb: Int?,
+    val rsrqDb: Int?,
     val cellBand: String?,
     val rat: String?,
     /** Indoor position, present when the operator placed one on a floorplan. */
@@ -131,6 +141,8 @@ object SessionReader {
             val iBand = idx("wifi_band")
             val iCo = idx("wifi_cochannel_count"); val iAdj = idx("wifi_adjacent_count")
             val iRsrp = idx("lte_rsrp"); val iNrRsrp = idx("nr_ss_rsrp")
+            val iNrSinr = idx("nr_ss_sinr"); val iRssnr = idx("lte_rssnr")
+            val iNrRsrq = idx("nr_ss_rsrq"); val iLteRsrq = idx("lte_rsrq")
             val iLteBand = idx("lte_band"); val iNrBand = idx("nr_band"); val iRat = idx("rat")
             val iNrPci = idx("nr_pci"); val iLtePci = idx("lte_pci")
             val iNrArfcn = idx("nr_arfcn"); val iEarfcn = idx("lte_earfcn")
@@ -202,6 +214,8 @@ object SessionReader {
                     coChannel = s(iCo)?.toIntOrNull(),
                     adjacentChannel = s(iAdj)?.toIntOrNull(),
                     rsrpDbm = servingRsrp,
+                    sinrDb = s(iNrSinr)?.toIntOrNull() ?: s(iRssnr)?.toIntOrNull(),
+                    rsrqDb = s(iNrRsrq)?.toIntOrNull() ?: s(iLteRsrq)?.toIntOrNull(),
                     cellBand = servingBand,
                     rat = s(iRat),
                     floorplanId = fpId,

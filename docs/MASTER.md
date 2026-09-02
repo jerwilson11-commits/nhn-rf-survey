@@ -317,6 +317,13 @@ live but not sample-synchronous with RSRP**, and a report that presents them sid
 saying so implies a simultaneity the instrument does not deliver. This finally resolves the Phase 5
 "pinned SINR" question: not a caching bug, a genuinely slower measurement.
 
+**This is now stated in the report.** `SessionStats.cadence` counts transitions per field and the
+methodology page carries a "Measurement cadence" note built from the session's own numbers — for
+this walk: *RSRP changed 88 times, while SINR changed 19 times and held one value for 103 s; RSRQ
+changed 19 times and held one value for 126 s.* The note only appears where a session actually
+shows the disparity (quality-metric changes at most half of RSRP's), so a session where the fields
+track one another does not carry a caveat that does not apply to it.
+
 **2. Does mean dominant-sector count rise above 1.00 once moving?** Yes — **1.13, with 8.8%
 overlap**, against exactly 1.00 and 0% stationary. Histogram: 392 samples with one dominant sector,
 18 with two, 20 with three. The metric responds to motion, as it must.

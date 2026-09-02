@@ -26,13 +26,14 @@ class SessionStatsTest {
         waypoint: String? = null,
         cellBand: String? = null,
         cells: List<ObservedCell> = emptyList(),
+        sinr: Int? = null,
     ) =
         TrackPoint(
             sequence = seq, timestampUtcMillis = 1_756_000_000_000 + seq * 1000,
             latitudeDeg = null, longitudeDeg = null, accuracyM = null, speedMps = null,
             rssiDbm = rssi, ssid = null, bssid = null, channel = null, band = null,
             coChannel = null, adjacentChannel = null,
-            rsrpDbm = rsrp, cellBand = cellBand, rat = null,
+            rsrpDbm = rsrp, sinrDb = sinr, rsrqDb = null, cellBand = cellBand, rat = null,
             floorplanId = "plan.png", floorplanX = 0.5f, floorplanY = 0.5f, waypoint = waypoint,
             cells = cells,
         )
@@ -449,5 +450,99 @@ class SessionStatsTest {
         assertEquals(20, d.servers.first { it.pci == 2 }.detectedIn)
         // The stronger of the two duplicate observations is the one kept.
         assertEquals(-100, d.servers.first { it.pci == 2 }.stats.median)
+    }
+
+    // ---- Update cadence --------------------------------------------------
+    //
+    // From the 2026-09-02 walk: SS-SINR held one value for 99 consecutive samples while RSRP
+    // changed 88 times. Both were written on every sample, so nothing in the file distinguishes a
+    // field the modem refreshed from one it did not -- you have to count the changes.
+
+    @Test
+    fun `cadence counts transitions, not samples`() {
+        val values = listOf(10, 10, 10, 12, 12, 9)
+        val points = values.mapIndexed { i, v -> pt(i.toLong(), rsrp = -90, sinr = v) }
+
+        val c = SessionStats.cadence(points) { it.sinrDb }
+
+        assertEquals(6, c.samples)
+        assertEquals(2, c.changes)
+        assertEquals(3, c.longestRunSamples)
+    }
+
+    @Test
+    fun `a field that never changes is one run spanning the session`() {
+        val points = List(50) { pt(it.toLong(), rsrp = -90, sinr = 20) }
+
+        val c = SessionStats.cadence(points) { it.sinrDb }
+
+        assertEquals(0, c.changes)
+        assertEquals(50, c.longestRunSamples)
+    }
+
+    @Test
+    fun `the longest run is found when it ends the session`() {
+        // The tail is the case an off-by-one loses: the final run never hits a transition, so a
+        // loop that only measures on change would miss it entirely.
+        val points = (listOf(1, 2, 3) + List(20) { 7 })
+            .mapIndexed { i, v -> pt(i.toLong(), rsrp = -90, sinr = v) }
+
+        val c = SessionStats.cadence(points) { it.sinrDb }
+
+        assertEquals(3, c.changes)
+        assertEquals(20, c.longestRunSamples)
+    }
+
+    @Test
+    fun `the longest run is reported in seconds from the timestamps`() {
+        // pt() spaces samples one second apart, so a 20-sample run spans 19 s between its first
+        // and last timestamp.
+        val points = List(20) { pt(it.toLong(), rsrp = -90, sinr = 15) }
+
+        val c = SessionStats.cadence(points) { it.sinrDb }
+
+        assertEquals(19.0, c.longestRunSeconds!!, 0.001)
+    }
+
+    @Test
+    fun `absent samples are skipped rather than counted as a change`() {
+        // A field that is missing, then present with the same value, has not changed. Counting
+        // the gap as a transition would make a slow field look responsive -- the opposite of
+        // what this measurement exists to detect.
+        val points = listOf(
+            pt(0, rsrp = -90, sinr = 20),
+            pt(1, rsrp = -90, sinr = null),
+            pt(2, rsrp = -90, sinr = 20),
+        )
+
+        val c = SessionStats.cadence(points) { it.sinrDb }
+
+        assertEquals(2, c.samples)
+        assertEquals(0, c.changes)
+    }
+
+    @Test
+    fun `a field absent throughout yields an empty cadence, not a division by zero`() {
+        val c = SessionStats.cadence(List(10) { pt(it.toLong(), rsrp = -90) }) { it.sinrDb }
+
+        assertEquals(0, c.samples)
+        assertEquals(0, c.changes)
+        assertNull(c.longestRunSeconds)
+    }
+
+    @Test
+    fun `the walk's disparity is what the report threshold is meant to catch`() {
+        // RSRP moving on most samples while SINR sits still is the shape the methodology note
+        // fires on: SINR changes must be at most half RSRP's for the caveat to apply.
+        val points = List(100) {
+            pt(it.toLong(), rsrp = -90 - (it % 7), sinr = if (it < 99) 20 else 9)
+        }
+
+        val rsrp = SessionStats.cadence(points) { it.rsrpDbm }
+        val sinr = SessionStats.cadence(points) { it.sinrDb }
+
+        assertEquals(1, sinr.changes)
+        assertEquals(99, sinr.longestRunSamples)
+        assertTrue("RSRP must change far more often", sinr.changes * 2 <= rsrp.changes)
     }
 }

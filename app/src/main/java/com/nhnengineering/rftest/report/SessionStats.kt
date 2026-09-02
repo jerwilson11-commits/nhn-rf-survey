@@ -415,6 +415,63 @@ object SessionStats {
         )
     }
 
+    // ---- Update cadence --------------------------------------------------
+
+    /**
+     * How often a reported field actually changes across a session.
+     *
+     * Two fields sampled at the same rate are not necessarily *measured* at the same rate. The
+     * handset publishes a value every sample whether or not the modem refreshed it, so a field
+     * that updates slowly looks identical to one that updates quickly until you count the changes.
+     */
+    data class Cadence(
+        val samples: Int,
+        /** Transitions between consecutive differing values. */
+        val changes: Int,
+        val longestRunSamples: Int,
+        /** Wall-clock duration of the longest unchanged run, where timestamps allow it. */
+        val longestRunSeconds: Double?,
+    )
+
+    /**
+     * Measures [Cadence] over a series, ignoring samples where the field was absent.
+     *
+     * Nulls are skipped rather than treated as a value: a field that is missing and then present
+     * has not "changed", and counting that as a transition would flatter a slow field.
+     */
+    fun cadence(points: List<TrackPoint>, value: (TrackPoint) -> Int?): Cadence {
+        val present = points.filter { value(it) != null }
+        if (present.isEmpty()) return Cadence(0, 0, 0, null)
+
+        var changes = 0
+        var runStart = 0
+        var longest = 1
+        var longestSeconds: Double? = null
+        for (i in 1 until present.size) {
+            if (value(present[i]) != value(present[i - 1])) {
+                changes++
+                val runLength = i - runStart
+                if (runLength > longest) {
+                    longest = runLength
+                    longestSeconds = runSeconds(present, runStart, i - 1)
+                }
+                runStart = i
+            }
+        }
+        val tailLength = present.size - runStart
+        if (tailLength > longest) {
+            longest = tailLength
+            longestSeconds = runSeconds(present, runStart, present.size - 1)
+        }
+        return Cadence(present.size, changes, longest, longestSeconds)
+    }
+
+    private fun runSeconds(points: List<TrackPoint>, from: Int, to: Int): Double? {
+        val a = points[from].timestampUtcMillis
+        val b = points[to].timestampUtcMillis
+        return if (a > 0 && b > a) (b - a) / 1000.0 else null
+    }
+
     /** One-line-per-session statistics, for anyone who wants the numbers in a spreadsheet. */
     fun summaryCsv(summary: SessionSummary, report: Report): String {
         val header = listOf(
