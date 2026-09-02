@@ -484,8 +484,12 @@ class CellularCollector(context: Context) {
             rat = "NR",
             pci = id?.pci?.orNull(),
             channel = nrarfcn,
+            // Same labelling as the serving cell. Taking firstOrNull() here silently
+            // discarded the ambiguity the serving path is careful to preserve, and neighbours
+            // are what populate the report's per-cell table -- so the one place the ambiguity
+            // was dropped was the one place a client would read it.
             band = id?.bands?.firstOrNull()?.let { "n$it" }
-                ?: nrarfcn?.let { BandMapping.nrBandsFor(it).firstOrNull()?.band },
+                ?: nrarfcn?.let { BandMapping.nrBandLabel(it) },
             rsrpDbm = ss?.ssRsrp?.orNull(),
             rsrqDb = ss?.ssRsrq?.orNull(),
         )

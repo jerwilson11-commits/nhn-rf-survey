@@ -137,15 +137,26 @@ object BandMapping {
     }
 
     /** Single best-guess label, marked ambiguous where it is. */
+    /**
+     * Band label for a channel number, listing every band the channel could belong to.
+     *
+     * Overlapping allocations are joined with `/` — "n2/n25", "n4/n66" — narrowest range first,
+     * since the more specific allocation is the likelier deployment. The compact form matters:
+     * this string lands in a CSV column and a fixed-width report table, and the previous
+     * "n2 (or n25)" phrasing was long enough to be truncated to "n2 (or" in the per-cell table,
+     * which reads as a parse error rather than as an ambiguity.
+     *
+     * **Never resolved by market.** 1981 MHz on a US carrier is almost certainly n25 and 2136 MHz
+     * almost certainly n66, but "almost certainly" is not a measurement. The channel number
+     * genuinely does not carry the answer, and a report that prints one band where the instrument
+     * knows two is asserting something it cannot support. Where the modem states the band, that
+     * is used instead and no ambiguity arises.
+     */
     fun nrBandLabel(nrarfcn: Int): String? {
         val candidates = nrBandsFor(nrarfcn)
-        return when (candidates.size) {
-            0 -> null
-            1 -> candidates.first().band
-            // Narrowest range first: the more specific allocation is the likelier deployment.
-            else -> candidates.minByOrNull { it.dlMhz.endInclusive - it.dlMhz.start }!!.band +
-                " (or " + candidates.filter { it != candidates.minByOrNull { c -> c.dlMhz.endInclusive - c.dlMhz.start } }
-                    .joinToString("/") { it.band } + ")"
-        }
+        if (candidates.isEmpty()) return null
+        return candidates
+            .sortedBy { it.dlMhz.endInclusive - it.dlMhz.start }
+            .joinToString("/") { it.band }
     }
 }

@@ -126,7 +126,7 @@ class BandMappingTest {
 
         val label = BandMapping.nrBandLabel(390_000)
         assertNotNull(label)
-        assertTrue("label should surface the ambiguity: $label", label!!.contains("or"))
+        assertEquals("n2/n25", label)
     }
 
     @Test
@@ -142,5 +142,52 @@ class BandMappingTest {
         assertNull(BandMapping.nrArfcnToMhz(9_999_999))
         assertTrue(BandMapping.nrBandsFor(9_999_999).isEmpty())
         assertNull(BandMapping.nrBandLabel(9_999_999))
+    }
+
+    // ---- Channels observed on the 2026-09-02 walk -------------------------
+    //
+    // Every NR-ARFCN the handset actually reported on one T-Mobile walk, checked against the
+    // TS 38.104 raster. Two of them are ambiguous, and the walk is what revealed that the
+    // neighbour path was resolving them silently.
+
+    @Test
+    fun `channels seen on the walk map to the expected frequencies`() {
+        val seen = mapOf(
+            124_590 to 622.95,   // low band
+            396_250 to 1981.25,  // PCS
+            427_230 to 2136.15,  // AWS
+            501_390 to 2506.95,  // mid band carrier 1
+            521_310 to 2606.55,  // mid band carrier 2
+        )
+        for ((arfcn, mhz) in seen) {
+            assertEquals("NR-ARFCN $arfcn", mhz, BandMapping.nrArfcnToMhz(arfcn)!!, 0.001)
+        }
+    }
+
+    @Test
+    fun `unambiguous channels from the walk get a single band`() {
+        assertEquals("n71", BandMapping.nrBandLabel(124_590))
+        assertEquals("n41", BandMapping.nrBandLabel(501_390))
+        assertEquals("n41", BandMapping.nrBandLabel(521_310))
+    }
+
+    @Test
+    fun `ambiguous channels from the walk list every candidate`() {
+        // 1981.25 MHz sits in both n2 (1930-1990) and n25 (1930-1995); 2136.15 MHz in both
+        // n4 (2110-2155) and n66 (2110-2200). On a US carrier the second of each pair is the
+        // likely deployment -- but the channel number does not say so, and the report must not
+        // pretend it does.
+        assertEquals("n2/n25", BandMapping.nrBandLabel(396_250))
+        assertEquals("n4/n66", BandMapping.nrBandLabel(427_230))
+    }
+
+    @Test
+    fun `an ambiguous label is short enough for the report table`() {
+        // The per-cell table allots six characters to the band column. "n2 (or n25)" was
+        // truncated to "n2 (or", which reads as corruption rather than as an ambiguity.
+        for (arfcn in listOf(390_000, 396_250, 426_000, 427_230)) {
+            val label = BandMapping.nrBandLabel(arfcn)!!
+            assertTrue("label \"$label\" is too long for the band column", label.length <= 6)
+        }
     }
 }
