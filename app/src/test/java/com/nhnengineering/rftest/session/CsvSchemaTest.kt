@@ -270,4 +270,56 @@ class CsvSchemaTest {
         assertEquals(CSV_COLUMN_COUNT, SessionReader.splitCsv(row.toCsvRow()).size)
         assertEquals("down: HTTP 429, up: connection reset", tpFieldOf(row, "tp_error"))
     }
+
+    // ---- Floor ------------------------------------------------------------
+
+    @Test
+    fun `a floor set on the sample reaches the floor column`() {
+        // Added because a walk came back with an empty floor column and there was no way to tell
+        // whether the control had failed or simply had not been used. Now the plumbing is pinned
+        // and only the second explanation remains available.
+        val row = MeasurementSample(
+            sessionId = "t", sequence = 0, timestampUtcMillis = 1_756_000_000_000,
+            location = null, wifi = null, floor = "3",
+        )
+
+        assertEquals("3", tpFieldOf(row, "floor"))
+        assertEquals(CSV_COLUMN_COUNT, SessionReader.splitCsv(row.toCsvRow()).size)
+    }
+
+    @Test
+    fun `a non-numeric floor is stored verbatim`() {
+        // Buildings have M, LL, B2, PH and 4A. Coercing to a number would silently rename the
+        // floor the client calls it, and the people who work there will notice.
+        for (label in listOf("M", "LL", "B2", "PH", "4A", "Mezz")) {
+            val row = MeasurementSample(
+                sessionId = "t", sequence = 0, timestampUtcMillis = 1_756_000_000_000,
+                location = null, wifi = null, floor = label,
+            )
+            assertEquals(label, tpFieldOf(row, "floor"))
+        }
+    }
+
+    @Test
+    fun `floor and waypoint are independent columns`() {
+        // Floor is the axis a multi-storey survey is argued along, so it must not be merged into
+        // the area label -- "third floor" and "Indoor" answer different questions.
+        val row = MeasurementSample(
+            sessionId = "t", sequence = 0, timestampUtcMillis = 1_756_000_000_000,
+            location = null, wifi = null, areaLabel = "Indoor", floor = "2",
+        )
+
+        assertEquals("Indoor", tpFieldOf(row, "waypoint"))
+        assertEquals("2", tpFieldOf(row, "floor"))
+    }
+
+    @Test
+    fun `an unset floor is empty, not the string null`() {
+        val row = MeasurementSample(
+            sessionId = "t", sequence = 0, timestampUtcMillis = 1_756_000_000_000,
+            location = null, wifi = null,
+        )
+
+        assertEquals("", tpFieldOf(row, "floor"))
+    }
 }

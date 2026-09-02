@@ -232,8 +232,12 @@ function drawTiles(g, cv, minLat, maxLat, minLon, maxLon, project) {
     for (var y = y0; y <= y1; y++) {
       var img = tileImage(z, x, y, function () { needsRedraw = true; });
       if (!img.complete || img.failed || !img.naturalWidth) continue;
-      var nw = project(y / Math.pow(2, z), x / Math.pow(2, z), z);
-      var se = project((y + 1) / Math.pow(2, z), (x + 1) / Math.pow(2, z), z);
+      // Tile indices, not normalised coordinates. projectWorld scales from zoom z to the
+      // reference zoom itself; dividing by 2^z here as well made every tile sub-pixel at the
+      // origin -- invisible, with no error anywhere. The trail still drew, so the page looked
+      // like it was working and simply had no imagery.
+      var nw = project(y, x, z);
+      var se = project(y + 1, x + 1, z);
       g.drawImage(img, nw[0], nw[1], se[0] - nw[0], se[1] - nw[1]);
     }
   }

@@ -3,6 +3,7 @@ package com.nhnengineering.rftest.speedtest
 import android.util.Log
 import com.nhnengineering.rftest.model.ThroughputSample
 import com.nhnengineering.rftest.service.RecordingState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -120,6 +121,14 @@ class WalkThroughput(private val config: Config = Config()) {
         job = null
     }
 
+    /**
+     * Runs one burst.
+     *
+     * Cancellation is rethrown rather than recorded. A burst still transferring when the operator
+     * presses Stop is not a network fault, and the first build wrote it into the data as one --
+     * the last row of a session read "down: StandaloneCoroutine was cancelled", which in a client
+     * report is a failure at the wrong address and an unreadable one at that.
+     */
     private suspend fun runBurst() {
         RecordingState.throughputBusy.value = true
         val tester = tester()
@@ -128,6 +137,7 @@ class WalkThroughput(private val config: Config = Config()) {
         try {
             val down = runCatching { tester.measureDownload() }
                 .onFailure {
+                    if (it is CancellationException) throw it
                     Log.w(TAG, "download burst failed", it)
                     if (it is SpeedTester.RateLimited) rateLimited = true
                     problems += "down: " + (it.message ?: it::class.java.simpleName)
@@ -137,6 +147,7 @@ class WalkThroughput(private val config: Config = Config()) {
             val up = if (config.includeUpload) {
                 runCatching { tester.measureUpload() }
                     .onFailure {
+                        if (it is CancellationException) throw it
                         Log.w(TAG, "upload burst failed", it)
                         if (it is SpeedTester.RateLimited) rateLimited = true
                         problems += "up: " + (it.message ?: it::class.java.simpleName)
