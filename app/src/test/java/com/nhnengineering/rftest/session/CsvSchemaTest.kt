@@ -71,8 +71,8 @@ class CsvSchemaTest {
 
     @Test
     fun `schema is the expected width`() {
-        assertEquals(73, CSV_COLUMN_COUNT)
-        assertEquals(73, CSV_HEADER.split(",").size)
+        assertEquals(74, CSV_COLUMN_COUNT)
+        assertEquals(74, CSV_HEADER.split(",").size)
     }
 
     @Test
@@ -213,5 +213,61 @@ class CsvSchemaTest {
 
         assertEquals(CSV_COLUMN_COUNT, SessionReader.splitCsv(sample.toCsvRow()).size)
         assertEquals("Lobby, east", waypointOf(sample))
+    }
+
+    // ---- Throughput failures ---------------------------------------------
+
+    private fun tpFieldOf(sample: MeasurementSample, column: String): String {
+        val i = CSV_HEADER.split(",").indexOf(column)
+        assertTrue("schema must have a $column column", i >= 0)
+        return SessionReader.splitCsv(sample.toCsvRow())[i]
+    }
+
+    private fun throughputRow(
+        down: Double?,
+        up: Double?,
+        error: String?,
+    ) = MeasurementSample(
+        sessionId = "t", sequence = 0, timestampUtcMillis = 1_756_000_000_000,
+        location = null, wifi = null,
+        throughput = ThroughputSample(
+            downloadMbps = down, uploadMbps = up,
+            latencyMedianMs = null, latencyMinMs = null, latencyMaxMs = null,
+            jitterMs = null, lossPct = null, server = "speed.example.com", error = error,
+        ),
+    )
+
+    @Test
+    fun `a failed direction records why, not just an empty cell`() {
+        // The 2026-09-02 walk wrote eight rows with upload only and nothing to explain the gap,
+        // because the endpoint was returning HTTP 429. In a client report an empty dl_mbps reads
+        // as "not measured here" -- a much weaker and quite different statement from "the
+        // endpoint refused us".
+        val row = throughputRow(down = null, up = 24.8, error = "down: download rate-limited (HTTP 429)")
+
+        assertEquals("", tpFieldOf(row, "dl_mbps"))
+        assertEquals("24.800", tpFieldOf(row, "ul_mbps"))
+        assertTrue(
+            "the reason must survive into the CSV",
+            tpFieldOf(row, "tp_error").contains("429"),
+        )
+    }
+
+    @Test
+    fun `a successful burst leaves the error column empty`() {
+        val row = throughputRow(down = 90.0, up = 26.3, error = null)
+
+        assertEquals("", tpFieldOf(row, "tp_error"))
+        assertEquals(CSV_COLUMN_COUNT, SessionReader.splitCsv(row.toCsvRow()).size)
+    }
+
+    @Test
+    fun `an error containing a comma does not shift the row`() {
+        // Failure messages join both directions with "; " and carry endpoint text, so a comma is
+        // entirely plausible -- and unquoted would shift every column after it.
+        val row = throughputRow(null, null, "down: HTTP 429, up: connection reset")
+
+        assertEquals(CSV_COLUMN_COUNT, SessionReader.splitCsv(row.toCsvRow()).size)
+        assertEquals("down: HTTP 429, up: connection reset", tpFieldOf(row, "tp_error"))
     }
 }

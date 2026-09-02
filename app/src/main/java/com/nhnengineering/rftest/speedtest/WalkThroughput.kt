@@ -41,16 +41,27 @@ import kotlinx.coroutines.launch
  * recorded in the report's methodology rather than smoothed over, because a throughput point
  * plotted on a map looks exactly as precise as an RSRP point beside it, and it is not.
  */
-class WalkThroughput(
-    private val config: Config = Config(),
-    private val tester: SpeedTester = SpeedTester(
-        SpeedTestConfig(
-            testDurationMs = config.burstMs,
-            downloadStreams = config.streams,
-            uploadStreams = config.streams,
-        ),
-    ),
-) {
+class WalkThroughput(private val config: Config = Config()) {
+
+    /**
+     * Built per burst so the operator's endpoint is honoured.
+     *
+     * The endpoint used to be captured once at construction from the defaults, which meant a LAN
+     * server typed into the throughput card was used by the one-off test and ignored by the walk.
+     */
+    private fun tester(): SpeedTester {
+        val base = RecordingState.speedTestBaseUrl.value?.takeIf { it.isNotBlank() }
+        val defaults = SpeedTestConfig()
+        return SpeedTester(
+            SpeedTestConfig(
+                downloadUrl = base ?: defaults.downloadUrl,
+                testDurationMs = config.burstMs,
+                downloadStreams = config.downloadStreams,
+                uploadStreams = config.streams,
+            ),
+        )
+    }
+
 
     data class Config(
         /**
@@ -67,11 +78,23 @@ class WalkThroughput(
          * a representative reading at many points, not the highest number the link can produce.
          */
         val streams: Int = 2,
+        /**
+         * Download streams, kept to one.
+         *
+         * Each stream issues repeated bounded requests, so stream count multiplies request volume
+         * against the endpoint. On the 2026-09-02 walk two streams over eight bursts was enough to
+         * earn an HTTP 429 from the public endpoint, and every download in the session failed.
+         */
+        val downloadStreams: Int = 1,
+        /** Extra idle time added after a rate-limited burst, doubling up to a ceiling. */
+        val backoffStepMs: Long = 60_000,
+        val maxBackoffMs: Long = 300_000,
         /** Measure upload as well as download. Upload costs the same time again. */
         val includeUpload: Boolean = true,
     )
 
     private var job: Job? = null
+    private var backoffMs: Long = 0
 
     val running: Boolean get() = job?.isActive == true
 
@@ -87,7 +110,7 @@ class WalkThroughput(
         job = scope.launch {
             while (isActive && RecordingState.active.value) {
                 runBurst()
-                delay(config.intervalMs)
+                delay(config.intervalMs + backoffMs)
             }
         }
     }
@@ -99,21 +122,34 @@ class WalkThroughput(
 
     private suspend fun runBurst() {
         RecordingState.throughputBusy.value = true
+        val tester = tester()
+        val problems = mutableListOf<String>()
+        var rateLimited = false
         try {
             val down = runCatching { tester.measureDownload() }
-                .onFailure { Log.w(TAG, "download burst failed", it) }
+                .onFailure {
+                    Log.w(TAG, "download burst failed", it)
+                    if (it is SpeedTester.RateLimited) rateLimited = true
+                    problems += "down: " + (it.message ?: it::class.java.simpleName)
+                }
                 .getOrNull()
+
             val up = if (config.includeUpload) {
                 runCatching { tester.measureUpload() }
-                    .onFailure { Log.w(TAG, "upload burst failed", it) }
+                    .onFailure {
+                        Log.w(TAG, "upload burst failed", it)
+                        if (it is SpeedTester.RateLimited) rateLimited = true
+                        problems += "up: " + (it.message ?: it::class.java.simpleName)
+                    }
                     .getOrNull()
             } else {
                 null
             }
 
-            // A burst where both directions failed is recorded as a failure, not skipped. A gap in
-            // the throughput series where the network was unusable is a finding; an absent row
-            // reads as "not tested here", which is a different and much weaker statement.
+            // Every failure is recorded, including a partial one. The first version only set this
+            // when *both* directions failed, so a walk whose downloads were all rejected wrote
+            // eight upload-only rows with nothing to explain the gap -- which in a client report
+            // reads as "not measured here" rather than "the endpoint refused us".
             val sample = ThroughputSample(
                 downloadMbps = down,
                 uploadMbps = up,
@@ -123,14 +159,20 @@ class WalkThroughput(
                 jitterMs = null,
                 lossPct = null,
                 server = tester.serverLabel,
-                error = if (down == null && (up == null && config.includeUpload)) {
-                    "both directions failed"
-                } else {
-                    null
-                },
+                error = problems.joinToString("; ").ifBlank { null },
             )
             RecordingState.pendingThroughput.value = sample
             RecordingState.lastThroughput.value = sample
+
+            // Back off when the endpoint is throttling us, rather than hammering it for the rest
+            // of the walk and filling the session with failures that say nothing about the venue.
+            backoffMs = if (rateLimited) {
+                (if (backoffMs == 0L) config.backoffStepMs else backoffMs * 2)
+                    .coerceAtMost(config.maxBackoffMs)
+            } else {
+                0
+            }
+            RecordingState.throughputRateLimited.value = rateLimited
         } finally {
             RecordingState.throughputBusy.value = false
         }

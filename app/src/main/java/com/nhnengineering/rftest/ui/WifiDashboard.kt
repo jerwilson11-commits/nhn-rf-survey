@@ -96,6 +96,8 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     var sessionName by remember { mutableStateOf("") }
 
     var speedServer by remember { mutableStateOf(SpeedTestConfig().downloadUrl) }
+    // Published so the walk bursts use the same endpoint the operator typed here.
+    LaunchedEffect(speedServer) { RecordingState.speedTestBaseUrl.value = speedServer }
     var speedRunning by remember { mutableStateOf(false) }
     var speedStage by remember { mutableStateOf<String?>(null) }
     var speedLiveMbps by remember { mutableStateOf<Double?>(null) }

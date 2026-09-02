@@ -65,6 +65,15 @@ data class LatencyStats(
  */
 class SpeedTester(private val config: SpeedTestConfig = SpeedTestConfig()) {
 
+    /**
+     * The endpoint refused us for sending too many requests.
+     *
+     * Distinct from a failure, because it says nothing about the network under test. Reporting
+     * "download failed" at a venue when the truth is "Cloudflare throttled our survey tool" would
+     * put a wrong finding in front of a client.
+     */
+    class RateLimited(message: String) : Exception(message)
+
     /** The host being measured against. Recorded on every sample, because a throughput figure
      *  without its endpoint is uninterpretable — LAN and internet answer different questions. */
     val serverLabel: String get() = config.serverLabel
@@ -85,6 +94,9 @@ class SpeedTester(private val config: SpeedTestConfig = SpeedTestConfig()) {
         const val CONNECT_TIMEOUT_MS = 10_000
         const val READ_TIMEOUT_MS = 15_000
         const val CHUNK = 64 * 1024
+
+        /** Not in HttpURLConnection's constants. */
+        const val HTTP_TOO_MANY_REQUESTS = 429
     }
 
     suspend fun measureLatency(): LatencyStats = withContext(Dispatchers.IO) {
@@ -149,6 +161,14 @@ class SpeedTester(private val config: SpeedTestConfig = SpeedTestConfig()) {
                     // Check the status. Omitting this is how a 403 became a silent null instead of
                     // an error naming the cause.
                     val code = c.responseCode
+                    if (code == HTTP_TOO_MANY_REQUESTS) {
+                        // Named separately because it is not a network fault and must not be
+                        // reported to a client as one. The public endpoint is refusing us, and
+                        // the measurement says nothing about the venue.
+                        throw RateLimited(
+                            "download rate-limited by ${config.serverLabel} (HTTP 429)",
+                        )
+                    }
                     if (code != HttpURLConnection.HTTP_OK) {
                         error("download HTTP $code for ${config.downloadChunkBytes} bytes")
                     }

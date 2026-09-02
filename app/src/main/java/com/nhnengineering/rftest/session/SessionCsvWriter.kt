@@ -136,6 +136,10 @@ private val THROUGHPUT_COLUMNS = listOf(
     "dl_mbps", "ul_mbps",
     "latency_ms", "latency_min_ms", "latency_max_ms", "jitter_ms",
     "loss_pct", "speedtest_server",
+    // Why a direction is missing. Without it an empty dl_mbps means either "not measured here" or
+    // "the download failed and we are not saying so", and a reader cannot tell them apart. The
+    // 2026-09-02 walk produced eight rows with upload only and nothing to explain it.
+    "tp_error",
 )
 
 /**
@@ -265,6 +269,7 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += tp?.jitterMs?.let { String.format(Locale.US, "%.2f", it) }
     cells += tp?.lossPct?.let { String.format(Locale.US, "%.1f", it) }
     cells += tp?.server
+    cells += tp?.error
 
     val ind = indoor
     cells += ind?.floorplanId

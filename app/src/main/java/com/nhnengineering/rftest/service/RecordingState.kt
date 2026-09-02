@@ -71,11 +71,28 @@ object RecordingState {
     /** True while a walk throughput burst is transferring, so the UI can say the radio is loaded. */
     val throughputBusy = MutableStateFlow(false)
 
+    /**
+     * True when the last burst was refused for sending too many requests.
+     *
+     * Surfaced separately from a failure because it is not one: it says nothing about the network
+     * under test, and reporting it as a coverage finding would be wrong.
+     */
+    val throughputRateLimited = MutableStateFlow(false)
+
     /** Most recent walk throughput result, for the live display. */
     val lastThroughput = MutableStateFlow<ThroughputSample?>(null)
 
     /** Set by the UI before recording starts; read by the service when it launches the burst loop. */
     val walkThroughputEnabled = MutableStateFlow(false)
+
+    /**
+     * Throughput endpoint, shared by the one-off speed test and the walk bursts.
+     *
+     * Previously the URL lived in Compose state on the dashboard, so the walk bursts silently used
+     * the default public endpoint no matter what the operator had typed. On a venue engagement
+     * that means measuring the internet when the operator believed they were measuring the LAN.
+     */
+    val speedTestBaseUrl = MutableStateFlow<String?>(null)
 
     /** Set by the UI; the service starts and stops the loopback live-view server to match. */
     val liveViewEnabled = MutableStateFlow(false)
