@@ -291,6 +291,57 @@ and no test can tell whether the legend collides with the scale bar on a real pa
 
 ---
 
+### Throughput, map and floor validation — 2026-09-02 afternoon
+
+**Downloads work again.** Cutting walk bursts from two download streams to one halved the request
+volume and stayed under the public endpoint's limit: eight bursts, eight complete results — 107,
+95, 81, 72, 67, 62, 57 Mbps — against eight consecutive HTTP 429s that morning. NHN's own endpoint
+is still the right answer for a venue, but the immediate failure is gone.
+
+**The finding that walk produced is the most commercially useful one so far.**
+
+| | Indoor | Outdoor | Ratio |
+|---|---|---|---|
+| Uplink | ~6.7 Mbps | ~29.4 Mbps | **4.4x** |
+| Downlink | ~69.5 Mbps | ~61.6 Mbps | ~1.0x |
+
+**Downlink barely notices ~9 dB of building penetration; uplink collapses.** Physically expected —
+the network has power budget to spare and the handset does not — but rarely measured. It also means
+a download-only test concludes the building is fine, and the indoor downlink here was actually
+*higher* than outdoor. Worth leading with when arguing for a DAS.
+
+**Defect: satellite imagery never appeared on the laptop.** The tile route served correctly and the
+trail drew, so nothing looked broken. The page divided tile indices by `2^z` before passing them to
+a projection that already scales from zoom z — every tile landed sub-pixel at the origin. Invisible,
+silent, trail unaffected.
+
+The Kotlin map on the handset does the same projection correctly. **That is why the bug survived: I
+verified the phone visually and assumed the laptop**, having written the two independently. Two
+implementations of one projection, one of them checked. The lesson is the same one this project
+keeps relearning, in a new place.
+
+**Floor control verified end-to-end** by driving it directly rather than waiting for a multi-storey
+site — the floor label is operator-entered, not sensed, so a flat walk exercises it fully:
+
+```
+seq   0  ->  (none)     before any floor was set
+seq  28  ->  1          + Floor
+seq  33  ->  2          + Floor
+seq  60  ->  PH         typed label
+```
+
+Sticky, verbatim, and the steppers correctly disable themselves on a non-numeric floor — "PH plus
+one" has no defensible answer.
+
+**Also fixed:** a burst still transferring when the operator presses Stop was being written into the
+data as a network failure (`down: StandaloneCoroutine was cancelled`). Cancellation is now rethrown
+rather than recorded — a failure at the wrong address, in unreadable language, in a client
+deliverable.
+
+**Tests: 88 → 105.**
+
+---
+
 ### Walk validation — 2026-09-02, indoor + outdoor, live T-Mobile 5G SA
 
 431 samples, 7 m 36 s, 181 Indoor / 244 Outdoor / 6 before the first label. GPS: 430 of 431 fixes,
