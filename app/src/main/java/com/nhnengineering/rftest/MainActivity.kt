@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.nhnengineering.rftest.ui.FloorplanScreen
+import com.nhnengineering.rftest.ui.MapScreen
 import com.nhnengineering.rftest.ui.SessionsScreen
 import com.nhnengineering.rftest.ui.WifiDashboard
 import com.nhnengineering.rftest.ui.theme.RFTestAppTheme
@@ -75,6 +76,7 @@ private fun hasAllPermissions(context: Context): Boolean = REQUIRED_PERMISSIONS.
 
 private enum class Tab(val label: String) {
     LIVE("Live"),
+    MAP("Map"),
     FLOORPLAN("Floorplan"),
     SESSIONS("Sessions"),
 }
@@ -153,6 +155,7 @@ private fun RfTestApp() {
             // Safe to switch tabs mid-session since Phase 6: the recording lives in
             // RecordingService, not in this composition.
             tab == Tab.LIVE -> WifiDashboard(modifier = Modifier.padding(innerPadding))
+            tab == Tab.MAP -> MapScreen(modifier = Modifier.padding(innerPadding))
             tab == Tab.FLOORPLAN -> FloorplanScreen(modifier = Modifier.padding(innerPadding))
             else -> SessionsScreen(modifier = Modifier.padding(innerPadding))
         }

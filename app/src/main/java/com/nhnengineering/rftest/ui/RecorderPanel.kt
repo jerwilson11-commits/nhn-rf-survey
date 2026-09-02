@@ -223,7 +223,9 @@ private fun FloorControl(floor: String?, onFloorChange: (String?) -> Unit) {
         OutlinedTextField(
             value = typed,
             onValueChange = { typed = it },
-            label = { Text("Floor (M, LL, B2, PH)") },
+            // Short enough to stay on one line beside the Set button; the examples that used
+            // to sit here made the field two rows tall on a phone.
+            label = { Text("Floor label") },
             singleLine = true,
             modifier = Modifier.weight(2f),
         )
