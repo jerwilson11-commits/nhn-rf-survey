@@ -291,6 +291,69 @@ and no test can tell whether the legend collides with the scale bar on a real pa
 
 ---
 
+### Walk validation — 2026-09-02, indoor + outdoor, live T-Mobile 5G SA
+
+431 samples, 7 m 36 s, 181 Indoor / 244 Outdoor / 6 before the first label. GPS: 430 of 431 fixes,
+430 with velocity, median accuracy 3.95 m, provider `gps` throughout — **including indoors**, so
+the indoor positions are genuine GNSS and not Wi-Fi-derived. Distance was not flagged approximate;
+the pre-walk warning that it probably would be was wrong.
+
+**Three open questions, all answered.**
+
+**1. Does SS-SINR move while walking, or stay pinned?** It moves. 9 distinct values, 3–22 dB,
+σ = 4.75, correlated with RSRP at only r = 0.40 — which is physically right, since SINR depends on
+interference and not on signal alone. The stationary session was inconclusive, not broken.
+
+But the update rate differs sharply from RSRP, and that is the finding worth keeping:
+
+| Field | Changes in 431 samples | Median run | Longest run |
+|---|---|---|---|
+| `nr_ss_rsrp` | 88 | 5 samples | 12 samples |
+| `nr_ss_sinr` | 19 | 5 samples | **99 samples** |
+| `nr_ss_rsrq` | 19 | 12 samples | **120 samples** |
+
+SINR held one value for 99 consecutive seconds while RSRP moved 88 times. **SS-SINR and SS-RSRQ are
+live but not sample-synchronous with RSRP**, and a report that presents them side by side without
+saying so implies a simultaneity the instrument does not deliver. This finally resolves the Phase 5
+"pinned SINR" question: not a caching bug, a genuinely slower measurement.
+
+**2. Does mean dominant-sector count rise above 1.00 once moving?** Yes — **1.13, with 8.8%
+overlap**, against exactly 1.00 and 0% stationary. Histogram: 392 samples with one dominant sector,
+18 with two, 20 with three. The metric responds to motion, as it must.
+
+**3. Indoor versus outdoor.** Median RSRP −103 dBm indoor against −96 dBm outdoor — **7 dB of
+building penetration loss**, 6.2 dB by means. Threshold compliance at −105 dBm: 97.1% outdoor,
+87.8% indoor. Plausible for light residential construction, and it is the number that sells a DAS.
+
+**Incidental findings.**
+
+The walk saw **17 cells across five carriers on four bands** — n71 at 622.95 MHz, n2/n25 at
+1981.25, n4/n66 at 2136.15, and two n41 carriers at 2506.95 and 2606.55 MHz. `BandMapping` derived
+all five correctly from the raster, validated against live data for the first time beyond n41.
+
+**The serving cell never left n41**, despite an n71 neighbour being the strongest cell seen in 16
+samples. The modem is being held on mid-band for capacity rather than following signal. Worth
+knowing before reading any handset survey as if it tracked best server.
+
+**Defect found: NR band ambiguity discarded on the neighbour path.** Two of the five channels map
+to overlapping allocations, and the neighbour path resolved them silently with `firstOrNull()`,
+labelling them n2 and n4 — the wrong choice for a US carrier both times. The serving-cell path had
+always surfaced the ambiguity. **The one place it was dropped was the one place a client reads it.**
+Fixed; label compacted to `n2/n25` because the old `n2 (or n25)` truncated to `n2 (or` in the
+six-character band column, turning an honest ambiguity into apparent corruption.
+
+**Area labelling worked on its first outing** and immediately earned itself: the coverage-hole table
+now names where each hole was — four Indoor, one Outdoor — rather than printing coordinates.
+
+**App output cross-checked against an independent implementation.** The dominance figures were
+computed separately in Python straight from the CSV before the report was generated: 1.14 mean and
+9.0% overlap over 431 rows against the app's 1.13 and 8.8% over 430. The difference is one row the
+reader drops for having no fix, and it accounts for the gap exactly.
+
+**Tests: 58 → 62.**
+
+---
+
 ### Report render validation — 2026-09-01, first PDF anyone had looked at
 
 The previous entry ended "not yet seen by a human: the rendered PDF". It was generated and read the
