@@ -251,6 +251,21 @@ object PdfReportGenerator {
             c.gap(); c.rule()
         }
 
+        // ---- Per-floor ----------------------------------------------------
+        val floors = SessionStats.breakdown(points, { it.floor }, report.kpi, report.thresholdDbm)
+        if (floors.groups.isNotEmpty()) {
+            c.ensure(140f)
+            c.text("By floor", c.h2)
+            c.para(
+                "Floors as the operator recorded them while walking. This is the axis a " +
+                    "multi-storey result is argued along: a site-wide compliance figure can pass " +
+                    "comfortably while one floor fails outright, and only this table shows it.",
+            )
+            c.gap()
+            groupTable(c, floors, report.thresholdDbm)
+            c.gap(); c.rule()
+        }
+
         // ---- Per-area -----------------------------------------------------
         val areas = SessionStats.breakdown(points, { it.waypoint }, report.kpi, report.thresholdDbm)
         if (areas.groups.isNotEmpty()) {

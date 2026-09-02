@@ -3,8 +3,14 @@ package com.nhnengineering.rftest.live
 /**
  * The live walk view, served to a connected laptop or tablet.
  *
- * A single self-contained page: no CDN, no fonts, no map tiles. The laptop is cabled to a phone in
- * a basement and has no internet of its own, so anything not in this string does not exist.
+ * A single self-contained page: no CDN, no fonts, no remote scripts. The laptop is cabled to a
+ * phone in a basement and has no internet of its own, so anything not in this string does not
+ * exist.
+ *
+ * Satellite tiles are the one exception, and they are not an exception to that rule so much as an
+ * application of it: they are fetched from **the phone**, at `/tile/{z}/{x}/{y}`, which fetches
+ * and caches them over the connection being surveyed. A tile URL pointing at a provider directly
+ * would work on a desk and fail in the basement — the only place it matters.
  *
  * The colour thresholds below **duplicate** `RsrpBucket` and `RssiBucket`. That is a real cost and
  * it is taken deliberately — the alternative is generating JavaScript from Kotlin enums, which is
@@ -70,6 +76,10 @@ internal object LivePage {
   <h1>NHN Engineering &mdash; live walk view</h1>
   <span id="status">connecting&hellip;</span>
   <span id="area" style="font-size:13px;color:var(--dim)"></span>
+  <span id="floor" style="font-size:13px;color:var(--dim)"></span>
+  <label style="margin-left:auto;font-size:13px;color:var(--dim);cursor:pointer">
+    <input type="checkbox" id="imagery" checked> satellite
+  </label>
 </header>
 
 <main>
@@ -128,6 +138,7 @@ internal object LivePage {
       Ring marks your current position. North is up and both axes share one scale, so the
       trail is a map rather than a stretched scatter. Only GPS-located samples appear here.
     </div>
+    <div class="note" id="attribution"></div>
   </div>
 </main>
 
@@ -178,33 +189,120 @@ function drawLegend(scale) {
   }).join('');
 }
 
+// ---- Web Mercator -------------------------------------------------------
+// The tiles are Web Mercator, so the trail has to be drawn in Web Mercator too. The earlier
+// equirectangular projection was fine on its own but would slide progressively out of register
+// against imagery -- and a trail that is *nearly* on the right building is worse than no imagery,
+// because it looks authoritative.
+function lonToWorld(lon, z) { return (lon + 180) / 360 * Math.pow(2, z); }
+function latToWorld(lat, z) {
+  var r = lat * Math.PI / 180;
+  return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z);
+}
+
+var tileCache = {};
+function tileImage(z, x, y, onload) {
+  var key = z + '/' + x + '/' + y;
+  if (tileCache[key]) return tileCache[key];
+  var img = new Image();
+  img.onload = onload;
+  // A tile the phone could not fetch stays blank rather than retrying forever over the same
+  // radio the survey is measuring.
+  img.onerror = function () { img.failed = true; };
+  img.src = '/tile/' + key;
+  tileCache[key] = img;
+  return img;
+}
+
+function drawTiles(g, cv, minLat, maxLat, minLon, maxLon, project) {
+  // Pick the zoom whose tiles are closest to 1:1 on this canvas, capped at Esri's deepest level.
+  var z = 19;
+  for (var t = 19; t >= 1; t--) {
+    var w = Math.abs(lonToWorld(maxLon, t) - lonToWorld(minLon, t)) * 256;
+    var h = Math.abs(latToWorld(minLat, t) - latToWorld(maxLat, t)) * 256;
+    if (w <= cv.width * 1.6 && h <= cv.height * 1.6) { z = t; break; }
+  }
+  var x0 = Math.floor(lonToWorld(minLon, z)), x1 = Math.floor(lonToWorld(maxLon, z));
+  var y0 = Math.floor(latToWorld(maxLat, z)), y1 = Math.floor(latToWorld(minLat, z));
+  // A hard ceiling on tiles per frame. Without it, a wide-area session would ask the phone for
+  // hundreds of tiles over the cellular link it is trying to measure.
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 64) return;
+
+  for (var x = x0; x <= x1; x++) {
+    for (var y = y0; y <= y1; y++) {
+      var img = tileImage(z, x, y, function () { needsRedraw = true; });
+      if (!img.complete || img.failed || !img.naturalWidth) continue;
+      var nw = project(y / Math.pow(2, z), x / Math.pow(2, z), z);
+      var se = project((y + 1) / Math.pow(2, z), (x + 1) / Math.pow(2, z), z);
+      g.drawImage(img, nw[0], nw[1], se[0] - nw[0], se[1] - nw[1]);
+    }
+  }
+}
+
+var needsRedraw = false;
+var lastTrack = [];
+
 function draw(track) {
   var cv = document.getElementById('map'), g = cv.getContext('2d');
   g.clearRect(0, 0, cv.width, cv.height);
   if (!track.length) return;
 
+  lastTrack = track;
   var lats = track.map(function (p) { return p.lat; });
   var lons = track.map(function (p) { return p.lon; });
   var minLat = Math.min.apply(null, lats), maxLat = Math.max.apply(null, lats);
   var minLon = Math.min.apply(null, lons), maxLon = Math.max.apply(null, lons);
   var midLat = (minLat + maxLat) / 2;
 
-  // Equirectangular with longitude scaled by cos(latitude), same as the PDF plot. Without it the
-  // trail is stretched east-west and the operator misjudges how much ground is already covered.
+  // A floor on the extent. Standing still, GPS scatter spans a couple of metres, and fitting the
+  // canvas to that would zoom to a jitter cloud and imply precision that is not there.
   var mLat = 111320, mLon = 111320 * Math.cos(midLat * Math.PI / 180);
-  var spanX = Math.max((maxLon - minLon) * mLon, 3);
-  var spanY = Math.max((maxLat - minLat) * mLat, 3);
-  var pad = 26;
-  var scale = Math.min((cv.width - 2 * pad) / spanX, (cv.height - 2 * pad) / spanY);
-  var offX = pad + ((cv.width - 2 * pad) - spanX * scale) / 2;
-  var offY = pad + ((cv.height - 2 * pad) - spanY * scale) / 2;
+  var MIN_SPAN_M = 25;
+  if ((maxLon - minLon) * mLon < MIN_SPAN_M) {
+    var padLon = (MIN_SPAN_M - (maxLon - minLon) * mLon) / 2 / mLon;
+    minLon -= padLon; maxLon += padLon;
+  }
+  if ((maxLat - minLat) * mLat < MIN_SPAN_M) {
+    var padLat = (MIN_SPAN_M - (maxLat - minLat) * mLat) / 2 / mLat;
+    minLat -= padLat; maxLat += padLat;
+  }
 
-  var pts = track.map(function (p) {
-    return [offX + (p.lon - minLon) * mLon * scale, offY + (maxLat - p.lat) * mLat * scale];
-  });
+  // Web Mercator at a reference zoom, so the trail and the tiles share one projection exactly.
+  var Z = 21, pad = 26;
+  var wx0 = lonToWorld(minLon, Z), wx1 = lonToWorld(maxLon, Z);
+  var wy0 = latToWorld(maxLat, Z), wy1 = latToWorld(minLat, Z);
+  var scale = Math.min((cv.width - 2 * pad) / Math.max(wx1 - wx0, 1e-9),
+                       (cv.height - 2 * pad) / Math.max(wy1 - wy0, 1e-9));
+  var offX = pad + ((cv.width - 2 * pad) - (wx1 - wx0) * scale) / 2;
+  var offY = pad + ((cv.height - 2 * pad) - (wy1 - wy0) * scale) / 2;
 
-  g.strokeStyle = 'rgba(200,190,180,0.35)';
-  g.lineWidth = 1.5;
+  // Maps a world coordinate at any zoom onto the canvas.
+  function projectWorld(wy, wx, z) {
+    var f = Math.pow(2, Z - z);
+    return [offX + (wx * f - wx0) * scale, offY + (wy * f - wy0) * scale];
+  }
+  function projectLatLon(lat, lon) {
+    return [offX + (lonToWorld(lon, Z) - wx0) * scale, offY + (latToWorld(lat, Z) - wy0) * scale];
+  }
+
+  if (document.getElementById('imagery').checked) {
+    drawTiles(g, cv, minLat, maxLat, minLon, maxLon, projectWorld);
+    document.getElementById('attribution').textContent =
+      'Imagery \u00a9 Esri, Maxar, Earthstar Geographics \u2014 fetched over the phone\u2019s own connection and cached.';
+  } else {
+    document.getElementById('attribution').textContent = '';
+  }
+
+  // One metre in canvas pixels, for the scale bar. Mercator distorts with latitude, so this is
+  // derived at the plot's own latitude rather than assumed.
+  var mPerPx = (maxLat - minLat) * mLat / Math.max((wy1 - wy0) * scale, 1e-9);
+  var pxPerM = 1 / mPerPx;
+
+  var pts = track.map(function (p) { return projectLatLon(p.lat, p.lon); });
+
+  // Heavier and brighter than before: a thin grey line vanishes over satellite imagery.
+  g.strokeStyle = 'rgba(255,255,255,0.75)';
+  g.lineWidth = 2;
   g.beginPath();
   pts.forEach(function (q, i) { i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]); });
   g.stroke();
@@ -212,8 +310,12 @@ function draw(track) {
   pts.forEach(function (q, i) {
     g.fillStyle = colorFor(track[i]);
     g.beginPath();
-    g.arc(q[0], q[1], 4, 0, 6.2832);
+    g.arc(q[0], q[1], 4.5, 0, 6.2832);
     g.fill();
+    // A thin dark ring so a green dot stays readable over grass and a red one over a roof.
+    g.strokeStyle = 'rgba(0,0,0,0.55)';
+    g.lineWidth = 1;
+    g.stroke();
   });
 
   // Current position, so the operator can tell which end of the trail they are standing on.
@@ -225,10 +327,10 @@ function draw(track) {
   g.stroke();
 
   // Scale bar, snapped to a round number of metres.
-  var targetM = (cv.width - 2 * pad) / 4 / scale;
+  var targetM = (cv.width - 2 * pad) / 4 / pxPerM;
   var base = Math.pow(10, Math.floor(Math.log(targetM) / Math.LN10));
   var niceM = [5 * base, 2 * base, base].filter(function (v) { return v <= targetM; })[0] || base;
-  var barPx = niceM * scale;
+  var barPx = niceM * pxPerM;
   g.strokeStyle = '#cfc6bd'; g.lineWidth = 2;
   g.beginPath();
   g.moveTo(pad, cv.height - 18); g.lineTo(pad + barPx, cv.height - 18);
@@ -261,6 +363,7 @@ function poll() {
       st.textContent = d.recording ? '● recording' : 'connected — not recording';
       st.className = d.recording ? 'live' : '';
       txt('area', d.area ? 'area: ' + d.area : '');
+      txt('floor', d.floor ? 'floor: ' + d.floor : '');
 
       var c = d.cell;
       if (c) {
@@ -315,6 +418,16 @@ function poll() {
 }
 poll();
 setInterval(poll, 1000);
+
+// Tiles arrive asynchronously, so redraw when one lands rather than waiting for the next poll --
+// otherwise the imagery appears a second late and looks like a stall.
+setInterval(function () {
+  if (needsRedraw && lastTrack.length) { needsRedraw = false; draw(lastTrack); }
+}, 250);
+
+document.getElementById('imagery').addEventListener('change', function () {
+  if (lastTrack.length) draw(lastTrack);
+});
 </script>
 </body>
 </html>

@@ -76,6 +76,27 @@ class LiveViewTest {
     }
 
     @Test
+    fun `satellite tiles are fetched from the phone, never from the internet directly`() {
+        // The laptop has no internet of its own; the phone proxies tiles over the connection being
+        // measured. A hard-coded provider URL in the page would work on a desk and fail in a
+        // basement, which is the only place it matters.
+        assertTrue(
+            "tiles must be requested from the phone's own /tile route",
+            LivePage.HTML.contains("'/tile/'"),
+        )
+        assertTrue(
+            "the page must not reach a tile provider directly",
+            !LivePage.HTML.contains("arcgisonline") && !LivePage.HTML.contains("tile.openstreetmap"),
+        )
+    }
+
+    @Test
+    fun `imagery carries its attribution`() {
+        // Required by the provider's terms, and the page is the only place a viewer sees it.
+        assertTrue("Esri attribution must appear", LivePage.HTML.contains("Esri"))
+    }
+
+    @Test
     fun `the page is self-contained`() {
         // The laptop is cabled to a phone in a basement and has no internet. Anything the page
         // fetches from elsewhere is a blank panel at the moment it is needed.

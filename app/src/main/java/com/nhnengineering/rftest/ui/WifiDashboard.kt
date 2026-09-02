@@ -80,6 +80,7 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val lastFile by RecordingState.lastSavedFile.collectAsState()
     val breaches by RecordingState.breaches.collectAsState()
     val areaLabel by RecordingState.areaLabel.collectAsState()
+    val floor by RecordingState.floor.collectAsState()
     val walkThroughput by RecordingState.walkThroughputEnabled.collectAsState()
     val liveView by RecordingState.liveViewEnabled.collectAsState()
     val liveViewError by RecordingState.liveServerError.collectAsState()
@@ -155,10 +156,12 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 lastFile = lastFile,
                 areaLabel = areaLabel,
                 onAreaLabelChange = { RecordingState.areaLabel.value = it },
+                floor = floor,
+                onFloorChange = { RecordingState.floor.value = it },
                 walkThroughput = walkThroughput,
                 onWalkThroughputChange = { RecordingState.walkThroughputEnabled.value = it },
                 liveView = liveView,
-                onLiveViewChange = { com.nhnengineering.rftest.live.LiveView.set(it) },
+                onLiveViewChange = { com.nhnengineering.rftest.live.LiveView.set(context, it) },
                 liveViewError = liveViewError,
                 onStart = { RecordingService.start(context, sessionName) },
                 onStop = { RecordingService.stop(context) },
@@ -197,15 +200,7 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                         speedRunning = true
                         speedResult = null
                         speedLiveMbps = null
-                        val base = speedServer.trim()
-                        val host = runCatching { java.net.URL(base).host }.getOrNull()
-                            ?: SpeedTestConfig().pingHost
-                        val cfg = SpeedTestConfig(
-                            downloadUrl = base,
-                            uploadUrl = base.substringBefore("/__down") + "/__up",
-                            latencyUrl = base + "0",
-                            pingHost = host,
-                        )
+                        val cfg = SpeedTestConfig.fromDownloadUrl(speedServer)
                         val r = SpeedTester(cfg).runAll { st, mbps ->
                             speedStage = st
                             speedLiveMbps = mbps

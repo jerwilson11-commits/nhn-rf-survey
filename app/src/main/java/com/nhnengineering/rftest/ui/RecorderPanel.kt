@@ -47,6 +47,8 @@ fun RecorderPanel(
     /** Current operator area label, applied to every sample until changed. */
     areaLabel: String?,
     onAreaLabelChange: (String?) -> Unit,
+    floor: String?,
+    onFloorChange: (String?) -> Unit,
     walkThroughput: Boolean,
     onWalkThroughputChange: (Boolean) -> Unit,
     liveView: Boolean,
@@ -117,6 +119,8 @@ fun RecorderPanel(
             if (recording) {
                 AreaControl(areaLabel, onAreaLabelChange)
                 HorizontalDivider()
+                FloorControl(floor, onFloorChange)
+                HorizontalDivider()
             }
             WalkOptions(
                 walkThroughput, onWalkThroughputChange,
@@ -148,6 +152,88 @@ fun RecorderPanel(
                 )
             }
         }
+    }
+}
+
+/**
+ * Floor entry during a walk.
+ *
+ * Floor is the axis a multi-storey survey is analysed along — "the third floor fails" is a
+ * finding, "indoors fails" is not — so it gets its own column rather than being folded into the
+ * area label.
+ *
+ * **Stepper first, keyboard second.** The moment that needs recording is the moment the lift doors
+ * open, one-handed, often holding something else. A numeric stepper handles the common case in one
+ * tap and steps through 1, 2, 3 while skipping nothing.
+ *
+ * The free-text field is not a fallback, it is the professional case: real buildings have M, LL,
+ * B2, PH and 4A, and a survey tool that cannot record the floor as the building names it will be
+ * argued with by the people who work there. So the label is stored verbatim and never coerced to a
+ * number — which also means the stepper has to cope with the current value not being numeric.
+ */
+@Composable
+private fun FloorControl(floor: String?, onFloorChange: (String?) -> Unit) {
+    var typed by remember { mutableStateOf("") }
+
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Floor: " + (floor ?: "not set"),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (floor != null) {
+            TextButton(onClick = { onFloorChange(null) }) { Text("Clear") }
+        }
+    }
+
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // Stepping from a non-numeric floor (M, LL, PH) has no defensible answer, so the buttons
+        // are simply disabled there rather than guessing that "M" plus one is "2".
+        val current = floor?.toIntOrNull()
+        listOf("− Floor" to -1, "+ Floor" to 1).forEach { (label, delta) ->
+            OutlinedButton(
+                onClick = { onFloorChange(((current ?: 0) + delta).toString()) },
+                modifier = Modifier.weight(1f),
+                enabled = floor == null || current != null,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+            ) {
+                Text(label, maxLines = 1, style = MaterialTheme.typography.labelLarge)
+            }
+        }
+    }
+    if (floor != null && floor.toIntOrNull() == null) {
+        Text(
+            "\"$floor\" is not a number, so the steppers are off — type the next floor instead.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = typed,
+            onValueChange = { typed = it },
+            label = { Text("Floor (M, LL, B2, PH)") },
+            singleLine = true,
+            modifier = Modifier.weight(2f),
+        )
+        Button(
+            onClick = {
+                onFloorChange(typed.trim().ifBlank { null })
+                typed = ""
+            },
+            modifier = Modifier.weight(1f),
+        ) { Text("Set") }
     }
 }
 

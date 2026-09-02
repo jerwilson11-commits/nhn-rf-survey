@@ -62,6 +62,14 @@ object RecordingState {
     val areaLabel = MutableStateFlow<String?>(null)
 
     /**
+     * Current floor, applied to every sample until changed.
+     *
+     * Sticky like [areaLabel], and for the same reason: an operator marks the floor once on
+     * stepping out of the lift, not once per sample.
+     */
+    val floor = MutableStateFlow<String?>(null)
+
+    /**
      * Positions logged this session, paired with the serving KPI colour recorded there, for
      * drawing on the floorplan. Capped so a long session cannot grow this without bound — the
      * authoritative record is the CSV, this is only what the plan draws.
@@ -138,6 +146,7 @@ object RecordingState {
         error.value = null
         placedPositions.value = emptyList()
         areaLabel.value = null
+        floor.value = null
         liveTrack.value = emptyList()
         lastThroughput.value = null
         throughputBusy.value = false

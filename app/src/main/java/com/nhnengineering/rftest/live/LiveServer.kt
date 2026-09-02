@@ -43,7 +43,10 @@ import java.util.Locale
  * given up is real HTTP conformance, and that is acceptable for a socket that only ever talks to a
  * page this project also writes.
  */
-class LiveServer(private val port: Int = DEFAULT_PORT) {
+class LiveServer(
+    private val port: Int = DEFAULT_PORT,
+    private val tiles: TileProxy? = null,
+) {
 
     private var scope: CoroutineScope? = null
     private var server: ServerSocket? = null
@@ -101,20 +104,47 @@ class LiveServer(private val port: Int = DEFAULT_PORT) {
                     if (line.isNullOrEmpty()) break
                 }
                 val out = sock.getOutputStream()
-                when (path) {
-                    "/", "/index.html" -> respond(out, "text/html; charset=utf-8", LivePage.HTML)
-                    "/api/state" -> respond(out, "application/json", stateJson())
-                    else -> {
-                        val body = "not found"
-                        out.write(
-                            ("HTTP/1.1 404 Not Found\r\nContent-Length: ${body.length}\r\n" +
-                                "Connection: close\r\n\r\n$body").toByteArray()
-                        )
-                    }
+                when {
+                    path == "/" || path == "/index.html" ->
+                        respond(out, "text/html; charset=utf-8", LivePage.HTML)
+                    path == "/api/state" -> respond(out, "application/json", stateJson())
+                    path.startsWith("/tile/") -> serveTile(out, path)
+                    else -> notFound(out)
                 }
                 out.flush()
             }.onFailure { Log.w(TAG, "request failed", it) }
         }
+    }
+
+    private fun notFound(out: java.io.OutputStream) {
+        val body = "not found"
+        out.write(
+            ("HTTP/1.1 404 Not Found\r\nContent-Length: ${body.length}\r\n" +
+                "Connection: close\r\n\r\n$body").toByteArray()
+        )
+    }
+
+    /**
+     * `/tile/{z}/{x}/{y}` — satellite imagery, fetched by the phone and cached on it.
+     *
+     * A missing tile is a 404 and a blank square on the map, never an error that stops the page.
+     * Losing the base map mid-walk is an inconvenience; losing the position display is not.
+     */
+    private fun serveTile(out: java.io.OutputStream, path: String) {
+        val parts = path.removePrefix("/tile/").split('/')
+        val z = parts.getOrNull(0)?.toIntOrNull()
+        val x = parts.getOrNull(1)?.toIntOrNull()
+        val y = parts.getOrNull(2)?.toIntOrNull()
+        val data = if (z != null && x != null && y != null) tiles?.tile(z, x, y) else null
+        if (data == null) return notFound(out)
+
+        // Cached hard: a tile for a fixed z/x/y never changes, and re-requesting it would spend
+        // the survey's own radio on imagery.
+        val header = "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\n" +
+            "Content-Length: ${data.size}\r\nCache-Control: max-age=604800\r\n" +
+            "Connection: close\r\n\r\n"
+        out.write(header.toByteArray())
+        out.write(data)
     }
 
     private fun respond(out: java.io.OutputStream, contentType: String, body: String) {
@@ -154,6 +184,7 @@ class LiveServer(private val port: Int = DEFAULT_PORT) {
             append("\"elapsedMs\":${RecordingState.elapsedMs.value},")
             append("\"distanceM\":${num(RecordingState.distanceM.value)},")
             append("\"area\":${jsonString(RecordingState.areaLabel.value)},")
+            append("\"floor\":${jsonString(RecordingState.floor.value)},")
             append("\"throughputBusy\":${RecordingState.throughputBusy.value},")
 
             append("\"cell\":")

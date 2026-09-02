@@ -47,6 +47,46 @@ data class SpeedTestConfig(
 ) {
     val serverLabel: String
         get() = runCatching { URL(downloadUrl).host }.getOrNull() ?: downloadUrl
+
+    companion object {
+        /**
+         * Builds a whole configuration from the one URL the operator actually types.
+         *
+         * The upload and latency endpoints used to be derived inline in the dashboard with a
+         * Cloudflare-specific string edit (`substringBefore("/__down") + "/__up"`). Pointed at any
+         * other host that silently produced a nonsense upload URL, so the operator could set a
+         * server, watch downloads move to it, and never notice uploads were still failing or going
+         * somewhere else entirely.
+         *
+         * Two shapes are recognised, and anything unrecognised falls back to origin-relative
+         * `/up` and `/ping`, which is what NHN's own endpoint serves.
+         */
+        fun fromDownloadUrl(downloadUrl: String): SpeedTestConfig {
+            val base = downloadUrl.trim()
+            val defaults = SpeedTestConfig()
+            val url = runCatching { URL(base) }.getOrNull() ?: return defaults
+            val origin = buildString {
+                append(url.protocol).append("://").append(url.host)
+                if (url.port > 0) append(":").append(url.port)
+            }
+            return if (base.contains("__down")) {
+                // Cloudflare: /__down?bytes= and /__up, latency is a zero-byte download.
+                SpeedTestConfig(
+                    downloadUrl = base,
+                    uploadUrl = base.substringBefore("/__down") + "/__up",
+                    latencyUrl = base + "0",
+                    pingHost = url.host,
+                )
+            } else {
+                SpeedTestConfig(
+                    downloadUrl = base,
+                    uploadUrl = "$origin/up",
+                    latencyUrl = "$origin/ping",
+                    pingHost = url.host,
+                )
+            }
+        }
+    }
 }
 
 data class LatencyStats(

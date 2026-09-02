@@ -24,3 +24,6 @@ local.properties
 mcp-server/sessions/
 __pycache__/
 *.pyc
+
+# Local test artefacts from the throughput endpoint
+speedtest-server/*.log

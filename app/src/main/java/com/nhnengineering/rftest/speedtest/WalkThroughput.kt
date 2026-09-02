@@ -51,10 +51,10 @@ class WalkThroughput(private val config: Config = Config()) {
      */
     private fun tester(): SpeedTester {
         val base = RecordingState.speedTestBaseUrl.value?.takeIf { it.isNotBlank() }
-        val defaults = SpeedTestConfig()
+            ?: SpeedTestConfig().downloadUrl
+        val resolved = SpeedTestConfig.fromDownloadUrl(base)
         return SpeedTester(
-            SpeedTestConfig(
-                downloadUrl = base ?: defaults.downloadUrl,
+            resolved.copy(
                 testDurationMs = config.burstMs,
                 downloadStreams = config.downloadStreams,
                 uploadStreams = config.streams,

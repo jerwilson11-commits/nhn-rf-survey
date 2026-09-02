@@ -211,6 +211,16 @@ data class MeasurementSample(
      * since it is the more specific of the two.
      */
     val areaLabel: String? = null,
+    /**
+     * Floor the operator was on, as they entered it.
+     *
+     * A separate column rather than folded into [areaLabel], because floor is the axis a
+     * multi-storey survey is actually analysed along — "the third floor fails" is a finding, and
+     * "Indoor fails" is not. Kept as text, not a number: real buildings have M, LL, B2, PH and
+     * 4A, and a survey tool that cannot record the floor as the building names it will be argued
+     * with by the people who work there.
+     */
+    val floor: String? = null,
     /** Present only on the sample written when a speed test completes, so the throughput row
      *  carries the position and RF conditions the test actually ran under. */
     val throughput: ThroughputSample? = null,

@@ -148,7 +148,7 @@ private val THROUGHPUT_COLUMNS = listOf(
  * image filename, so an exported session and its floorplan can be handed over together.
  */
 private val INDOOR_COLUMNS = listOf(
-    "floorplan_id", "floorplan_x", "floorplan_y", "waypoint",
+    "floorplan_id", "floorplan_x", "floorplan_y", "waypoint", "floor",
 )
 
 private val TRAILING_COLUMNS = listOf("note")
@@ -277,6 +277,7 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += ind?.let { String.format(Locale.US, "%.4f", it.yNorm) }
     // The indoor label is the more specific of the two, so it wins where both are set.
     cells += ind?.label ?: areaLabel
+    cells += floor
 
     cells += note
 

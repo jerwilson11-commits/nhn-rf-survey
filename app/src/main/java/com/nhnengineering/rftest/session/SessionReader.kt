@@ -66,6 +66,8 @@ data class TrackPoint(
     val floorplanX: Float?,
     val floorplanY: Float?,
     val waypoint: String?,
+    /** Floor the operator recorded for this sample, verbatim as the building names it. */
+    val floor: String? = null,
     /** Serving-cell PCI, whichever radio was serving. */
     val servingPci: Int? = null,
     /**
@@ -99,6 +101,7 @@ data class SessionSummary(
     val floorplanIds: List<String> = emptyList(),
     val indoorPointCount: Int = 0,
     val waypoints: List<String> = emptyList(),
+    val floors: List<String> = emptyList(),
 ) {
     val hasTrack: Boolean get() = pointCount >= 2 && (maxLat > minLat || maxLon > minLon)
 
@@ -147,6 +150,7 @@ object SessionReader {
             val iNrPci = idx("nr_pci"); val iLtePci = idx("lte_pci")
             val iNrArfcn = idx("nr_arfcn"); val iEarfcn = idx("lte_earfcn")
             val iCells = idx("cell_neighbors_json")
+            val iFloor = idx("floor")
             val iFp = idx("floorplan_id"); val iFpX = idx("floorplan_x")
             val iFpY = idx("floorplan_y"); val iWp = idx("waypoint")
             if (iLat == null || iLon == null) return@withContext null
@@ -222,6 +226,7 @@ object SessionReader {
                     floorplanX = fpX,
                     floorplanY = fpY,
                     waypoint = s(iWp),
+                    floor = s(iFloor),
                     servingPci = servingPci,
                     cells = cells,
                 )
@@ -249,6 +254,7 @@ object SessionReader {
                 floorplanIds = indoor.mapNotNull { it.floorplanId }.distinct(),
                 indoorPointCount = indoor.size,
                 waypoints = points.mapNotNull { it.waypoint }.distinct(),
+                floors = points.mapNotNull { it.floor }.distinct(),
             )
             summary to points
         }

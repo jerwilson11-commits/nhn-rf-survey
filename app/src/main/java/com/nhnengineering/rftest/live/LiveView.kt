@@ -1,6 +1,8 @@
 package com.nhnengineering.rftest.live
 
+import android.content.Context
 import com.nhnengineering.rftest.service.RecordingState
+import java.io.File
 
 /**
  * Process-scoped owner of the [LiveServer].
@@ -19,14 +21,21 @@ import com.nhnengineering.rftest.service.RecordingState
 object LiveView {
 
     private var server: LiveServer? = null
+    private var tiles: TileProxy? = null
 
     val running: Boolean get() = server?.running == true
 
+    /** Bytes of satellite imagery cached on the phone, so the cost is visible rather than implied. */
+    fun cacheBytes(): Long = tiles?.cacheBytes() ?: 0L
+
+    fun clearTileCache() = tiles?.clearCache() ?: Unit
+
     /** Idempotent: enabling twice does not start a second server. */
-    fun enable() {
+    fun enable(context: Context) {
         if (running) return
         RecordingState.liveServerError.value = null
-        server = LiveServer().also { it.start() }
+        tiles = TileProxy(File(context.cacheDir, "tiles"))
+        server = LiveServer(tiles = tiles).also { it.start() }
         RecordingState.liveViewEnabled.value = true
     }
 
@@ -36,5 +45,5 @@ object LiveView {
         RecordingState.liveViewEnabled.value = false
     }
 
-    fun set(enabled: Boolean) = if (enabled) enable() else disable()
+    fun set(context: Context, enabled: Boolean) = if (enabled) enable(context) else disable()
 }
