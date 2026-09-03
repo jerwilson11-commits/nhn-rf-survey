@@ -371,6 +371,68 @@ object PdfReportGenerator {
             c.gap(); c.rule()
         }
 
+        // ---- Stronger neighbours ------------------------------------------
+        val ho = SessionStats.strongerNeighbours(points)
+        if (ho.neighbours.isNotEmpty()) {
+            c.ensure(150f)
+            c.text("Cells stronger than the serving cell", c.h2)
+            c.para(
+                "Where a neighbour was at least ${ho.marginDb} dB above the cell actually serving " +
+                    "the handset. A phone shows its serving cell and its bars; it does not say a " +
+                    "better cell was available and the network stayed put. Brief overshoots are " +
+                    "ordinary fading -- runs of several seconds are not.",
+            )
+            c.gap()
+            c.kv("Samples analysed", ho.analysed.toString())
+            c.kv(
+                "With a stronger neighbour",
+                String.format(Locale.US, "%d  (%.1f %%)", ho.samplesWithStronger, ho.sharePct),
+            )
+            c.gap()
+            c.text(
+                String.format(
+                    Locale.US, "%-6s %-6s %-8s %8s %7s %7s %-22s",
+                    "PCI", "Band", "Channel", "Samples", "Max dB", "Run", "Reading",
+                ),
+                c.monoBold,
+            )
+            for (n in ho.neighbours.take(12)) {
+                c.ensure(LINE * 2)
+                val reading = when {
+                    n.samePciAsServing -> "same site, aggregation"
+                    n.likelyHandoverIssue -> "same band, sustained"
+                    n.interBand && n.sustained -> "other band, likely policy"
+                    else -> "brief, fading"
+                }
+                c.text(
+                    String.format(
+                        Locale.US, "%-6d %-6s %-8s %8d %7d %7d %-22s",
+                        n.pci, n.band?.take(6) ?: "—", n.channel?.toString() ?: "—",
+                        n.samples, n.maxMarginDb, n.longestRunSamples, reading,
+                    ),
+                    c.mono,
+                )
+            }
+            c.gap(4f)
+            if (ho.hasLikelyHandoverIssue) {
+                c.para(
+                    "One or more cells on the same band as the server stayed stronger for several " +
+                        "seconds. That has a short list of causes and each is actionable: a " +
+                        "missing neighbour relation, handover hysteresis or time-to-trigger set " +
+                        "too high, or on an in-building system a sector assignment that does not " +
+                        "match the floor plan.",
+                )
+            }
+            c.para(
+                "Cells on a different band are reported but not flagged: carriers deliberately " +
+                    "hold devices on mid band for capacity even where a low-band cell is stronger, " +
+                    "so more signal there is not necessarily a better connection. A neighbour " +
+                    "sharing the serving cell's PCI on another channel is almost always the same " +
+                    "site's second carrier seen through aggregation, not a handover candidate.",
+            )
+            c.gap(); c.rule()
+        }
+
         // ---- Coverage holes -----------------------------------------------
         c.ensure(120f)
         c.text("Coverage holes", c.h2)

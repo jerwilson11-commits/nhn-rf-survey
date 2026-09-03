@@ -472,6 +472,188 @@ object SessionStats {
         return if (a > 0 && b > a) (b - a) / 1000.0 else null
     }
 
+    // ---- Stronger neighbours -----------------------------------------------
+
+    /** One cell that was, at times, stronger than the cell actually serving the handset. */
+    data class StrongerNeighbour(
+        val pci: Int,
+        val channel: Int?,
+        val band: String?,
+        /** Samples in which this cell exceeded the serving cell by the margin. */
+        val samples: Int,
+        val sharePct: Double,
+        val maxMarginDb: Int,
+        val medianMarginDb: Int,
+        /** Longest unbroken run, in samples — the number that separates fading from a fault. */
+        val longestRunSamples: Int,
+        val longestRunSeconds: Double?,
+        /**
+         * True when this cell was on a different band from the serving cell.
+         *
+         * The discriminator that decides how the finding should be read. A **different band** —
+         * low band beating mid band, say — is usually deliberate: carriers hold devices on mid
+         * band for capacity even when a low-band cell is stronger, because more signal on a
+         * narrower, busier carrier is not a better connection. That is policy, not a fault.
+         *
+         * The **same band** is the one worth chasing. A neighbour on the same carrier beating the
+         * server for several seconds should have triggered a handover, and did not.
+         */
+        val interBand: Boolean,
+        /**
+         * True when this cell reports the serving cell's PCI on a different channel.
+         *
+         * Almost always the same site's other carrier seen through carrier aggregation, not a
+         * handover candidate at all. Reporting it as a missed handover would send an engineer
+         * looking for a neighbour relation between a cell and itself.
+         */
+        val samePciAsServing: Boolean,
+    ) {
+        /**
+         * True when the overshoot lasted long enough that ordinary fading does not explain it.
+         *
+         * A neighbour beating the server for a sample or two is normal — multipath does that
+         * constantly. Sustained for several seconds while the handset stays put is a different
+         * statement: the network had a better cell available and did not use it.
+         */
+        val sustained: Boolean
+            get() = longestRunSamples >= SUSTAINED_RUN_SAMPLES && !samePciAsServing
+
+        /**
+         * The finding worth acting on: same band, sustained, and not the serving cell's own
+         * other carrier. Everything else is policy or aggregation.
+         */
+        val likelyHandoverIssue: Boolean get() = sustained && !interBand
+    }
+
+    data class HandoverFindings(
+        /** Samples where the serving level and at least one fresh neighbour level were both known. */
+        val analysed: Int,
+        val samplesWithStronger: Int,
+        val sharePct: Double,
+        val neighbours: List<StrongerNeighbour>,
+        val marginDb: Int,
+    ) {
+        val hasSustained: Boolean get() = neighbours.any { it.sustained }
+        val hasLikelyHandoverIssue: Boolean get() = neighbours.any { it.likelyHandoverIssue }
+    }
+
+    /** Below this many consecutive samples, a stronger neighbour is fading rather than a finding. */
+    const val SUSTAINED_RUN_SAMPLES = 5
+
+    /**
+     * Finds cells that were stronger than the serving cell.
+     *
+     * This is the analysis that tells an engineer something the handset display does not. A phone
+     * shows its serving cell and its bars; it does not say *there was a better cell available and
+     * the network stayed on this one*. Sustained, that has a short list of causes and every one of
+     * them is actionable:
+     *
+     * - a **missing neighbour relation**, so the network cannot hand over to a cell it can see;
+     * - **handover hysteresis or time-to-trigger set too high**, so it hands over late;
+     * - on an in-building system, a **sector or donor assignment that does not match the floor
+     *   plan**, which is a commissioning error rather than a design one.
+     *
+     * None of those is visible in a coverage plot, and all of them show up here.
+     *
+     * @param marginDb how much stronger a neighbour must be before it counts. A neighbour 1 dB up
+     *   is inside measurement noise; the default of 3 dB is the smallest difference worth
+     *   attributing to geometry rather than to the receiver.
+     * @param maxAgeMs freshness limit, defaulting to this sample's own report — a retained
+     *   neighbour compared against a current serving level compares two different instants.
+     */
+    fun strongerNeighbours(
+        points: List<TrackPoint>,
+        marginDb: Int = 3,
+        maxAgeMs: Long = 0L,
+    ): HandoverFindings {
+        data class Key(val pci: Int, val channel: Int?)
+
+        val margins = mutableMapOf<Key, MutableList<Int>>()
+        val bands = mutableMapOf<Key, String>()
+        val interBandSeen = mutableMapOf<Key, Boolean>()
+        val samePciSeen = mutableMapOf<Key, Boolean>()
+        val runs = mutableMapOf<Key, Int>()
+        val bestRun = mutableMapOf<Key, Int>()
+        val bestRunSeconds = mutableMapOf<Key, Double>()
+        val runStartTime = mutableMapOf<Key, Long>()
+
+        var analysed = 0
+        var withStronger = 0
+
+        for (p in points) {
+            val servingCell = p.cells.firstOrNull { it.serving }
+            val serving = servingCell?.rsrpDbm
+            val fresh = p.cells.filter {
+                !it.serving && it.rsrpDbm != null && it.pci != null && it.ageMs <= maxAgeMs
+            }
+            if (serving == null || fresh.isEmpty()) {
+                // A sample that cannot be judged breaks every run rather than silently extending
+                // it, so a gap in the data is never reported as continuous evidence.
+                runs.keys.toList().forEach { runs[it] = 0 }
+                continue
+            }
+            analysed++
+
+            val beating = fresh.filter { it.rsrpDbm!! - serving >= marginDb }
+            if (beating.isNotEmpty()) withStronger++
+
+            val beatingKeys = beating.map { Key(it.pci!!, it.channel) }.toSet()
+            for (c in beating) {
+                val key = Key(c.pci!!, c.channel)
+                margins.getOrPut(key) { mutableListOf() } += c.rsrpDbm!! - serving
+                c.band?.let { bands.putIfAbsent(key, it) }
+                if (c.band != null && servingCell.band != null && c.band != servingCell.band) {
+                    interBandSeen[key] = true
+                }
+                if (servingCell.pci != null && c.pci == servingCell.pci &&
+                    c.channel != servingCell.channel
+                ) {
+                    samePciSeen[key] = true
+                }
+                val run = (runs[key] ?: 0) + 1
+                runs[key] = run
+                if (run == 1) runStartTime[key] = p.timestampUtcMillis
+                if (run > (bestRun[key] ?: 0)) {
+                    bestRun[key] = run
+                    val start = runStartTime[key]
+                    if (start != null && p.timestampUtcMillis > start) {
+                        bestRunSeconds[key] = (p.timestampUtcMillis - start) / 1000.0
+                    }
+                }
+            }
+            // Any cell not beating the server this sample has its run broken.
+            runs.keys.filter { it !in beatingKeys }.forEach { runs[it] = 0 }
+        }
+
+        val list = margins.map { (key, values) ->
+            val sorted = values.sorted()
+            StrongerNeighbour(
+                pci = key.pci,
+                channel = key.channel,
+                band = bands[key],
+                samples = values.size,
+                sharePct = if (analysed > 0) 100.0 * values.size / analysed else 0.0,
+                maxMarginDb = sorted.last(),
+                medianMarginDb = sorted[(sorted.size - 1) / 2],
+                longestRunSamples = bestRun[key] ?: 0,
+                longestRunSeconds = bestRunSeconds[key],
+                interBand = interBandSeen[key] == true,
+                samePciAsServing = samePciSeen[key] == true,
+            )
+        }.sortedWith(
+            compareByDescending<StrongerNeighbour> { it.longestRunSamples }
+                .thenByDescending { it.samples },
+        )
+
+        return HandoverFindings(
+            analysed = analysed,
+            samplesWithStronger = withStronger,
+            sharePct = if (analysed > 0) 100.0 * withStronger / analysed else 0.0,
+            neighbours = list,
+            marginDb = marginDb,
+        )
+    }
+
     /** One-line-per-session statistics, for anyone who wants the numbers in a spreadsheet. */
     fun summaryCsv(summary: SessionSummary, report: Report): String {
         val header = listOf(
