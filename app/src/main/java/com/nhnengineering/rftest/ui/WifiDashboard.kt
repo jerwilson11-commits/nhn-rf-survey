@@ -84,6 +84,8 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val walkThroughput by RecordingState.walkThroughputEnabled.collectAsState()
     val liveView by RecordingState.liveViewEnabled.collectAsState()
     val liveViewError by RecordingState.liveServerError.collectAsState()
+    val lastThroughput by RecordingState.lastThroughput.collectAsState()
+    val throughputBusy by RecordingState.throughputBusy.collectAsState()
     val thresholds by RecordingState.thresholds.collectAsState()
     val serviceError by RecordingState.error.collectAsState()
 
@@ -97,6 +99,9 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     var sessionName by remember { mutableStateOf("") }
 
     var speedServer by remember { mutableStateOf(SpeedTestConfig().downloadUrl) }
+    // Setup starts open before a session and closed during one: the things in it are chosen once,
+    // and every pixel it occupies mid-walk is a pixel not showing a measurement.
+    var setupExpanded by remember { mutableStateOf(true) }
     // Published so the walk bursts use the same endpoint the operator typed here.
     LaunchedEffect(speedServer) { RecordingState.speedTestBaseUrl.value = speedServer }
     var speedRunning by remember { mutableStateOf(false) }
@@ -132,6 +137,8 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
         }
     }
 
+    LaunchedEffect(recording) { setupExpanded = !recording }
+
     val wifi = if (recording) serviceWifi else localWifi
     val fix = if (recording) serviceFix else localFix
     val cell = if (recording) serviceCell else localCell
@@ -143,30 +150,67 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(vertical = 12.dp),
     ) {
+        // ---- Measurement surface, first and unscrolled --------------------
+        //
+        // Order is deliberate and reverses the original: what is being measured, then the controls
+        // used while measuring, then setup. The first version put three cards of configuration
+        // above the cellular reading, so the numbers the app exists to show sat below the fold on
+        // every screenshot taken during development.
         item {
-            RecorderPanel(
+            StatusStrip(
+                recording = recording,
+                elapsedMs = elapsedMs,
+                rowCount = rowCount,
+                area = areaLabel,
+                floor = floor,
+            )
+        }
+        item { LevelBar(cell, wifi) }
+        item { HeroKpi(cell, wifi) }
+        item { KpiGrid(cell, wifi, fix) }
+        item { ThroughputStrip(lastThroughput, throughputBusy) }
+
+        if (recording) {
+            item {
+                WalkControls(
+                    area = areaLabel,
+                    onArea = { RecordingState.areaLabel.value = it },
+                    floor = floor,
+                    onFloor = { RecordingState.floor.value = it },
+                )
+            }
+        }
+
+        item {
+            RecordButton(
+                recording = recording,
+                onStart = { RecordingService.start(context, sessionName) },
+                onStop = { RecordingService.stop(context) },
+            )
+        }
+
+        // ---- Setup, collapsed during a session ----------------------------
+        item {
+            SetupPanel(
+                expanded = setupExpanded,
+                onToggle = { setupExpanded = !setupExpanded },
                 recording = recording,
                 sessionName = sessionName,
                 onSessionNameChange = { sessionName = it },
-                rowCount = rowCount,
-                elapsedMs = elapsedMs,
                 distanceM = distanceM,
                 fixesWithVelocity = withVel,
                 fixesWithoutVelocity = withoutVel,
                 lastFile = lastFile,
-                areaLabel = areaLabel,
-                onAreaLabelChange = { RecordingState.areaLabel.value = it },
-                floor = floor,
-                onFloorChange = { RecordingState.floor.value = it },
+                onArea = { RecordingState.areaLabel.value = it },
+                onFloor = { RecordingState.floor.value = it },
                 walkThroughput = walkThroughput,
                 onWalkThroughputChange = { RecordingState.walkThroughputEnabled.value = it },
                 liveView = liveView,
                 onLiveViewChange = { com.nhnengineering.rftest.live.LiveView.set(context, it) },
                 liveViewError = liveViewError,
-                onStart = { RecordingService.start(context, sessionName) },
-                onStop = { RecordingService.stop(context) },
             )
         }
+
         serviceError?.let { err ->
             item {
                 Card(Modifier.fillMaxWidth()) {
