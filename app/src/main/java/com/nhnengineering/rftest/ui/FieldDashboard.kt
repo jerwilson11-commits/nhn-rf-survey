@@ -1,6 +1,7 @@
 package com.nhnengineering.rftest.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +54,60 @@ import java.util.Locale
  */
 
 /** Compact recording state. One line, always visible, never scrolled away. */
+/**
+ * Says, unmissably, that nothing is being saved.
+ *
+ * ## Why this exists
+ *
+ * Two comparison walks in a row were lost because the recorder was never started. Nothing
+ * malfunctioned either time: the app sampled, the live readings updated, the verdict was correct,
+ * and every number on screen was real. It simply wrote none of them to a session, and the only
+ * thing saying so was a small IDLE chip that scrolls off the top of the screen.
+ *
+ * That is the failure mode worth designing against, because it is silent and it is only detectable
+ * after the walk is over and cannot be repeated. A recording session announces itself with a
+ * notification; **not** recording announced nothing, and the absence of a signal is not a signal.
+ *
+ * So this is deliberately loud, deliberately in the measurement column where the operator is
+ * already looking, and deliberately tappable — the fix is one press away from the warning rather
+ * than back up at a button that is off-screen during a walk.
+ */
+@Composable
+fun NotRecordingBanner(onStart: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF8A5300))
+            .clickable(onClick = onStart)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = "NOT RECORDING",
+                fontWeight = FontWeight.Bold,
+                fontSize = 17.sp,
+                color = Color.White,
+            )
+            Text(
+                // States the consequence rather than the state. "Idle" is a status; "nothing is
+                // being saved" is what the operator actually needs to know at a glance.
+                text = "Nothing is being saved",
+                fontSize = 13.sp,
+                color = Color(0xFFFFE0B2),
+            )
+        }
+        Text(
+            text = "START",
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp,
+            color = Color.White,
+        )
+    }
+}
+
 @Composable
 fun StatusStrip(
     recording: Boolean,

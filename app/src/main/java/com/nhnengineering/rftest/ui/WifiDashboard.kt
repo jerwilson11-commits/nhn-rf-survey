@@ -181,6 +181,9 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 floor = floor,
             )
         }
+        if (!recording) {
+            item { NotRecordingBanner(onStart = { RecordingService.start(context, sessionName) }) }
+        }
         item { LevelBar(cell, wifi) }
         item { HeroKpi(cell, wifi) }
         item {
