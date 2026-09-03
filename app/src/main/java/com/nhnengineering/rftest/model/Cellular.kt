@@ -142,6 +142,18 @@ data class CellularSample(
     val nr: NrCell?,
     val neighbors: List<NeighborCell>,
     /**
+     * Bandwidth in kHz of every currently active carrier, from `ServiceState.getCellBandwidths()`.
+     *
+     * A list rather than a single value because aggregation is the normal case: two entries means
+     * two aggregated carriers, which is a fact about the deployment worth recording. Observed on
+     * T-Mobile n41 as 100 MHz plus 90 MHz, independently corroborating the SSB analysis that found
+     * two SSB positions sharing one PCI plan.
+     *
+     * Empty when the platform declines to say, which is not the same as a single carrier — so it
+     * is empty rather than defaulted to anything.
+     */
+    val cellBandwidthsKhz: List<Int> = emptyList(),
+    /**
      * True when the app lacks READ_PHONE_STATE, so registration and NR state could not be read.
      * Surfaced rather than left as silent nulls — an empty field that means "not permitted" reads
      * identically to one meaning "no coverage", and only one of those is a finding.

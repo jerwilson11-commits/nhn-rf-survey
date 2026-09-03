@@ -115,6 +115,7 @@ class LocationCollector(context: Context) {
         speedMps = if (hasSpeed()) speed else null,
         bearingDeg = if (hasBearing()) bearing else null,
         fixTimeUtcMillis = time,
+        fixAgeMs = elapsedRealtimeAgeMillis.takeIf { it >= 0 },
         provider = provider ?: "unknown",
     )
 }

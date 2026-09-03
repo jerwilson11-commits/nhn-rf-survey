@@ -39,7 +39,11 @@ class CsvSchemaTest {
         sessionId = "test",
         sequence = 1,
         timestampUtcMillis = 1_756_000_000_000,
-        location = GeoPoint(26.05, -80.13, 3.0, 4f, 1.2f, 90f, 1_756_000_000_000, "gps"),
+        location = GeoPoint(
+            latitudeDeg = 26.05, longitudeDeg = -80.13, altitudeM = 3.0, accuracyM = 4f,
+            speedMps = 1.2f, bearingDeg = 90f, fixTimeUtcMillis = 1_756_000_000_000,
+            fixAgeMs = 850, provider = "gps",
+        ),
         wifi = WifiSample(
             ssid = "TestAP", bssid = "aa:bb:cc:dd:ee:11", rssiDbm = -55,
             frequencyMhz = 5805, channel = 161, band = WifiBand.BAND_5,
@@ -71,8 +75,10 @@ class CsvSchemaTest {
 
     @Test
     fun `schema is the expected width`() {
-        assertEquals(75, CSV_COLUMN_COUNT)
-        assertEquals(75, CSV_HEADER.split(",").size)
+        // 75 until 2026-09-03, when gps_fix_age_ms and cell_bandwidths_khz were added after
+        // reading a Network Survey log that carried both and finding we carried neither.
+        assertEquals(77, CSV_COLUMN_COUNT)
+        assertEquals(77, CSV_HEADER.split(",").size)
     }
 
     @Test

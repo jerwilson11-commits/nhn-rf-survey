@@ -27,6 +27,18 @@ data class GeoPoint(
     val speedMps: Float?,
     val bearingDeg: Float?,
     val fixTimeUtcMillis: Long,
+    /**
+     * How old this fix was when it was attached to the sample, in milliseconds.
+     *
+     * Recorded because accuracy and age are different questions and only one of them was being
+     * asked. A fix can report three-metre accuracy and still be sixteen seconds old, which at
+     * walking pace is roughly twenty metres of position error on a sample that looks perfectly
+     * good. Network Survey logs this and we did not; the omission was found by reading their log.
+     *
+     * Measured against `SystemClock.elapsedRealtime()` rather than wall-clock, so an NTP
+     * correction mid-walk cannot produce a negative age.
+     */
+    val fixAgeMs: Long?,
     /** Which provider produced this fix — "gps" or "fused". Recorded because they are not
      *  equivalent: a fused fix may be smoothed or derived from Wi-Fi/cell, which is fine for
      *  navigation and misleading in a drive test. The log should say which one it was. */

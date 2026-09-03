@@ -99,7 +99,8 @@ class SessionCsvWriter private constructor(
 private val CORE_COLUMNS = listOf("timestamp_utc", "session_id", "seq")
 
 private val LOCATION_COLUMNS = listOf(
-    "lat", "lon", "alt_m", "gps_accuracy_m", "speed_mps", "bearing_deg", "gps_provider",
+    "lat", "lon", "alt_m", "gps_accuracy_m", "gps_fix_age_ms", "speed_mps", "bearing_deg",
+    "gps_provider",
 )
 
 /**
@@ -114,6 +115,7 @@ private val CELLULAR_COLUMNS = listOf(
     "lte_rsrp", "lte_rsrq", "lte_rssnr", "lte_rssi", "lte_cqi", "lte_ta",
     "nr_nci", "nr_pci", "nr_tac", "nr_arfcn", "nr_band",
     "nr_ss_rsrp", "nr_ss_rsrq", "nr_ss_sinr", "nr_csi_rsrp", "nr_csi_rsrq", "nr_csi_sinr",
+    "cell_bandwidths_khz",
     "cell_neighbor_count", "cell_neighbors_json",
 )
 
@@ -195,6 +197,7 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += g?.longitudeDeg?.let { String.format(Locale.US, "%.6f", it) }
     cells += g?.altitudeM?.let { String.format(Locale.US, "%.1f", it) }
     cells += g?.accuracyM?.let { String.format(Locale.US, "%.1f", it) }
+    cells += g?.fixAgeMs?.toString()
     cells += g?.speedMps?.let { String.format(Locale.US, "%.2f", it) }
     cells += g?.bearingDeg?.let { String.format(Locale.US, "%.1f", it) }
     cells += g?.provider
@@ -239,6 +242,9 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += nr?.csiRsrpDbm?.toString()
     cells += nr?.csiRsrqDb?.toString()
     cells += nr?.csiSinrDb?.toString()
+    // Semicolon-joined, not comma, for the obvious reason. Empty list emits an empty field
+    // rather than "0" -- the platform declining to report is not a bandwidth of zero.
+    cells += c?.cellBandwidthsKhz?.takeIf { it.isNotEmpty() }?.joinToString(";")
     cells += c?.neighbors?.size?.toString()
     cells += c?.neighbors?.let { cellNeighborsToJson(it) }
 

@@ -223,6 +223,7 @@ class CellularCollector(context: Context) {
             lte = lte,
             nr = nr,
             neighbors = neighbors,
+            cellBandwidthsKhz = cellBandwidthsKhz(),
             permissionLimited = !hasPhoneState,
         )
     }
@@ -397,6 +398,19 @@ class CellularCollector(context: Context) {
      * Applied to the **registered cell only**. Neighbours legitimately have no SINR, and borrowing
      * the serving cell's value for them would fabricate a measurement.
      */
+    /**
+     * Bandwidth of every active carrier, in kHz.
+     *
+     * A pull rather than a `ServiceStateListener`, for two reasons. The first is the rule this
+     * project keeps relearning: a push cache answers "what did I last hear", a pull answers "what
+     * is true now". The second is scar tissue -- every listener shares one `TelephonyCallback`
+     * registration, and adding one that throws takes the working ones down with it silently. A
+     * `runCatching` around a pull can fail alone.
+     */
+    private fun cellBandwidthsKhz(): List<Int> = runCatching {
+        tm?.serviceState?.cellBandwidths?.filter { it > 0 }.orEmpty()
+    }.getOrDefault(emptyList())
+
     private fun signalStrengthNow(): SignalStrength? = runCatching {
         // PULLED at sample time, not taken from the callback cache.
         //
