@@ -53,6 +53,14 @@ object GeoPackageWriter {
         // mandatory rows and a duplicate contents entry.
         if (out.exists()) out.delete()
 
+        // The rollback journal has to go with it. Deleting the database but leaving a journal from
+        // a previous write means the next open finds what looks like a hot journal beside a new
+        // database and tries to roll it back into pages that have nothing to do with it. Left over
+        // from an interrupted export this is the one way this writer could produce a corrupt file
+        // rather than no file.
+        val journal = File(out.parentFile, out.name + "-journal")
+        if (journal.exists()) journal.delete()
+
         val located = points.filter { it.hasGpsPosition }
         val db = SQLiteDatabase.openOrCreateDatabase(out, null)
         try {
@@ -142,6 +150,24 @@ object GeoPackageWriter {
         } finally {
             runCatching { db.close() }
         }
+
+        // SQLiteDatabase creates its file owner-only (0600), unlike an ordinary file write, which
+        // inherits the directory's group. Verified on device: the exported .gpkg came out
+        // -rw------- and could not be read by adb, by run-as, or by anything except this process.
+        // Sharing still worked, because the app reads its own file -- but a survey file that
+        // cannot be copied off the handset is most of the way to useless, and the failure is
+        // silent. The directory is app-scoped already, so relaxing the mode gives nothing away.
+        runCatching {
+            out.setReadable(true, false)
+            out.setWritable(true, true)
+        }
+
+        // Android leaves a zero-length journal behind after a clean close. It is harmless -- SQLite
+        // treats an empty journal as no journal -- but it sits in the folder the operator browses
+        // to find the export, and an unexplained file next to a deliverable invites a support
+        // question. Removing it also means the guard above has nothing to find next time.
+        runCatching { if (journal.exists()) journal.delete() }
+
         located.size
     }
 }
