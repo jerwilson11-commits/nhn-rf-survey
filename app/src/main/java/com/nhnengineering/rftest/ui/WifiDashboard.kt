@@ -20,6 +20,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -42,12 +43,17 @@ import com.nhnengineering.rftest.model.ThroughputSample
 import com.nhnengineering.rftest.model.WifiNeighbor
 import com.nhnengineering.rftest.model.WifiSample
 import com.nhnengineering.rftest.service.RecordingService
+import com.nhnengineering.rftest.model.Verdict
 import com.nhnengineering.rftest.service.RecordingState
 import com.nhnengineering.rftest.speedtest.SpeedTestConfig
 import com.nhnengineering.rftest.speedtest.SpeedTester
 import com.nhnengineering.rftest.wifi.WifiCollector
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/** Ten seconds at the sampling interval — long enough to average out jitter, short enough to
+ *  stand still for. */
+private const val SPOT_CHECK_SAMPLES = 10
 
 private const val SAMPLE_INTERVAL_MS = 1_000L
 
@@ -102,6 +108,12 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     // Setup starts open before a session and closed during one: the things in it are chosen once,
     // and every pixel it occupies mid-walk is a pixel not showing a measurement.
     var setupExpanded by remember { mutableStateOf(true) }
+
+    // Spot check state. Lives here rather than in the service because it is not a recording: it
+    // starts, samples, answers and is gone, and nothing about it should outlive the screen.
+    var spotRunning by remember { mutableStateOf(false) }
+    var spotProgress by remember { mutableFloatStateOf(0f) }
+    var spotResult by remember { mutableStateOf<com.nhnengineering.rftest.spot.SpotResult?>(null) }
     // Published so the walk bursts use the same endpoint the operator typed here.
     LaunchedEffect(speedServer) { RecordingState.speedTestBaseUrl.value = speedServer }
     var speedRunning by remember { mutableStateOf(false) }
@@ -167,6 +179,19 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
         }
         item { LevelBar(cell, wifi) }
         item { HeroKpi(cell, wifi) }
+        item {
+            // Computed from the live sample rather than stored: it is a reading of now.
+            VerdictLine(
+                if (cell?.servingRsrpDbm != null || wifi == null) {
+                    Verdict.cellular(
+                        cell?.servingRsrpDbm,
+                        cell?.nr?.ssSinrDb ?: cell?.lte?.rssnrDb,
+                    )
+                } else {
+                    Verdict.wifi(wifi.rssiDbm, wifi.coChannelCount)
+                },
+            )
+        }
         item { KpiGrid(cell, wifi, fix) }
         item { ThroughputStrip(lastThroughput, throughputBusy) }
 
@@ -177,6 +202,34 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                     onArea = { RecordingState.areaLabel.value = it },
                     floor = floor,
                     onFloor = { RecordingState.floor.value = it },
+                )
+            }
+        }
+
+        if (!recording) {
+            item {
+                SpotCheckCard(
+                    running = spotRunning,
+                    progress = spotProgress,
+                    result = spotResult,
+                    onClear = { spotResult = null },
+                    onRun = {
+                        spotResult = null
+                        spotRunning = true
+                        scope.launch {
+                            val acc = com.nhnengineering.rftest.spot.SpotCheckAccumulator()
+                            acc.start(System.currentTimeMillis())
+                            val steps = SPOT_CHECK_SAMPLES
+                            for (i in 0 until steps) {
+                                acc.add(cellular.snapshot(), collector.snapshot())
+                                spotProgress = (i + 1f) / steps
+                                delay(SAMPLE_INTERVAL_MS)
+                            }
+                            spotResult = acc.result(System.currentTimeMillis())
+                            spotRunning = false
+                            spotProgress = 0f
+                        }
+                    },
                 )
             }
         }
