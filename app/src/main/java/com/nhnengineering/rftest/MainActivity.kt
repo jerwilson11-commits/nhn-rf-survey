@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.nhnengineering.rftest.ui.FloorplanScreen
 import com.nhnengineering.rftest.ui.MapScreen
+import com.nhnengineering.rftest.ui.ProfileScreen
 import com.nhnengineering.rftest.ui.SessionsScreen
 import com.nhnengineering.rftest.ui.WifiDashboard
 import com.nhnengineering.rftest.ui.theme.RFTestAppTheme
@@ -77,8 +78,9 @@ private fun hasAllPermissions(context: Context): Boolean = REQUIRED_PERMISSIONS.
 private enum class Tab(val label: String) {
     LIVE("Live"),
     MAP("Map"),
-    FLOORPLAN("Floorplan"),
-    SESSIONS("Sessions"),
+    FLOORPLAN("Plan"),
+    SESSIONS("Saved"),
+    PROFILES("Config"),
 }
 
 class MainActivity : ComponentActivity() {
@@ -157,6 +159,7 @@ private fun RfTestApp() {
             tab == Tab.LIVE -> WifiDashboard(modifier = Modifier.padding(innerPadding))
             tab == Tab.MAP -> MapScreen(modifier = Modifier.padding(innerPadding))
             tab == Tab.FLOORPLAN -> FloorplanScreen(modifier = Modifier.padding(innerPadding))
+            tab == Tab.PROFILES -> ProfileScreen(modifier = Modifier.padding(innerPadding))
             else -> SessionsScreen(modifier = Modifier.padding(innerPadding))
         }
     }
