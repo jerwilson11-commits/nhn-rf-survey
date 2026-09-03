@@ -114,6 +114,10 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     var spotRunning by remember { mutableStateOf(false) }
     var spotProgress by remember { mutableFloatStateOf(0f) }
     var spotResult by remember { mutableStateOf<com.nhnengineering.rftest.spot.SpotResult?>(null) }
+
+    // Steadies the displayed conclusion only. Nothing here touches what is written to the CSV --
+    // the analysis depends on the real distribution, outliers included.
+    val stabiliser = remember { com.nhnengineering.rftest.model.VerdictStabiliser() }
     // Published so the walk bursts use the same endpoint the operator typed here.
     LaunchedEffect(speedServer) { RecordingState.speedTestBaseUrl.value = speedServer }
     var speedRunning by remember { mutableStateOf(false) }
@@ -180,17 +184,15 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
         item { LevelBar(cell, wifi) }
         item { HeroKpi(cell, wifi) }
         item {
-            // Computed from the live sample rather than stored: it is a reading of now.
-            VerdictLine(
-                if (cell?.servingRsrpDbm != null || wifi == null) {
-                    Verdict.cellular(
-                        cell?.servingRsrpDbm,
-                        cell?.nr?.ssSinrDb ?: cell?.lte?.rssnrDb,
-                    )
-                } else {
-                    Verdict.wifi(wifi.rssiDbm, wifi.coChannelCount)
-                },
-            )
+            val steady = if (cell?.servingRsrpDbm != null || wifi == null) {
+                stabiliser.update(
+                    cell?.servingRsrpDbm,
+                    cell?.nr?.ssSinrDb ?: cell?.lte?.rssnrDb,
+                )
+            } else {
+                stabiliser.update(wifi.rssiDbm, null, wifiCoChannel = wifi.coChannelCount)
+            }
+            VerdictLine(steady, spreadDb = stabiliser.spreadDb)
         }
         item { KpiGrid(cell, wifi, fix) }
         item { ThroughputStrip(lastThroughput, throughputBusy) }

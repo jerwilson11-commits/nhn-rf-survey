@@ -41,7 +41,7 @@ private fun severityColor(s: Verdict.Severity): Color = when (s) {
  * evidence and the verdict is the finding, and separating them invites reading either alone.
  */
 @Composable
-fun VerdictLine(verdict: Verdict) {
+fun VerdictLine(verdict: Verdict, spreadDb: Int? = null) {
     val color = severityColor(verdict.severity)
     Column(
         modifier = Modifier
@@ -62,6 +62,16 @@ fun VerdictLine(verdict: Verdict) {
             }
         }
         Text(verdict.detail, fontSize = 13.sp, lineHeight = 17.sp)
+        // The conclusion is steadied; the variability behind it is not hidden. A reading moving
+        // 8 dB while standing still is itself a finding -- it usually means multipath or a cell
+        // edge -- and an operator who cannot see it will trust the steady headline too much.
+        if (spreadDb != null && spreadDb >= 5) {
+            Text(
+                "moving ${spreadDb} dB over the last few seconds",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
