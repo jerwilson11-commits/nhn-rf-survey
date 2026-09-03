@@ -171,11 +171,23 @@ private fun RowScopeTile(
     ) {
         Text(
             text = value,
-            fontSize = 22.sp,
+            // Sized to the value rather than fixed. A six-digit NR-ARFCN does not fit a third of
+            // the screen at 22sp, and Compose clips without an ellipsis by default -- so 521310
+            // rendered as "52131", which is not a truncated number, it is a different one. It
+            // feeds the frequency and GSCN derivations, and nothing on screen said it was cut.
+            fontSize = when {
+                value.length <= 4 -> 22.sp
+                value.length == 5 -> 19.sp
+                value.length == 6 -> 16.sp
+                else -> 14.sp
+            },
             fontWeight = FontWeight.SemiBold,
             fontFamily = FontFamily.Monospace,
             color = if (color == Color.Unspecified) MaterialTheme.colorScheme.onSurface else color,
             maxLines = 1,
+            softWrap = false,
+            // If it ever still does not fit, say so rather than inventing a shorter number.
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
         )
         Text(
             text = label,

@@ -90,6 +90,31 @@ class CellularCollector(context: Context) {
     private var started = false
     private var callback: TelephonyCallback? = null
 
+    /*
+     * Two dead ends, recorded so they are not re-attempted.
+     *
+     * **PhysicalChannelConfig** would have given per-component-carrier band, channel number,
+     * downlink and uplink bandwidth and PCI — the 1C/2C columns of a vendor TDD questionnaire,
+     * straight from the modem. It is public API from API 31, but `PhysicalChannelConfigListener`
+     * requires READ_PRECISE_PHONE_STATE, which is privileged. Registering it threw
+     * `SecurityException: listen` on this device.
+     *
+     * Worse, and the reason this is written down: **all listeners on one TelephonyCallback share
+     * one registration**, so adding the privileged one silently took DisplayInfoListener and
+     * SignalStrengthsListener down with it. The app kept running and quietly lost its NSA/SA
+     * detection and its SignalStrength fallback. If a privileged listener is ever added, it must
+     * be registered as a separate callback so its failure cannot take the working ones with it.
+     *
+     * **LinkCapacityEstimate** would have given the modem's own throughput estimate — 45 Mbps down
+     * and 2.4 Mbps up on this device — a throughput indication costing no data, which is precisely
+     * what a spot check wants. Also @SystemApi, also READ_PRECISE_PHONE_STATE.
+     *
+     * Both are visible in `dumpsys`, which is the trap: **dumpsys runs as shell, and a value it
+     * prints is not a value an app may read.** Third time in this project.
+     */
+
+
+
     private val hasPhoneState: Boolean
         get() = ContextCompat.checkSelfPermission(
             appContext, Manifest.permission.READ_PHONE_STATE
@@ -108,6 +133,10 @@ class CellularCollector(context: Context) {
         TelephonyCallback(),
         TelephonyCallback.DisplayInfoListener,
         TelephonyCallback.SignalStrengthsListener {
+
+
+
+
 
         override fun onDisplayInfoChanged(displayInfo: TelephonyDisplayInfo) {
             latestDisplayInfo = displayInfo
