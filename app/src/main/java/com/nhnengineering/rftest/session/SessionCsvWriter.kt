@@ -113,7 +113,7 @@ private val CELLULAR_COLUMNS = listOf(
     "mcc", "mnc", "operator",
     "lte_ci", "lte_enb_id", "lte_pci", "lte_tac", "lte_earfcn", "lte_band", "lte_bw_khz",
     "lte_rsrp", "lte_rsrq", "lte_rssnr", "lte_rssi", "lte_cqi", "lte_ta",
-    "nr_nci", "nr_pci", "nr_tac", "nr_arfcn", "nr_band",
+    "nr_nci", "nr_gnb_id", "nr_cell_id", "nr_pci", "nr_tac", "nr_arfcn", "nr_band",
     "nr_ss_rsrp", "nr_ss_rsrq", "nr_ss_sinr", "nr_csi_rsrp", "nr_csi_rsrq", "nr_csi_sinr",
     "cell_bandwidths_khz",
     "cell_neighbor_count", "cell_neighbors_json",
@@ -229,6 +229,11 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += lte?.cqi?.toString()
     cells += lte?.timingAdvance?.toString()
     cells += nr?.nci?.toString()
+    // Derived at an assumed 24-bit boundary, which the report states rather than implies. Both
+    // are blank when the NCI is absent or cannot be a 36-bit identity -- see NrCellId.
+    val nrId = com.nhnengineering.rftest.cellular.NrCellId.split(nr?.nci)
+    cells += nrId?.gnbId?.toString()
+    cells += nrId?.cellId?.toString()
     cells += nr?.pci?.toString()
     cells += nr?.tac?.toString()
     cells += nr?.nrarfcn?.toString()

@@ -123,6 +123,14 @@ fun CellularCard(sample: CellularSample?) {
                 KeyValue("Frequency", nr.dlFreqMhz?.let { "%.1f MHz".format(it) } ?: "—")
                 KeyValue("PCI", nr.pci?.toString() ?: "—")
                 KeyValue("NCI", nr.nci?.toString() ?: "—")
+                // The gNodeB ID is the number that names the site, and the raw 36-bit NCI is not
+                // usable as one. The "~" marks it as derived at an assumed 24-bit boundary rather
+                // than read off the air -- the split is operator-configured and not broadcast.
+                KeyValue(
+                    "gNB / cell",
+                    com.nhnengineering.rftest.cellular.NrCellId.split(nr.nci)
+                        ?.let { "~${it.gnbId} / ${it.cellId}" } ?: "—",
+                )
                 KeyValue("TAC", nr.tac?.toString() ?: "—")
                 KeyValue("SS-RSRP", nr.ssRsrpDbm?.let { "$it dBm" } ?: "—")
                 KeyValue("SS-RSRQ", nr.ssRsrqDb?.let { "$it dB" } ?: "—")

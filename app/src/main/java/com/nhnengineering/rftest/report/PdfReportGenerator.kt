@@ -235,6 +235,103 @@ object PdfReportGenerator {
             val pct = if (report.measured > 0) 100.0 * count / report.measured else 0.0
             c.kv(label, String.format(Locale.US, "%d  (%.1f %%)", count, pct))
         }
+        c.gap()
+
+        // The site identity, which a PCI alone does not give: a PCI is unique only within a
+        // carrier and is reused across a network, so it cannot be looked up. WalkTest prints a
+        // gNodeB ID and we printed a 36-bit NCI nobody can use. The split is stated as an
+        // assumption, because it is one -- TS 38.401 lets the operator choose the boundary and
+        // nothing broadcast to a handset says where it is.
+        val nciCounts = points.mapNotNull { it.servingNci }
+            .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
+        if (nciCounts.isNotEmpty()) {
+            c.text("Serving site", c.h2)
+            c.text(
+                String.format(Locale.US, "%-14s %-12s %-8s %9s", "NCI", "gNodeB", "Cell", "Samples"),
+                c.monoBold,
+            )
+            for ((nci, count) in nciCounts.take(10)) {
+                val split = com.nhnengineering.rftest.cellular.NrCellId.split(nci)
+                c.text(
+                    String.format(
+                        Locale.US, "%-14d %-12s %-8s %9d",
+                        nci,
+                        split?.gnbId?.toString() ?: "--",
+                        split?.cellId?.toString() ?: "--",
+                        count,
+                    ),
+                    c.mono,
+                )
+            }
+            c.para(
+                "gNodeB and cell are derived from the NCI by splitting it at " +
+                    "${com.nhnengineering.rftest.cellular.NrCellId.DEFAULT_GNB_ID_BITS} bits, " +
+                    "which is the common configuration but is set by the operator and is not " +
+                    "broadcast. If the operator uses a different length the two columns change " +
+                    "and the NCI beside them does not -- that column is measured, these are not.",
+            )
+            c.gap()
+        }
+
+        c.gap(); c.rule()
+
+        // ---- Distributions ------------------------------------------------
+        //
+        // Percentiles say where the middle of a survey sits; a distribution says how much of the
+        // venue is in trouble, which is the number an acceptance argument actually turns on. Added
+        // after reading a competitor's report that devotes a page to this per KPI -- the tables
+        // were the most useful thing in thirty pages.
+        c.ensure(200f)
+        c.text("Distributions", c.h2)
+        c.para(
+            "How the survey's samples divide across value ranges, for each KPI that was measured. " +
+                "Percentages are of samples that carried a reading; samples with no reading are " +
+                "counted on their own line rather than folded into the worst range, because a " +
+                "value the handset could not measure and a genuinely bad value are different " +
+                "events and only one of them is the network's fault.",
+        )
+
+        val distributions = listOfNotNull(
+            SessionStats.distribution(
+                "SS-RSRP (dBm)", points, listOf(-85, -90, -95, -100, -105, -110, -115),
+            ) { it.rsrpDbm }.takeIf { it.measured > 0 },
+            SessionStats.distribution(
+                "SS-SINR (dB)", points, listOf(20, 13, 10, 7, 5, 2, 0),
+            ) { it.sinrDb }.takeIf { it.measured > 0 },
+            SessionStats.distribution(
+                "SS-RSRQ (dB)", points, listOf(-10, -12, -14, -16, -18),
+            ) { it.rsrqDb }.takeIf { it.measured > 0 },
+            SessionStats.distribution(
+                "Wi-Fi RSSI (dBm)", points, listOf(-50, -60, -67, -75, -85),
+            ) { it.rssiDbm }.takeIf { it.measured > 0 },
+        )
+
+        for (d in distributions) {
+            c.ensure(LINE * (d.bins.size + 5))
+            c.gap()
+            c.text(d.metric, c.monoBold)
+            c.text(
+                String.format(Locale.US, "%-20s %9s %9s", "Range", "Samples", "Share"),
+                c.monoBold,
+            )
+            for (b in d.bins) {
+                c.text(
+                    String.format(Locale.US, "%-20s %9d %8.1f%%", b.label, b.samples, b.pct),
+                    c.mono,
+                )
+            }
+            if (d.noReading > 0) {
+                c.text(
+                    String.format(
+                        Locale.US, "%-20s %9d %8s", "no reading", d.noReading, "--",
+                    ),
+                    c.mono,
+                )
+            }
+        }
+        if (distributions.isEmpty()) {
+            c.para("No KPI in this session carried enough readings to distribute.")
+        }
         c.gap(); c.rule()
 
         // ---- Per-band -----------------------------------------------------

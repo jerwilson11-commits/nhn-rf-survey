@@ -94,6 +94,84 @@ object SessionStats {
         return Math.round(sorted[lo] + (sorted[hi] - sorted[lo]) * (k - lo)).toInt()
     }
 
+    // -----------------------------------------------------------------------
+    // Distributions
+    // -----------------------------------------------------------------------
+
+    data class Bin(val label: String, val samples: Int, val pct: Double)
+
+    data class Distribution(
+        val metric: String,
+        val bins: List<Bin>,
+        /** Samples that carried a reading. */
+        val measured: Int,
+        /** Samples with no reading at all, kept separate from a bad reading. */
+        val noReading: Int,
+    ) {
+        val total: Int get() = measured + noReading
+    }
+
+    /**
+     * Buckets one metric across a session.
+     *
+     * ## Why this was added
+     *
+     * WalkTest's exported report devotes a page to exactly this for every KPI it collects, and the
+     * tables are genuinely useful: percentiles say where the middle sits, but a distribution says
+     * how much of a venue is in trouble, which is the number that ends up in an acceptance
+     * argument. This app had percentiles and no distribution.
+     *
+     * ## Two decisions taken from reading their report
+     *
+     * **"No reading" is counted separately** rather than folded into the worst bucket. A sample the
+     * handset could not measure and a sample measured at −120 dBm are different events, and only
+     * one of them is the network's fault. Their report makes this distinction and it is a good one.
+     *
+     * **Signs are never dropped.** Their report prints "Average RSRP 99 dBm" and a bucket labelled
+     * "110 dBm to Infinity dBm" for what is plainly −110 and below. It is on roughly fifteen pages
+     * of a client deliverable. Labels here are built from the bound values with their sign intact,
+     * so the same mistake cannot be made by formatting.
+     *
+     * [lowerBoundsDesc] are the bin edges, highest first. Bins are half-open and read downward: the
+     * first is "at or above the first bound", each middle bin is "[lower, upper)", the last is
+     * "below the final bound".
+     */
+    fun distribution(
+        metric: String,
+        points: List<TrackPoint>,
+        lowerBoundsDesc: List<Int>,
+        value: (TrackPoint) -> Int?,
+    ): Distribution {
+        val bounds = lowerBoundsDesc.sortedDescending()
+        val values = points.mapNotNull(value)
+        val noReading = points.size - values.size
+
+        val counts = IntArray(bounds.size + 1)
+        for (v in values) {
+            // Index of the first bound this value is at or above; past the end means below all.
+            val i = bounds.indexOfFirst { v >= it }
+            counts[if (i >= 0) i else bounds.size]++
+        }
+
+        val labels = buildList {
+            add("${bounds.first()} and above")
+            for (i in 1 until bounds.size) add("${bounds[i]} to ${bounds[i - 1]}")
+            add("below ${bounds.last()}")
+        }
+
+        val bins = labels.mapIndexed { i, label ->
+            Bin(
+                label = label,
+                samples = counts[i],
+                // Percentages are of measured samples, not of all samples, so the column sums to
+                // 100 and does not silently shrink because the handset missed some readings. The
+                // missing ones are reported on their own line instead.
+                pct = if (values.isEmpty()) 0.0 else 100.0 * counts[i] / values.size,
+            )
+        }
+        return Distribution(metric, bins, values.size, noReading)
+    }
+
     fun stats(values: List<Int>, total: Int): Stats {
         if (values.isEmpty()) return Stats(0, total, null, null, null, null, null, null)
         val sorted = values.sorted()

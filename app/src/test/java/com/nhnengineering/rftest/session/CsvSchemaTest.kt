@@ -77,8 +77,8 @@ class CsvSchemaTest {
     fun `schema is the expected width`() {
         // 75 until 2026-09-03, when gps_fix_age_ms and cell_bandwidths_khz were added after
         // reading a Network Survey log that carried both and finding we carried neither.
-        assertEquals(77, CSV_COLUMN_COUNT)
-        assertEquals(77, CSV_HEADER.split(",").size)
+        assertEquals(79, CSV_COLUMN_COUNT)
+        assertEquals(79, CSV_HEADER.split(",").size)
     }
 
     @Test

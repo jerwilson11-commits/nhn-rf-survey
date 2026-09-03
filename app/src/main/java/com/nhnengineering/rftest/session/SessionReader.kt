@@ -75,6 +75,15 @@ data class TrackPoint(
     /** Serving-cell PCI, whichever radio was serving. */
     val servingPci: Int? = null,
     /**
+     * NR Cell Identity of the serving cell.
+     *
+     * Read back so the report can name the site. A PCI is unique only within a carrier and is
+     * reused across a network; the NCI is not, and its upper bits are the gNodeB ID -- the number
+     * an engineer uses to look the site up. Nullable because it is absent on an LTE serving cell
+     * and on any sample where the modem did not report one.
+     */
+    val servingNci: Long? = null,
+    /**
      * Every cell this sample saw, serving first, strongest first thereafter. Empty for Wi-Fi
      * sessions and for cellular sessions recorded before neighbour logging existed.
      */
@@ -152,6 +161,7 @@ object SessionReader {
             val iNrRsrq = idx("nr_ss_rsrq"); val iLteRsrq = idx("lte_rsrq")
             val iLteBand = idx("lte_band"); val iNrBand = idx("nr_band"); val iRat = idx("rat")
             val iNrPci = idx("nr_pci"); val iLtePci = idx("lte_pci")
+            val iNrNci = idx("nr_nci")
             val iNrArfcn = idx("nr_arfcn"); val iEarfcn = idx("lte_earfcn")
             val iCells = idx("cell_neighbors_json")
             val iFloor = idx("floor")
@@ -236,6 +246,7 @@ object SessionReader {
                     mcc = s(iMcc),
                     mnc = s(iMnc),
                     servingPci = servingPci,
+                    servingNci = s(iNrNci)?.toLongOrNull(),
                     cells = cells,
                 )
             }
