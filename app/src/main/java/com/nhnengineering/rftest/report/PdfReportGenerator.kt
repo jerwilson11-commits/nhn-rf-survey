@@ -170,6 +170,7 @@ object PdfReportGenerator {
         points: List<TrackPoint>,
         report: SessionStats.Report,
         out: File,
+        profiles: List<com.nhnengineering.rftest.profile.TddProfile> = emptyList(),
     ): File = withContext(Dispatchers.IO) {
         val doc = PdfDocument()
         val c = Ctx(doc)
@@ -415,6 +416,76 @@ object PdfReportGenerator {
                 c.gap(4f)
             }
             c.rule()
+        }
+
+        // ---- Configuration profile ----------------------------------------
+        //
+        // Rendered adjacent to the measured SSB layout deliberately, because they answer the two
+        // halves of the same vendor questionnaire. Kept visually and verbally separate because one
+        // half was measured on this walk and the other was typed by a person after being told it,
+        // and a commissioning report that blurs the two is worse than one that omits the second.
+        run {
+            val bands = points.mapNotNull { it.cellBand }.groupingBy { it }.eachCount()
+            val commonBand = bands.maxByOrNull { it.value }?.key
+            val matched = com.nhnengineering.rftest.profile.ProfileMatcher.match(
+                profiles,
+                com.nhnengineering.rftest.profile.ProfileMatcher.Query(
+                    mcc = points.firstNotNullOfOrNull { it.mcc },
+                    mnc = points.firstNotNullOfOrNull { it.mnc },
+                    operator = points.firstNotNullOfOrNull { it.networkOperator },
+                    band = commonBand,
+                    siteName = summary.displayName,
+                ),
+            )
+            if (matched != null) {
+                c.ensure(170f)
+                c.text("Configuration — from profile, not measured", c.h2)
+                c.para(
+                    "These values were not read off the air during this survey. They cannot be: " +
+                        "SSB periodicity, the slot pattern and CSI-RS periodicity live in SIB1 and " +
+                        "the physical layer, which no ordinary handset application can reach. They " +
+                        "are reproduced here from the recorded configuration profile so that a " +
+                        "commissioning form can be completed alongside the measurements, and they " +
+                        "carry their source so a reader can judge them.",
+                )
+                c.gap()
+                c.kv("Profile", matched.title)
+                c.kv("Source", matched.source.ifBlank { "unrecorded" })
+                if (matched.recordedAtUtcMillis > 0) {
+                    c.kv("Recorded", DATE.format(Date(matched.recordedAtUtcMillis)))
+                }
+                if (matched.isSiteOverride) {
+                    c.kv("Scope", "Site-specific override for ${matched.siteName}")
+                }
+                c.gap()
+                val rows = listOfNotNull(
+                    matched.tddPattern?.takeIf { it.isNotBlank() }?.let { "TDD pattern" to it },
+                    matched.tddPeriodicityMs?.takeIf { it.isNotBlank() }
+                        ?.let { "TDD periodicity" to "$it ms" },
+                    matched.dlSlots?.let { "Downlink slots" to it.toString() },
+                    matched.dlSymbols?.let { "Downlink symbols" to it.toString() },
+                    matched.ulSlots?.let { "Uplink slots" to it.toString() },
+                    matched.ulSymbols?.let { "Uplink symbols" to it.toString() },
+                    matched.ssbPeriodicityMs?.let { "SSB periodicity" to "$it ms" },
+                    matched.ssbPositionsInBurst?.takeIf { it.isNotBlank() }
+                        ?.let { "SSB position in burst" to it },
+                    matched.scsKhz?.let { "Subcarrier spacing" to "$it kHz" },
+                )
+                for ((k, v) in rows) c.kv(k, v)
+                matched.note?.takeIf { it.isNotBlank() }?.let { c.gap(4f); c.para("Note: $it") }
+                c.gap(); c.rule()
+            } else if (profiles.isNotEmpty() && commonBand != null) {
+                // Silence would read as "no such configuration exists". Saying it is absent keeps
+                // the gap visible on the form the engineer is filling in.
+                c.ensure(60f)
+                c.text("Configuration — from profile, not measured", c.h2)
+                c.para(
+                    "No configuration profile is recorded for this operator on $commonBand. The " +
+                        "TDD and SSB parameters a vendor questionnaire asks for cannot be measured " +
+                        "by a handset and are not yet in the library.",
+                )
+                c.gap(); c.rule()
+            }
         }
 
         // ---- Stronger neighbours ------------------------------------------

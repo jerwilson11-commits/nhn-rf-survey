@@ -123,7 +123,14 @@ fun SessionsScreen(modifier: Modifier = Modifier) {
                     val (summary, points) = current
                     val report = SessionStats.analyse(points, thresholdDbm = threshold)
                     val pdf = exportFile(context, summary.displayName + "-report", "pdf")
-                    PdfReportGenerator.generate(context, summary, points, report, pdf)
+                    PdfReportGenerator.generate(
+                        context, summary, points, report, pdf,
+                        // The configuration profiles, so a commissioning form can be completed
+                        // alongside the measurements. Empty until the operator records one.
+                        profiles = com.nhnengineering.rftest.profile.ProfileStore(
+                            java.io.File(context.filesDir, "tdd-profiles.jsonl"),
+                        ).load().profiles,
+                    )
                     // The summary CSV rides alongside for anyone who wants the numbers in a
                     // spreadsheet. Apache POI would be a very large dependency to produce
                     // something Excel already opens.

@@ -68,6 +68,10 @@ data class TrackPoint(
     val waypoint: String?,
     /** Floor the operator recorded for this sample, verbatim as the building names it. */
     val floor: String? = null,
+    /** Network identity, read back so a report can match a configuration profile to the session. */
+    val networkOperator: String? = null,
+    val mcc: String? = null,
+    val mnc: String? = null,
     /** Serving-cell PCI, whichever radio was serving. */
     val servingPci: Int? = null,
     /**
@@ -151,6 +155,7 @@ object SessionReader {
             val iNrArfcn = idx("nr_arfcn"); val iEarfcn = idx("lte_earfcn")
             val iCells = idx("cell_neighbors_json")
             val iFloor = idx("floor")
+            val iOp = idx("operator"); val iMcc = idx("mcc"); val iMnc = idx("mnc")
             val iFp = idx("floorplan_id"); val iFpX = idx("floorplan_x")
             val iFpY = idx("floorplan_y"); val iWp = idx("waypoint")
             if (iLat == null || iLon == null) return@withContext null
@@ -227,6 +232,9 @@ object SessionReader {
                     floorplanY = fpY,
                     waypoint = s(iWp),
                     floor = s(iFloor),
+                    networkOperator = s(iOp),
+                    mcc = s(iMcc),
+                    mnc = s(iMnc),
                     servingPci = servingPci,
                     cells = cells,
                 )
