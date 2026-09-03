@@ -55,6 +55,7 @@ import com.nhnengineering.rftest.session.FloorplanStore
 import com.nhnengineering.rftest.session.SessionCsvWriter
 import com.nhnengineering.rftest.session.SessionReader
 import com.nhnengineering.rftest.session.SessionSummary
+import com.nhnengineering.rftest.session.GeoPackageWriter
 import com.nhnengineering.rftest.session.TrackExporters
 import com.nhnengineering.rftest.session.TrackPoint
 import kotlinx.coroutines.launch
@@ -115,6 +116,17 @@ fun SessionsScreen(modifier: Modifier = Modifier) {
                     TrackExporters.writeGeoJson(current.first, current.second, out)
                     status = "Wrote ${out.name}"
                     share(context, out, "application/geo+json")
+                }
+            },
+            onExportGeoPackage = {
+                scope.launch {
+                    val out = exportFile(context, current.first.displayName, "gpkg")
+                    val written = GeoPackageWriter.write(current.first, current.second, out)
+                    // The count is reported rather than just the filename: only GPS-located
+                    // samples become features, so a session with indoor rows carries fewer points
+                    // than it has samples, and the operator should not discover that in QGIS.
+                    status = "Wrote ${out.name} — $written located samples"
+                    share(context, out, "application/geopackage+sqlite3")
                 }
             },
             onShareCsv = { share(context, current.first.file, "text/csv") },
@@ -200,6 +212,7 @@ private fun SessionDetail(
     onBack: () -> Unit,
     onExportKml: () -> Unit,
     onExportGeoJson: () -> Unit,
+    onExportGeoPackage: () -> Unit,
     onShareCsv: () -> Unit,
     onGenerateReport: (Int?) -> Unit,
 ) {
@@ -316,6 +329,9 @@ private fun SessionDetail(
                     )
                     Button(onClick = onExportKml, modifier = Modifier.fillMaxWidth()) {
                         Text("Export KML (Google Earth)")
+                    }
+                    Button(onClick = onExportGeoPackage, modifier = Modifier.fillMaxWidth()) {
+                        Text("Export GeoPackage (QGIS)")
                     }
                     Button(onClick = onExportGeoJson, modifier = Modifier.fillMaxWidth()) {
                         Text("Export GeoJSON")
