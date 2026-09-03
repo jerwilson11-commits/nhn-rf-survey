@@ -473,6 +473,33 @@ object PdfReportGenerator {
                 )
                 for ((k, v) in rows) c.kv(k, v)
                 matched.note?.takeIf { it.isNotBlank() }?.let { c.gap(4f); c.para("Note: $it") }
+
+                // The cross-check sits under the profile it is checking, so a reader sees the
+                // recorded values and the reasons to doubt them together rather than pages apart.
+                val checks = com.nhnengineering.rftest.profile.ProfileCrossCheck.check(
+                    matched, ssb, commonBand,
+                )
+                if (checks.isNotEmpty()) {
+                    c.gap()
+                    c.text("Worth confirming", c.monoBold)
+                    for (f in checks) {
+                        c.ensure(LINE * 3)
+                        c.text(
+                            (if (f.severity ==
+                                    com.nhnengineering.rftest.profile.ProfileCrossCheck.Severity.CHECK
+                                ) "⚠  " else "·  ") + f.headline,
+                            c.body,
+                        )
+                        c.para(f.detail, c.small, indent = 12f)
+                        c.gap(3f)
+                    }
+                    c.para(
+                        "Only the SSB arrangement, the duplex mode and the subcarrier spacing can " +
+                            "be compared at all. The slot pattern, SSB periodicity and CSI-RS " +
+                            "periodicity are not observable by a handset, so nothing above either " +
+                            "confirms or contradicts them.",
+                    )
+                }
                 c.gap(); c.rule()
             } else if (profiles.isNotEmpty() && commonBand != null) {
                 // Silence would read as "no such configuration exists". Saying it is absent keeps
