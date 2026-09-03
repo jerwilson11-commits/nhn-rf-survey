@@ -291,6 +291,86 @@ and no test can tell whether the legend collides with the scale bar on a real pa
 
 ---
 
+### Product turn — 2026-09-02 evening
+
+The app stopped being only a walk-survey tool. Recorded here because the decisions were driven by
+observations rather than by design preference.
+
+**The screen was built backwards.** The Live tab stacked cards in the order they were written —
+recorder, thresholds, speed test, then cellular. Every screenshot taken during development showed
+setup controls filling the display with the measurements below the fold. Rebuilt as a field
+instrument: status strip, hero KPI, verdict, six-tile grid, walk controls, then setup collapsed
+behind a disclosure. The explanations were kept, not deleted — they are the same instinct as the
+report's limitations page — but one tap away.
+
+**A plain-language verdict, because the audience is wider than engineers.** Spot checks,
+troubleshooting, sales demonstrations and executives all want the same first answer and none of
+them can get it from a dBm. It earns its place by doing something a number cannot: **separating a
+coverage problem from an interference problem.** Strong signal with poor SINR and weak signal with
+clean SINR look identical on a signal bar and need opposite fixes. It never quotes a speed or a
+percentage, and a test asserts that.
+
+**Spot check** — ten seconds standing still, no session, no file. Averages rather than reading
+once, and reports the spread, flagging over 6 dB as unstable. A mean over a reading that moved
+13 dB is not a measurement of a place.
+
+**Verdict flapping, and where smoothing is allowed.** Reported from the field as a stable signal
+bouncing to poor. Measured directly: **RSRP spanning −88 to −95 dBm with the phone untouched on a
+desk**, 7 dB, sitting hard against the −95 threshold. The fix steadies the *displayed* conclusion —
+median over eight samples plus a three-sample confirmation — and **never the recorded data**, which
+the percentiles, compliance figures and hole detection all depend on. Loss of service bypasses both.
+
+Two hypotheses were checked and ruled out rather than assumed: the serving-cell fallback at
+`CellularCollector` line 171 never fired over 40 stationary snapshots, and the −106 outliers in the
+walk files are sustained six-sample runs at one PCI while moving. The likeliest trigger is a single
+negative SS-SINR sample.
+
+**GSCN, and the boundary of what a handset may claim.** The JMA/Teko TDD questionnaire is partly
+arithmetic: NR-ARFCN, carrier frequency, GSCN, band, duplex and bandwidth are all derivable, and
+GSCN 6267 was confirmed for the live n41 carrier. The rest — SSB periodicity, starting symbol,
+slot pattern, CSI-RS periodicity — is returned **blank with a reason**, because a plausible but
+wrong slot pattern configured into a repeater causes interference rather than an obvious failure.
+Three confidence tiers: measured, derived, inferred.
+
+**Cells stronger than the server**, with the two discriminators that keep it honest: inter-band
+overshoots are reported but not flagged, because carriers deliberately hold devices on mid band for
+capacity; and a neighbour sharing the serving PCI on another channel is carrier aggregation, not a
+handover candidate.
+
+**SSB layout per band**, which tells carriers apart from per-sector planning by whether the
+positions share physical cell identities. Prompted by the observation that stadium deployments vary
+SSB between neighbouring sectors. Correctly refused to over-claim on the existing walk data.
+
+**A configuration profile library**, empty by design. What cannot be measured can be remembered:
+TDD parameters are RAN vendor defaults a carrier adopts across a market, so learning them once
+covers most sites. Site overrides are first-class because the deviations cluster in dense venues.
+`source` is non-nullable — a remembered value without a provenance is a rumour.
+
+### Four failures worth keeping — 2026-09-02 evening
+
+**The @SystemApi trap, third occurrence.** `PhysicalChannelConfig` and `LinkCapacityEstimate` both
+appear in `dumpsys` and both require `READ_PRECISE_PHONE_STATE`. I called the second "confirmed
+available" *because dumpsys printed it*. The rule, now stated for the third time:
+
+> **`dumpsys` runs as shell. A value it prints is not a value an app may read.**
+
+**A regression caused by adding one listener.** All listeners on a single `TelephonyCallback` share
+one registration, so adding a privileged one made the whole registration throw — the app kept
+running and silently lost NSA/SA detection and its SignalStrength fallback. A privileged listener
+must be registered separately so its failure cannot take working ones down.
+
+**A clipped ARFCN.** The KPI tile rendered 521310 as "52131". Compose clips without an ellipsis by
+default, so it was not a truncated number on screen — it was a different one, feeding the frequency
+and GSCN derivations. Found only by finally seeing the screen, after three UI commits had gone in
+unverified while the phone was locked.
+
+**A patch that reported success while doing nothing.** A scripted edit searched for `out =` at a
+call site that passes positionally, matched nothing, changed nothing, and printed a success
+message. Build passed, tests passed, and the new report section simply never appeared. **A scripted
+patch that cannot find its target must fail loudly.**
+
+---
+
 ### Throughput, map and floor validation — 2026-09-02 afternoon
 
 **Downloads work again.** Cutting walk bursts from two download streams to one halved the request
