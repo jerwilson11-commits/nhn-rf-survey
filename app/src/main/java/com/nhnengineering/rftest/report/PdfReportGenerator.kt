@@ -371,6 +371,52 @@ object PdfReportGenerator {
             c.gap(); c.rule()
         }
 
+        // ---- SSB layout ---------------------------------------------------
+        val ssb = SessionStats.ssbLayout(points)
+        if (ssb.isNotEmpty()) {
+            c.ensure(150f)
+            c.text("Carrier and SSB layout", c.h2)
+            c.para(
+                "The SSB positions seen on each band, with the GSCN a synchronisation or repeater " +
+                    "vendor asks for. Several positions on one band mean either multiple carriers " +
+                    "over the same sectors, or sectors deliberately given different SSB positions " +
+                    "-- which look identical in a log and mean opposite things. They are told " +
+                    "apart here by whether the positions share physical cell identities.",
+            )
+            c.gap()
+            for (b in ssb) {
+                c.ensure(LINE * 4)
+                c.text(
+                    "${b.band}  —  ${b.arrangement.label}" +
+                        if (!b.sufficientEvidence) "  (too few cells seen to be sure)" else "",
+                    c.monoBold,
+                )
+                c.text(
+                    String.format(
+                        Locale.US, "  %-9s %11s %7s  %s",
+                        "ARFCN", "MHz", "GSCN", "PCIs",
+                    ),
+                    c.mono,
+                )
+                for (pos in b.positions) {
+                    c.ensure(LINE * 2)
+                    c.text(
+                        String.format(
+                            Locale.US, "  %-9d %11s %7s  %s",
+                            pos.channel,
+                            pos.freqMhz?.let { String.format(Locale.US, "%.2f", it) } ?: "—",
+                            pos.gscn?.toString() ?: "—",
+                            pos.pcis.joinToString(",").take(46),
+                        ),
+                        c.mono,
+                    )
+                }
+                c.para("  " + b.arrangement.meaning)
+                c.gap(4f)
+            }
+            c.rule()
+        }
+
         // ---- Stronger neighbours ------------------------------------------
         val ho = SessionStats.strongerNeighbours(points)
         if (ho.neighbours.isNotEmpty()) {

@@ -654,6 +654,132 @@ object SessionStats {
         )
     }
 
+    // ---- SSB layout --------------------------------------------------------
+
+    /** One synchronisation-signal-block position observed on a band, and which cells used it. */
+    data class SsbPosition(
+        val channel: Int,
+        val freqMhz: Double?,
+        val gscn: Int?,
+        val pcis: List<Int>,
+        val samples: Int,
+    )
+
+    /**
+     * How a band's SSB positions are arranged, and what that arrangement means.
+     *
+     * SSB frequency is one of very few physical-layer choices an ordinary app can observe, because
+     * the channel number the modem reports for each cell *is* its SSB position. That makes this
+     * analysis reachable where the rest of the SSB configuration — periodicity, starting symbol,
+     * position-in-burst — is not.
+     */
+    enum class SsbArrangement(val label: String, val meaning: String) {
+        SINGLE(
+            "single SSB position",
+            "One SSB position on this band, which is the ordinary case.",
+        ),
+        SHARED_PCI_PLAN(
+            "multiple carriers, shared PCI plan",
+            "Several SSB positions carrying the same physical cell identities. That is more than " +
+                "one carrier on the same sectors — ordinary aggregation, not a planning choice.",
+        ),
+        PER_SECTOR(
+            "SSB position varies by sector",
+            "Each SSB position carries its own distinct cells. Sectors have been given different " +
+                "SSB positions deliberately, which is done in dense venues for capacity and to " +
+                "reduce interference between neighbouring sectors.",
+        ),
+        MIXED(
+            "mixed",
+            "SSB positions share some cells and not others. Worth confirming against the design: " +
+                "it can mean a partial re-plan, or simply that the walk did not see every sector.",
+        ),
+    }
+
+    data class BandSsbLayout(
+        val band: String,
+        val positions: List<SsbPosition>,
+        val arrangement: SsbArrangement,
+        /**
+         * False when too few cells were seen to distinguish the arrangements.
+         *
+         * With one or two PCIs per position, disjointness is as likely to mean the walk did not
+         * pass the other sectors as it is to mean a planning decision. Saying so is the difference
+         * between a finding and a guess.
+         */
+        val sufficientEvidence: Boolean,
+    )
+
+    /** Below this many distinct cells per position, the arrangement cannot be told apart. */
+    const val SSB_MIN_PCIS_PER_POSITION = 3
+
+    /**
+     * Maps the SSB positions in use, per band, and classifies how they are arranged.
+     *
+     * The distinction this draws is one a field engineer otherwise needs a scanner for: whether
+     * several SSB positions on a band are **carriers** or **sectors**. Both look like "more than
+     * one channel number on this band" in a log, and they mean opposite things — the first is
+     * aggregation across the same physical cells, the second is a deliberate per-sector plan of
+     * the sort used in stadiums.
+     *
+     * The test is whether the positions share physical cell identities. Carriers on the same
+     * sectors reuse the PCI plan; sectors given their own SSB do not.
+     */
+    fun ssbLayout(points: List<TrackPoint>): List<BandSsbLayout> {
+        data class Key(val band: String, val channel: Int)
+
+        val pcisByKey = mutableMapOf<Key, MutableSet<Int>>()
+        val samplesByKey = mutableMapOf<Key, Int>()
+
+        for (p in points) {
+            for (c in p.cells) {
+                val band = c.band ?: continue
+                val channel = c.channel ?: continue
+                val pci = c.pci ?: continue
+                val key = Key(band, channel)
+                pcisByKey.getOrPut(key) { mutableSetOf() } += pci
+                samplesByKey[key] = (samplesByKey[key] ?: 0) + 1
+            }
+        }
+
+        return pcisByKey.keys.map { it.band }.distinct().sorted().map { band ->
+            val keys = pcisByKey.keys.filter { it.band == band }
+            val positions = keys.sortedBy { it.channel }.map { key ->
+                val freq = com.nhnengineering.rftest.cellular.BandMapping.nrArfcnToMhz(key.channel)
+                SsbPosition(
+                    channel = key.channel,
+                    freqMhz = freq,
+                    gscn = freq?.let { com.nhnengineering.rftest.cellular.NrSsb.gscnFor(it) },
+                    pcis = pcisByKey.getValue(key).sorted(),
+                    samples = samplesByKey[key] ?: 0,
+                )
+            }
+
+            val arrangement = when {
+                positions.size <= 1 -> SsbArrangement.SINGLE
+                else -> {
+                    val sets = positions.map { it.pcis.toSet() }
+                    val shared = sets.reduce { a, b -> a intersect b }
+                    val union = sets.reduce { a, b -> a union b }
+                    when {
+                        // Every position carries the same cells: one PCI plan, several carriers.
+                        shared.size >= union.size / 2 -> SsbArrangement.SHARED_PCI_PLAN
+                        shared.isEmpty() -> SsbArrangement.PER_SECTOR
+                        else -> SsbArrangement.MIXED
+                    }
+                }
+            }
+
+            BandSsbLayout(
+                band = band,
+                positions = positions,
+                arrangement = arrangement,
+                sufficientEvidence = positions.size <= 1 ||
+                    positions.all { it.pcis.size >= SSB_MIN_PCIS_PER_POSITION },
+            )
+        }
+    }
+
     /** One-line-per-session statistics, for anyone who wants the numbers in a spreadsheet. */
     fun summaryCsv(summary: SessionSummary, report: Report): String {
         val header = listOf(
