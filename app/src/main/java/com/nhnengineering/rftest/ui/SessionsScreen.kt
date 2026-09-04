@@ -56,6 +56,7 @@ import com.nhnengineering.rftest.session.SessionCsvWriter
 import com.nhnengineering.rftest.session.SessionReader
 import com.nhnengineering.rftest.session.SessionSummary
 import com.nhnengineering.rftest.session.GeoPackageWriter
+import com.nhnengineering.rftest.session.IBwaveCsvExporter
 import com.nhnengineering.rftest.session.TrackExporters
 import com.nhnengineering.rftest.session.TrackPoint
 import kotlinx.coroutines.launch
@@ -127,6 +128,22 @@ fun SessionsScreen(modifier: Modifier = Modifier) {
                     // than it has samples, and the operator should not discover that in QGIS.
                     status = "Wrote ${out.name} — $written located samples"
                     share(context, out, "application/geopackage+sqlite3")
+                }
+            },
+            onExportIBwave = {
+                scope.launch {
+                    val out = exportFile(context, "${current.first.displayName}_ibwave", "csv")
+                    val result = IBwaveCsvExporter.write(current.first.file, out)
+                    status = if (result.rowsWritten == 0) {
+                        "iBwave: no positioned RF samples to export yet"
+                    } else {
+                        "Wrote ${result.file.name} · ${result.rowsWritten} measurement rows" +
+                            if (result.sourceRowsSkipped > 0) {
+                                " (${result.sourceRowsSkipped} without a fix skipped)"
+                            } else ""
+                    }
+                    // A header-only file helps no one — only share when there is data to import.
+                    if (result.rowsWritten > 0) share(context, result.file, "text/csv")
                 }
             },
             onShareCsv = { share(context, current.first.file, "text/csv") },
@@ -213,6 +230,7 @@ private fun SessionDetail(
     onExportKml: () -> Unit,
     onExportGeoJson: () -> Unit,
     onExportGeoPackage: () -> Unit,
+    onExportIBwave: () -> Unit,
     onShareCsv: () -> Unit,
     onGenerateReport: (Int?) -> Unit,
 ) {
@@ -324,7 +342,9 @@ private fun SessionDetail(
                     Text("Export", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "KML opens in Google Earth with the RSSI colouring already applied. " +
-                            "GeoJSON carries the same buckets for QGIS or a web map.",
+                            "GeoJSON carries the same buckets for QGIS or a web map. iBwave CSV is a " +
+                            "long-format measurement table (lon, lat, freq, value) for importing into " +
+                            "an iBwave design.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Button(onClick = onExportKml, modifier = Modifier.fillMaxWidth()) {
@@ -335,6 +355,9 @@ private fun SessionDetail(
                     }
                     Button(onClick = onExportGeoJson, modifier = Modifier.fillMaxWidth()) {
                         Text("Export GeoJSON")
+                    }
+                    Button(onClick = onExportIBwave, modifier = Modifier.fillMaxWidth()) {
+                        Text("Export iBwave CSV")
                     }
                     OutlinedButton(onClick = onShareCsv, modifier = Modifier.fillMaxWidth()) {
                         Text("Share raw CSV")
