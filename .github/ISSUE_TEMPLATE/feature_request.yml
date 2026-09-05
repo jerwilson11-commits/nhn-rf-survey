@@ -1,0 +1,58 @@
+name: Capability
+description: New measurement, export, analysis or workflow
+labels: ["capability"]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: The field problem
+      description: >
+        What does an engineer currently do without this, on a real job? Capabilities that do not
+        trace to a job are how a solo project loses a quarter.
+    validations:
+      required: true
+
+  - type: textarea
+    id: gate
+    attributes:
+      label: Done when
+      description: >
+        One observable condition that closes it — the shape used in `docs/ROADMAP.md`.
+        "Opens in Excel with correct types and reconciles against the PDF from the same session",
+        not "XLSX export works".
+    validations:
+      required: true
+
+  - type: dropdown
+    id: release
+    attributes:
+      label: Proposed release
+      options:
+        - "v0.10.0 — Reporting complete (2026-09-25)"
+        - "v0.11.0 — Servers trustworthy (2026-10-09)"
+        - "v1.0.0 — First engagement release (2026-11-06)"
+        - "v1.1.0 — Platform currency (2026-12-04)"
+        - "v1.2.0 — Spectrum module (2027-01-29)"
+        - "v2.0.0 — Multi-tester platform (unscheduled)"
+        - "Unscheduled"
+    validations:
+      required: true
+
+  - type: textarea
+    id: failure
+    attributes:
+      label: How it could produce a plausible wrong number
+      description: >
+        Required. Every subsystem in this project has produced believable wrong output on first
+        contact with reality. Name the failure mode now and the test obligation follows from it
+        (`docs/PROCESS.md` §6).
+    validations:
+      required: true
+
+  - type: textarea
+    id: schema
+    attributes:
+      label: Schema impact
+      description: >
+        Does this add CSV columns (MINOR), or reorder/redefine existing ones (MAJOR)? A new artifact
+        stream that does not touch the 73-column schema is neither.

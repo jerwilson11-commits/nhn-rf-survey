@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Roadmap and release dates
+    url: https://github.com/jerwilson11-commits/nhn-rf-survey/blob/main/docs/ROADMAP.md
+    about: What is planned, in which release, and the gate that closes it.
+  - name: Known defects and limitations
+    url: https://github.com/jerwilson11-commits/nhn-rf-survey/blob/main/docs/DEFECTS.md
+    about: Check here before filing — some behaviour is a stated limitation, not a defect.
