@@ -16,8 +16,13 @@ android {
         // behavior changes (mandatory ACCESS_LOCAL_NETWORK, large-screen orientation
         // enforcement) out of Phases 1-4. See docs/Android 17 Impact Notes.md.
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // Versioning scheme and bump rules: docs/PROCESS.md section 3. versionCode is monotonic
+        // and never reused; versionName is MAJOR.MINOR.PATCH. Pre-1.0 means proven on the bench
+        // and on validation walks, not yet proven on a paid engagement -- see the v1.0.0 gate in
+        // docs/ROADMAP.md. This is the single source of the version; anything displaying it reads
+        // from here.
+        versionCode = 9
+        versionName = "0.9.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

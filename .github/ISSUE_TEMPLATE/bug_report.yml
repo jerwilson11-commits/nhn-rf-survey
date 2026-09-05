@@ -1,0 +1,93 @@
+name: Defect report
+description: Something produced a wrong number, lost data, or malfunctioned
+labels: ["defect"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Severity is assigned by **effect on a client deliverable**, not by fix difficulty.
+        A crash is usually S3 — it announces itself. A frozen RSSI reading is S1.
+        Confirmed defects are added to `docs/DEFECTS.md` with an `RFT-D###` ID.
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - "S1 — produces a plausible wrong number that could reach a report"
+        - "S2 — loses or corrupts recorded data, or makes a session unreadable"
+        - "S3 — visible malfunction an operator would notice"
+        - "S4 — cosmetic or internal, no effect on recorded data or reported numbers"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Wi-Fi collector
+        - Cellular collector
+        - Position (GPS / floorplan)
+        - Throughput / speedtest
+        - Session storage / CSV schema
+        - Export (KML / GeoJSON / GeoPackage / iBwave)
+        - Reporting (PDF / XLSX)
+        - Live view
+        - MCP server
+        - Build / CI / tooling
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: What the tool reported
+      description: The actual value, screen, file or output. Paste the row, not a summary of it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: truth
+    attributes:
+      label: What was actually true, and how you know
+      description: >
+        Ground truth, OS telemetry (`adb shell cmd wifi status`, `dumpsys location`), an
+        independent implementation, or a second measurement path. **Not expectation** — every
+        defect in the register was found by comparing against something, never by the code failing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Steps, and whether it reproduces. A defect seen once and not since is still worth filing — say so.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: App version / commit
+      placeholder: "0.9.0 (versionCode 9), or a commit SHA"
+
+  - type: input
+    id: device
+    attributes:
+      label: Device, Android version, carrier
+      placeholder: "Pixel 6 Pro, Android 17 (API 37), T-Mobile 5G SA"
+
+  - type: textarea
+    id: session
+    attributes:
+      label: Session file
+      description: Attach or name the session CSV if one exists. The recorded data is usually the evidence.
+
+  - type: checkboxes
+    id: silent
+    attributes:
+      label: Failure shape
+      options:
+        - label: This failed **silently** — nothing crashed, and the output looked plausible
+        - label: I checked `docs/DEFECTS.md` and this is not a recurrence of a known root cause

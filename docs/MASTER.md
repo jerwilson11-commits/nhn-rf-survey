@@ -5,6 +5,17 @@ platform, or architecture decisions change. Everything else in this folder deriv
 
 Owner: Jeremy Wilson · Started: 2026-08-28
 
+**This file owns architecture decisions and the engineering record — what was built, what broke,
+and why each fix took the shape it did. It is append-only narrative.** Three companion documents
+own the questions it cannot answer, one owner each, linked rather than restated:
+
+| Document | Owns |
+|---|---|
+| [`ROADMAP.md`](ROADMAP.md) | What is planned, in which release, by when, and the gate that closes it |
+| [`CHANGELOG.md`](CHANGELOG.md) | What shipped in each released version |
+| [`DEFECTS.md`](DEFECTS.md) | Every defect — identity, severity, status, root cause, and the guard against recurrence |
+| [`PROCESS.md`](PROCESS.md) | Versioning, cadence, definition of done, test obligation, branching |
+
 ---
 
 ## 1. What this is
@@ -75,6 +86,45 @@ or an external scanner. That is a hardware supply-chain problem, not a coding pr
 - External RF scanner over BLE/USB with a vendor SDK, app as the head unit.
 - Rooted device with Qualcomm DIAG parsing — technically possible, not distributable, not supportable.
 
+### Spectrum capture as a separate instrument — evaluated 2026-09-05
+
+Assessed HackRF One as a scanner and transmitter. **Accepted as an RX-only accessory, scheduled at
+[`v1.2.0`](ROADMAP.md#9-v120--spectrum-module--target-2027-01-29). Transmit rejected. Per-PCI
+scanning rejected.**
+
+**Why it earns a place.** Everything the app measures today is mediated by a radio that reports only
+on its serving cell and whatever neighbour list the modem chose to surface. A sweep sees energy no
+handset can: uplink noise floor and PIM, external interferers, DAS oscillation, CBRS occupancy, and
+RF-layer confirmation that a remote is actually radiating on the expected channels. It also needs no
+SIM, so it is buildable and validatable without network dependency — and a 2.4 GHz sweep can be
+cross-checked against this app's own `WifiCollector` output, which is two independent observations
+of one physical thing, the method that caught the frozen RSSI and the zeroed interference counts.
+
+**Why it is not a scanner.** In drive-test usage "scanner" means a per-PCI RSRP receiver decoding
+every cell on air simultaneously, blind to camping. Reaching that from raw IQ means LTE cell search
+and decode — PC-class software, and a research project on Android; NR SSB scanning is worse. The
+hardware ceiling settles it regardless: 8-bit ADC gives roughly 50 dB of instantaneous dynamic
+range with no narrow preselector, so standing under a DAS antenna at −40 dBm a −110 dBm neighbour is
+gone and the strong signal desenses the front end. The *buy, do not build* conclusion above applies
+unchanged to scanner-class capability.
+
+**Why transmit is rejected.** Radiating on licensed cellular spectrum is not ours to do, and CBRS
+cannot be reached this way at all — GAA access requires SAS authorisation and certified CBSD
+equipment. The legitimate case is conducted and isolated: CW into DAS coax with the antenna
+disconnected and the path terminated, for passive path loss. Even there this is a poor source —
+single-digit dBm falling off above ~3 GHz, no output filtering, visible harmonics and LO leakage. A
+calibrated bench source does that job better and does not occupy the phone.
+
+**The condition on any absolute number.** The hardware is uncalibrated, so absolute dBm out of it is
+meaningless without a per-frequency, per-gain-state calibration table against a known source.
+Publishing uncalibrated power in an acceptance report would be precisely the failure this project
+is organised against — a confident, plausible, wrong number. Until that table exists and is
+versioned, output is relative and occupancy only, labelled as such.
+
+**Cost accepted:** an NDK/JNI USB dependency, breaking the zero-dependency posture, and roughly
+500 mA drawn off the handset. Both are reasons it sits behind the 1.0 revenue gate rather than
+reasons to decline.
+
 ---
 
 ## 4. Scope
@@ -144,7 +194,11 @@ real differentiator — DAS venues need both surveyed anyway.
 
 ---
 
-## 6. Roadmap
+## 6. Roadmap — phase history
+
+**This table is history and is not maintained forward. Everything planned after 2026-09-05 lives in
+[`ROADMAP.md`](ROADMAP.md)**, on a release ladder rather than a phase list, because a phase is a
+description of work and a release is a commitment with a date and a gate.
 
 Resequenced 2026-08-28 so that no phase before 5 is blocked on SIM activation.
 
@@ -988,10 +1042,11 @@ better reporting architecture either way.
   behavior is textbook and ideal for development, but neighbor lists are sparse and NR SCG
   reporting under NSA is inconsistent. Build on it; validate field coverage on a Qualcomm Samsung
   before declaring any field unobtainable. See section 8 of the API reference.
-- **SIM / cellular service — currently BLOCKING Phase 1 cellular validation.** Device is Wi-Fi
-  only. With no SIM the modem does not register and `getAllCellInfo()` returns nothing usable, so
-  no cellular KPI can be read or verified. Fastest unblock is an **eSIM data plan** — the Pixel 6
-  Pro supports eSIM, so activation is minutes rather than shipping days.
+- ~~**SIM / cellular service**~~ — **resolved 2026-09-01.** SIM activated; Phase 5 validated on
+  live T-Mobile 5G SA, and the 2026-09-02 walk saw 17 cells across five carriers on four bands.
+  This item read "currently BLOCKING" for four days after it stopped being true, which is the
+  divergence [`ROADMAP.md`](ROADMAP.md) now exists to prevent — forward commitments live there and
+  are revised at each release.
 - **Multi-carrier testing.** Pixel 6 Pro is one physical nano-SIM plus eSIM (DSDS — both
   registered, one data-active at a time). Enough to A/B two carriers by switching. Real
   multi-carrier benchmarking for client work eventually wants a SIM per major carrier.
@@ -999,19 +1054,23 @@ better reporting architecture either way.
   site. Most US macro 5G is still NSA on most bands.
 - **Target SDK 37 migration** — deferred until after Phase 4. Needs `ACCESS_LOCAL_NETWORK` if the
   speedtest server is LAN-hosted, and a responsive dashboard for large screens. Scoped in
-  `docs/android-17-impact-notes.md`.
-- ~~**Version control**~~ — **local git initialised 2026-09-01**, first commit `608f04b`, 57 files
-  on `main`. `.gitignore` correctly excludes `local.properties`, `build/` and `.gradle`.
-  **Still to do:** push to a public GitHub repo, and decide where the design docs live (below).
-- **Where the design docs live.** They are the portfolio differentiator — the engineering record is
-  more compelling than the feature list — but they currently sit in OneDrive, outside the repo.
-  Moving them in means one source of truth under version control; leaving them out means the repo
-  reads as code-only. Copying them to both places recreates exactly the divergence problem that
-  killed `src-staging/`. Decision needed before the repo goes public.
-- **Product name**, and whether it carries NHN branding.
+  `docs/android-17-impact-notes.md`. Scheduled: `v1.1.0`.
+- ~~**Version control**~~ — **resolved.** Local git initialised 2026-09-01 (`608f04b`), pushed to
+  GitHub, CI running unit tests on every push. `.gitignore` correctly excludes `local.properties`,
+  `build/` and `.gradle`.
+- ~~**Where the design docs live**~~ — **resolved 2026-09-01: in the repo, single copy.** Not
+  duplicated to OneDrive, because copying to both places recreates exactly the divergence problem
+  that killed `src-staging/`.
+- ~~**Product development process**~~ — **adopted 2026-09-05.** Release ladder with dated gates in
+  [`ROADMAP.md`](ROADMAP.md), version history in [`CHANGELOG.md`](CHANGELOG.md), a 19-entry defect
+  register in [`DEFECTS.md`](DEFECTS.md), and versioning, cadence and definition of done in
+  [`PROCESS.md`](PROCESS.md). Versioned from `0.9.0` (`versionCode` 9).
+- **Product name**, and whether it carries NHN branding. Scheduled: `v1.0.0` item
+  [1.0-1](ROADMAP.md#7-v100--first-engagement-release--target-2026-11-06).
 - **Reference tool** for validating our numbers in Phase 1 — Field Test Mode on the device, or an
   existing app such as Network Cell Info or NetMonster as a cross-check.
-- Google Play developer account, $25 one-time — not needed until v1 ships.
+- Google Play developer account, $25 one-time — **not in `v1.0.0`**. Not needed until the tool is
+  distributed beyond NHN, and store review adds a constraint the consulting use does not have.
 
 ---
 

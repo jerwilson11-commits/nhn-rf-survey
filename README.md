@@ -106,15 +106,34 @@ was to make the two structurally unable to disagree.
 
 ## Status
 
-| Phase | Status |
+**v0.9.0** — 219 unit tests, validated on live T-Mobile 5G SA indoor and outdoor. Pre-1.0 means
+proven on the bench and on validation walks, not yet proven on a paid engagement.
+
+| Capability | Status |
 |---|---|
 | Environment, Wi-Fi collector, live dashboard | done |
 | GPS sampling, sessions, CSV | done |
-| Track plot, KML / GeoJSON export | done |
+| Track plot, KML / GeoJSON / GeoPackage / iBwave export | done |
 | Throughput, latency, jitter, ICMP loss | done |
 | Foreground service, thresholds, alarms | done |
-| **Cellular collector (LTE / NR)** | pending — needs an active SIM |
-| Reporting and MCP server over the session corpus | planned |
+| Cellular collector (LTE / NR) | done — validated 2026-09-01 |
+| Floorplan mode for indoor positioning | done |
+| PDF reporting with dominance analysis | done |
+| MCP server over the session corpus, OAuth 2.1 | done |
+| XLSX export and report configuration | v0.10.0 — 2026-09-25 |
+| Server test coverage | v0.11.0 — 2026-10-09 |
+| **First engagement release** | v1.0.0 — 2026-11-06 |
+| Spectrum module (HackRF, RX-only) | v1.2.0 — 2027-01-29 |
+
+### How this project is run
+
+| Document | Owns |
+|---|---|
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Release ladder, dates, and the gate that closes each one |
+| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | What shipped in each version |
+| [`docs/DEFECTS.md`](docs/DEFECTS.md) | 19 defects, grouped by the five root causes that recurred |
+| [`docs/PROCESS.md`](docs/PROCESS.md) | Versioning, cadence, definition of done, test obligation |
+| [`docs/MASTER.md`](docs/MASTER.md) | Architecture decisions and the engineering record |
 
 ---
 
