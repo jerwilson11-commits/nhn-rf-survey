@@ -51,6 +51,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.runtime.mutableFloatStateOf
 
 /**
  * Satellite map of the walk, on the handset.
@@ -95,8 +98,24 @@ fun MapScreen(modifier: Modifier = Modifier) {
         }
     }
 
+    // Free-camera state. `following` is the important one: while true the map tracks the operator,
+    // and any pan turns it off, because a map that yanks itself back under your thumb every second
+    // is unusable. The Recentre button turns it back on.
+    var centerLat by remember { mutableStateOf<Double?>(null) }
+    var centerLon by remember { mutableStateOf<Double?>(null) }
+    var zoom by remember { mutableFloatStateOf(DEFAULT_ZOOM) }
+    var following by remember { mutableStateOf(true) }
+
     val shownCell = if (recording) liveCell else localCell
     val shownFix = if (recording) fix else localFix
+
+    LaunchedEffect(shownFix, following) {
+        val f = shownFix ?: return@LaunchedEffect
+        if (following || centerLat == null) {
+            centerLat = f.latitudeDeg
+            centerLon = f.longitudeDeg
+        }
+    }
 
     var showImagery by remember { mutableStateOf(true) }
     var basemap by remember {
@@ -174,7 +193,34 @@ fun MapScreen(modifier: Modifier = Modifier) {
 
                     MapKpiStrip(shownCell, shownFix)
 
-                    Canvas(Modifier.fillMaxWidth().aspectRatio(1f)) {
+                    Canvas(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .pointerInput(Unit) {
+                                detectTransformGestures { _, pan, zoomChange, _ ->
+                                    val cLat = centerLat ?: return@detectTransformGestures
+                                    val cLon = centerLon ?: return@detectTransformGestures
+
+                                    val newZoom = (zoom * zoomChange)
+                                        .coerceIn(MIN_ZOOM.toFloat(), MAX_ZOOM.toFloat())
+                                    val zi = floor(newZoom).toInt().coerceIn(MIN_ZOOM, MAX_ZOOM)
+                                    val sc = 2.0.pow(newZoom.toDouble() - zi)
+
+                                    // Drag moves the map with the finger, so the centre moves the
+                                    // opposite way, in world pixels at the current scale.
+                                    val wx = Mercator.lonToTileX(cLon, zi) * Mercator.TILE_SIZE -
+                                        pan.x / sc
+                                    val wy = Mercator.latToTileY(cLat, zi) * Mercator.TILE_SIZE -
+                                        pan.y / sc
+
+                                    centerLon = Mercator.tileXToLon(wx / Mercator.TILE_SIZE, zi)
+                                    centerLat = Mercator.tileYToLat(wy / Mercator.TILE_SIZE, zi)
+                                    zoom = newZoom
+                                    if (pan.getDistance() > 1f) following = false
+                                }
+                            },
+                    ) {
                         // Clipped to the canvas. Tiles are drawn through the native canvas, which
                         // Compose does not bound for us: without this a tile whose edge falls
                         // outside the map spills over the caption beneath it and past the card,
@@ -186,16 +232,45 @@ fun MapScreen(modifier: Modifier = Modifier) {
                                 showImagery = showImagery,
                                 currentLat = shownFix?.latitudeDeg,
                                 currentLon = shownFix?.longitudeDeg,
+                                centerLat = centerLat ?: shownFix?.latitudeDeg ?: 0.0,
+                                centerLon = centerLon ?: shownFix?.longitudeDeg ?: 0.0,
+                                zoom = zoom,
+                            )
+                        }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            // Zoom is worth showing because the base maps behave differently at
+                            // different scales: the street layer has nothing to draw past 18.
+                            "z%.1f".format(zoom),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                        if (!following) {
+                            TextButton(onClick = {
+                                following = true
+                                shownFix?.let {
+                                    centerLat = it.latitudeDeg
+                                    centerLon = it.longitudeDeg
+                                }
+                            }) { Text("Recentre") }
+                        } else {
+                            Text(
+                                "Following",
+                                style = MaterialTheme.typography.labelSmall,
                             )
                         }
                     }
                     Text(
                         if (track.isEmpty()) {
-                            "Current position. North is up. The trail builds here once recording " +
-                                "starts."
+                            "Current position. Drag to pan, pinch to zoom. The trail builds here " +
+                                "once recording starts."
                         } else {
-                            "${track.size} located samples. North is up. The ring is your " +
-                                "current position."
+                            "${track.size} located samples. Drag to pan, pinch to zoom. The " +
+                                "ring is your current position."
                         },
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -241,60 +316,54 @@ private fun DrawScope.drawWalkMap(
     showImagery: Boolean,
     currentLat: Double?,
     currentLon: Double?,
+    centerLat: Double,
+    centerLon: Double,
+    zoom: Float,
 ) {
-    // The current fix counts towards the bounds, not just the track. Before this the map drew
-    // nothing at all until a recording had produced its first located sample, so an operator
-    // opening the tab to orient themselves got a paragraph of text instead of a map -- the one
-    // thing a map is for. A position with no track is a perfectly good map.
-    val fixLatLon = currentLat?.let { la -> currentLon?.let { lo -> la to lo } }
-    val bounds = Mercator.Bounds.of(track.map { it.lat to it.lon } + listOfNotNull(fixLatLon))
-        ?.expandedToAtLeast(MIN_SPAN_M) ?: return
-
-    val pad = 14f
-    val w = size.width - 2 * pad
-    val h = size.height - 2 * pad
-    if (w <= 0 || h <= 0) return
-
-    val z = Mercator.fitZoom(bounds, w.toInt(), h.toInt())
-    val wx0 = Mercator.lonToTileX(bounds.minLon, z)
-    val wx1 = Mercator.lonToTileX(bounds.maxLon, z)
-    val wy0 = Mercator.latToTileY(bounds.maxLat, z)
-    val wy1 = Mercator.latToTileY(bounds.minLat, z)
+    // Centre-and-zoom rather than fit-to-bounds.
+    //
+    // Fitting the track was right while the map was a static picture of a finished walk. It is
+    // wrong for a map the operator drives: it forced a 25 m view around a single position, which
+    // is zoom 19, and the street base map has nothing to draw at 69 m per tile -- a house number
+    // and fill colour. The satellite layer looked fine there, which is why the problem only
+    // appeared when a second layer existed.
+    val zi = floor(zoom).toInt().coerceIn(1, MAX_ZOOM)
+    // Fractional zoom is carried as a scale on integer tiles, which is how every slippy map does
+    // it: tiles exist only at whole zooms, and pinching between them must not snap.
+    val scale = 2.0.pow(zoom.toDouble() - zi).toFloat()
 
     val tilePx = Mercator.TILE_SIZE
-    val scale = minOf(w / ((wx1 - wx0) * tilePx).toFloat(), h / ((wy1 - wy0) * tilePx).toFloat())
-    val offX = pad + (w - ((wx1 - wx0) * tilePx * scale).toFloat()) / 2f
-    val offY = pad + (h - ((wy1 - wy0) * tilePx * scale).toFloat()) / 2f
+    val centerWx = Mercator.lonToTileX(centerLon, zi) * tilePx
+    val centerWy = Mercator.latToTileY(centerLat, zi) * tilePx
+    val halfW = size.width / 2f
+    val halfH = size.height / 2f
 
     fun project(lat: Double, lon: Double): Offset = Offset(
-        offX + ((Mercator.lonToTileX(lon, z) - wx0) * tilePx * scale).toFloat(),
-        offY + ((Mercator.latToTileY(lat, z) - wy0) * tilePx * scale).toFloat(),
+        ((Mercator.lonToTileX(lon, zi) * tilePx - centerWx) * scale).toFloat() + halfW,
+        ((Mercator.latToTileY(lat, zi) * tilePx - centerWy) * scale).toFloat() + halfH,
     )
 
     if (showImagery) {
-        val x0 = floor(wx0).toInt()
-        val x1 = floor(wx1).toInt()
-        val y0 = floor(wy0).toInt()
-        val y1 = floor(wy1).toInt()
-        // A hard ceiling, so a wide-area session cannot ask the phone for hundreds of tiles over
-        // the link it is trying to measure.
+        // Only the tiles the viewport actually covers, which is what makes panning affordable:
+        // the old code fetched everything inside the track's bounds whatever was on screen.
+        val tileSpan = tilePx * scale
+        val x0 = floor((centerWx - halfW / scale) / tilePx).toInt()
+        val x1 = floor((centerWx + halfW / scale) / tilePx).toInt()
+        val y0 = floor((centerWy - halfH / scale) / tilePx).toInt()
+        val y1 = floor((centerWy + halfH / scale) / tilePx).toInt()
+
         if ((x1 - x0 + 1).toLong() * (y1 - y0 + 1).toLong() <= MAX_TILES) {
+            val maxIndex = 1 shl zi
             for (tx in x0..x1) {
                 for (ty in y0..y1) {
-                    val bitmap = tiles.get(z, tx, ty) ?: continue
-                    val topLeft = Offset(
-                        offX + ((tx - wx0) * tilePx * scale).toFloat(),
-                        offY + ((ty - wy0) * tilePx * scale).toFloat(),
-                    )
+                    if (tx < 0 || ty < 0 || tx >= maxIndex || ty >= maxIndex) continue
+                    val bitmap = tiles.get(zi, tx, ty) ?: continue
+                    val left = ((tx * tilePx - centerWx) * scale).toFloat() + halfW
+                    val top = ((ty * tilePx - centerWy) * scale).toFloat() + halfH
                     drawContext.canvas.nativeCanvas.drawBitmap(
                         bitmap,
                         null,
-                        android.graphics.RectF(
-                            topLeft.x,
-                            topLeft.y,
-                            topLeft.x + tilePx * scale,
-                            topLeft.y + tilePx * scale,
-                        ),
+                        android.graphics.RectF(left, top, left + tileSpan, top + tileSpan),
                         null,
                     )
                 }
@@ -333,7 +402,7 @@ private fun DrawScope.drawWalkMap(
         drawCircle(Color.Black.copy(alpha = 0.5f), radius = 18f, center = it, style = Stroke(1.5f))
     }
 
-    drawScaleBar(bounds.midLat, z, scale, size)
+    drawScaleBar(centerLat, zi, scale, size)
     drawNorthArrow(size)
 }
 
@@ -412,7 +481,17 @@ private fun formatBytes(bytes: Long): String = when {
 }
 
 /** Standing still is a few metres of GPS scatter; fitting to that would zoom into jitter. */
-private const val MIN_SPAN_M = 25.0
+private const val MAX_ZOOM = 19
+private const val MIN_ZOOM = 3
+
+/**
+ * Where the map opens.
+ *
+ * Zoom 17 is about 275 m across, chosen by fetching street tiles at each level and looking: at 18
+ * the layer is two street names and fill, at 19 it is a house number. 17 still shows enough street
+ * to orient by while keeping a walk-sized area on screen. The operator can pinch from there.
+ */
+private const val DEFAULT_ZOOM = 17f
 private const val MAX_TILES = 40L
 
 /**
