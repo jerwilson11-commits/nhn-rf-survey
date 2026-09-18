@@ -89,6 +89,9 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val areaLabel by RecordingState.areaLabel.collectAsState()
     val floor by RecordingState.floor.collectAsState()
     val bandLock by RecordingState.bandLock.collectAsState()
+    // Collected, not read as .value inside composition: the pre-walk card must clear its block the
+    // moment a floorplan is chosen, and a raw .value read does not recompose when it changes.
+    val indoorPosition by RecordingState.indoorPosition.collectAsState()
     val ratLock by RecordingState.ratLock.collectAsState()
     val walkThroughput by RecordingState.walkThroughputEnabled.collectAsState()
     val liveView by RecordingState.liveViewEnabled.collectAsState()
@@ -186,6 +189,21 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
         }
         if (!recording) {
             item { NotRecordingBanner(onStart = { RecordingService.start(context, sessionName) }) }
+            item {
+                // Re-read on every recomposition rather than remembered: these are exactly the
+                // settings an operator changes in the minute before setting off, and a cached
+                // answer would describe the state the app started in.
+                PreWalkCard(
+                    com.nhnengineering.rftest.model.PreWalkCheck.evaluate(
+                        preWalkInputs(
+                            context = context,
+                            hasGpsFix = fix != null,
+                            floorplanSelected = indoorPosition != null,
+                            simPresent = cell?.simState?.name?.contains("READY") == true,
+                        ),
+                    ),
+                )
+            }
         }
         item { LevelBar(cell, wifi) }
         item { HeroKpi(cell, wifi) }

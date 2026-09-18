@@ -40,7 +40,9 @@ import com.nhnengineering.rftest.model.WifiStandard
  */
 class WifiCollector(context: Context) {
 
-    private companion object {
+    // Not private: the pre-walk check reads THROTTLE_SETTING so the setting name is stated in
+    // exactly one place. Two copies of a settings key is one copy that goes stale.
+    companion object {
         const val TAG = "WifiCollector"
 
         /** Placeholder BSSID Android substitutes when the caller lacks location permission. */
