@@ -44,6 +44,12 @@ import java.util.Locale
 import kotlin.math.floor
 import kotlin.math.log10
 import kotlin.math.pow
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.ui.text.style.TextOverflow
 
 /**
  * Satellite map of the walk, on the handset.
@@ -65,6 +71,31 @@ fun MapScreen(modifier: Modifier = Modifier) {
     val track by RecordingState.liveTrack.collectAsState()
     val recording by RecordingState.active.collectAsState()
     val fix by RecordingState.fix.collectAsState()
+    val liveCell by RecordingState.cellular.collectAsState()
+
+    // RecordingState is fed by the recording service, so when idle it holds nothing. The Live tab
+    // polls locally for the same reason. Only one tab composes at a time, so this does not double
+    // the sampling rate.
+    val cellular = remember { com.nhnengineering.rftest.cellular.CellularCollector(context) }
+    val locations = remember { com.nhnengineering.rftest.location.LocationCollector(context) }
+    var localCell by remember { mutableStateOf<com.nhnengineering.rftest.model.CellularSample?>(null) }
+    var localFix by remember { mutableStateOf<com.nhnengineering.rftest.model.GeoPoint?>(null) }
+
+    DisposableEffect(recording) {
+        if (!recording) { cellular.start(); locations.start() }
+        onDispose { cellular.stop(); locations.stop() }
+    }
+    LaunchedEffect(recording) {
+        if (recording) return@LaunchedEffect
+        while (true) {
+            localCell = cellular.snapshot()
+            localFix = locations.snapshot()
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+
+    val shownCell = if (recording) liveCell else localCell
+    val shownFix = if (recording) fix else localFix
 
     var showImagery by remember { mutableStateOf(true) }
     // Bumped when a tile finishes loading, purely to force a redraw. Compose does not observe the
@@ -86,7 +117,13 @@ fun MapScreen(modifier: Modifier = Modifier) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        if (recording) "Route walked" else "Last route",
+                        when {
+                            recording -> "Route walked"
+                            // "Last route" over a map with no route on it is a small lie, and the
+                            // operator is standing there checking whether the app knows where it is.
+                            track.isEmpty() -> "Position"
+                            else -> "Last route"
+                        },
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -95,20 +132,23 @@ fun MapScreen(modifier: Modifier = Modifier) {
                     }
                 }
 
-                if (track.isEmpty()) {
+                if (track.isEmpty() && shownFix == null) {
                     Text(
                         if (recording) {
                             "Waiting for a GPS fix. Indoor samples with no fix are still recorded " +
                                 "to the file; they simply cannot be drawn on a map."
                         } else {
-                            "No route yet. Start a recording on the Live tab and the trail will " +
-                                "build here as you walk."
+                            "No position yet. Waiting for a GPS fix — the map appears as soon " +
+                                "as there is one, and the trail builds on it once you start " +
+                                "recording on the Live tab."
                         },
                         style = MaterialTheme.typography.bodySmall,
                     )
                 } else {
                     // Referenced so Compose redraws when a tile lands.
                     @Suppress("UNUSED_EXPRESSION") tileGeneration
+
+                    MapKpiStrip(shownCell, shownFix)
 
                     Canvas(Modifier.fillMaxWidth().aspectRatio(1f)) {
                         // Clipped to the canvas. Tiles are drawn through the native canvas, which
@@ -120,14 +160,19 @@ fun MapScreen(modifier: Modifier = Modifier) {
                                 track = track,
                                 tiles = tiles,
                                 showImagery = showImagery,
-                                currentLat = fix?.latitudeDeg,
-                                currentLon = fix?.longitudeDeg,
+                                currentLat = shownFix?.latitudeDeg,
+                                currentLon = shownFix?.longitudeDeg,
                             )
                         }
                     }
                     Text(
-                        "${track.size} located samples. North is up. The ring is your current " +
-                            "position.",
+                        if (track.isEmpty()) {
+                            "Current position. North is up. The trail builds here once recording " +
+                                "starts."
+                        } else {
+                            "${track.size} located samples. North is up. The ring is your " +
+                                "current position."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -173,7 +218,12 @@ private fun DrawScope.drawWalkMap(
     currentLat: Double?,
     currentLon: Double?,
 ) {
-    val bounds = Mercator.Bounds.of(track.map { it.lat to it.lon })
+    // The current fix counts towards the bounds, not just the track. Before this the map drew
+    // nothing at all until a recording had produced its first located sample, so an operator
+    // opening the tab to orient themselves got a paragraph of text instead of a map -- the one
+    // thing a map is for. A position with no track is a perfectly good map.
+    val fixLatLon = currentLat?.let { la -> currentLon?.let { lo -> la to lo } }
+    val bounds = Mercator.Bounds.of(track.map { it.lat to it.lon } + listOfNotNull(fixLatLon))
         ?.expandedToAtLeast(MIN_SPAN_M) ?: return
 
     val pad = 14f
@@ -340,3 +390,70 @@ private fun formatBytes(bytes: Long): String = when {
 /** Standing still is a few metres of GPS scatter; fitting to that would zoom into jitter. */
 private const val MIN_SPAN_M = 25.0
 private const val MAX_TILES = 40L
+
+/**
+ * The numbers an operator needs while looking at the map.
+ *
+ * Deliberately compact and deliberately here rather than only on the Live tab. During a walk the
+ * two questions are "what am I reading" and "where am I", and making the operator switch tabs to
+ * alternate between them is how a survey ends up with a stretch nobody noticed was bad. G-MoN pins
+ * the same values above its map for the same reason.
+ *
+ * Two rows rather than a grid: this sits above a map that should keep most of the screen.
+ */
+@Composable
+private fun MapKpiStrip(
+    cell: com.nhnengineering.rftest.model.CellularSample?,
+    fix: com.nhnengineering.rftest.model.GeoPoint?,
+) {
+    val level = cell?.servingRsrpDbm
+    val sinr = cell?.nr?.ssSinrDb ?: cell?.lte?.rssnrDb
+
+    @Composable
+    fun RowScope.cellText(label: String, value: String) {
+        // Equal weight plus a single clipped line. Without the weight the columns size to their
+        // content and a long value pushes the others off the row; without maxLines the label wraps
+        // one character per line, which is what "B66 (1700/2100 AWS-3)" did to PCI on the first
+        // build. Compose clips rather than ellipsising by default, so both are needed.
+        Column(
+            modifier = Modifier.weight(1f),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                value,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            cellText("RAT", cell?.rat?.label ?: "—")
+            cellText(
+                "BAND",
+                cell?.nr?.bands?.firstOrNull()?.let { "n$it".removePrefix("nn") }
+                    ?: cell?.lte?.band?.let { "B$it" }
+                    ?: "—",
+            )
+            cellText("PCI", cell?.nr?.pci?.toString() ?: cell?.lte?.pci?.toString() ?: "—")
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            cellText("dBm", level?.toString() ?: "—")
+            cellText("SINR", sinr?.toString() ?: "—")
+            // Accuracy rather than coordinates: a position is only as good as its uncertainty, and
+            // six decimal places of latitude tell the operator nothing they can act on.
+            cellText("GPS ±m", fix?.accuracyM?.let { "%.0f".format(it) } ?: "—")
+        }
+    }
+}
