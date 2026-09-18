@@ -1,6 +1,7 @@
 package com.nhnengineering.rftest.model
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -14,6 +15,11 @@ import org.junit.Test
  */
 class VerdictStabiliserTest {
 
+    /** Every test below predates the source parameter and is cellular; this keeps them readable. */
+    private fun VerdictStabiliser.cell(level: Int?, quality: Int?) =
+        update(VerdictStabiliser.Source.CELLULAR, level, quality)
+
+
     /** The real 50-sample stationary trace, captured 2026-09-02 with the phone on a desk. */
     private val stationaryTrace = listOf(
         -89, -92, -92, -95, -95, -95, -95, -89, -89, -89, -92, -92, -88, -88, -88, -88, -88,
@@ -25,10 +31,10 @@ class VerdictStabiliserTest {
     fun `a single anomalous sample does not change the verdict`() {
         // The case the operator actually saw: one bad reading in an otherwise steady stream.
         val s = VerdictStabiliser()
-        repeat(8) { s.update(-88, 20) }
-        val before = s.update(-88, 20).severity
+        repeat(8) { s.cell(-88, 20) }
+        val before = s.cell(-88, 20).severity
 
-        val during = s.update(-118, -7).severity
+        val during = s.cell(-118, -7).severity
 
         assertEquals("one outlier must not flip the conclusion", before, during)
     }
@@ -37,11 +43,11 @@ class VerdictStabiliserTest {
     fun `a sustained change is shown, just not instantly`() {
         // The stabiliser must not become a filter that hides real degradation.
         val s = VerdictStabiliser()
-        repeat(10) { s.update(-85, 20) }
-        assertEquals(Verdict.Severity.GOOD, s.update(-85, 20).severity)
+        repeat(10) { s.cell(-85, 20) }
+        assertEquals(Verdict.Severity.GOOD, s.cell(-85, 20).severity)
 
         var last = Verdict.Severity.GOOD
-        repeat(12) { last = s.update(-118, -5).severity }
+        repeat(12) { last = s.cell(-118, -5).severity }
 
         assertEquals("a real drop must eventually be reported", Verdict.Severity.POOR, last)
     }
@@ -51,7 +57,7 @@ class VerdictStabiliserTest {
         // The trace crosses -95, the good/marginal boundary, four times. Unstabilised that is a
         // visible flip on a phone that never moved.
         val s = VerdictStabiliser()
-        val seen = stationaryTrace.map { s.update(it, 20).severity }
+        val seen = stationaryTrace.map { s.cell(it, 20).severity }
 
         assertEquals(
             "a stationary phone must produce exactly one verdict",
@@ -82,7 +88,7 @@ class VerdictStabiliserTest {
         fun transitions(v: List<Verdict.Severity>) = v.zipWithNext().count { (a, b) -> a != b }
 
         val raw = straddling.map { Verdict.cellular(it, 20).severity }
-        val stabilised = VerdictStabiliser().let { s -> straddling.map { s.update(it, 20).severity } }
+        val stabilised = VerdictStabiliser().let { s -> straddling.map { s.cell(it, 20).severity } }
 
         // Raw flips on almost every sample. The stabiliser is not asked to pin a value that
         // genuinely straddles a boundary -- when half the samples really are below it, reporting
@@ -99,9 +105,9 @@ class VerdictStabiliserTest {
         // The likeliest cause of what was actually reported: SINR momentarily negative flips
         // "good coverage" straight to "strong but noisy", which is a POOR severity.
         val s = VerdictStabiliser()
-        repeat(8) { s.update(-88, 20) }
+        repeat(8) { s.cell(-88, 20) }
 
-        val spike = s.update(-88, -7).severity
+        val spike = s.cell(-88, -7).severity
 
         assertEquals(Verdict.Severity.GOOD, spike)
         // And unstabilised it would indeed have flipped, which is the point.
@@ -113,9 +119,9 @@ class VerdictStabiliserTest {
         // The one lag that would matter: showing a remembered "good coverage" after service has
         // actually gone. Everything else can wait a second; this cannot.
         val s = VerdictStabiliser()
-        repeat(10) { s.update(-85, 20) }
+        repeat(10) { s.cell(-85, 20) }
 
-        val v = s.update(null, null)
+        val v = s.cell(null, null)
 
         assertEquals(Verdict.Severity.UNKNOWN, v.severity)
     }
@@ -125,8 +131,8 @@ class VerdictStabiliserTest {
         // A mean would let one absurd sample move the answer in proportion to how wrong it is,
         // which is exactly backwards.
         val s = VerdictStabiliser(windowSize = 5)
-        listOf(-90, -90, -90, -90).forEach { s.update(it, 20) }
-        s.update(-140, 20)
+        listOf(-90, -90, -90, -90).forEach { s.cell(it, 20) }
+        s.cell(-140, 20)
 
         assertEquals(-90, s.medianDbm)
     }
@@ -136,7 +142,7 @@ class VerdictStabiliserTest {
         // The point is to steady the conclusion, not to pretend the signal is steady. The screen
         // still gets to say how much the reading actually moved.
         val s = VerdictStabiliser(windowSize = 8)
-        listOf(-88, -95, -91, -92).forEach { s.update(it, 20) }
+        listOf(-88, -95, -91, -92).forEach { s.cell(it, 20) }
 
         assertEquals(7, s.spreadDb)
     }
@@ -146,10 +152,10 @@ class VerdictStabiliserTest {
         // A change of words inside the same severity is a refinement of the same conclusion, not a
         // contradiction, so it should not be held back.
         val s = VerdictStabiliser()
-        repeat(8) { s.update(-80, 20) }
+        repeat(8) { s.cell(-80, 20) }
 
         // Same severity band, different level: the detail may update immediately.
-        val v = s.update(-90, 20)
+        val v = s.cell(-90, 20)
 
         assertEquals(Verdict.Severity.GOOD, v.severity)
     }
@@ -157,12 +163,95 @@ class VerdictStabiliserTest {
     @Test
     fun `reset clears the history so a new session does not inherit the last one`() {
         val s = VerdictStabiliser()
-        repeat(8) { s.update(-85, 20) }
+        repeat(8) { s.cell(-85, 20) }
         s.reset()
 
         assertEquals(null, s.medianDbm)
         assertEquals(null, s.spreadDb)
         // First sample after a reset is shown immediately rather than confirmed against history.
-        assertEquals(Verdict.Severity.POOR, s.update(-120, -5).severity)
+        assertEquals(Verdict.Severity.POOR, s.cell(-120, -5).severity)
+    }
+}
+
+/**
+ * The no-SIM contradiction, found on the OnePlus 9 on 2026-09-18.
+ *
+ * The screen showed a hero reading of -110 dBm beside a verdict of "Strong signal". Both panels
+ * were reading the same stabiliser; the window held cellular -110 dBm and Wi-Fi -42 dBm at the
+ * same time, because with no SIM the serving RSRP appeared and vanished between samples and the
+ * caller switched radios each time it did. The median landed between two quantities that do not
+ * share a scale.
+ *
+ * These are separate from the tests above because they are about the window's identity rather than
+ * its arithmetic.
+ */
+class VerdictStabiliserSourceTest {
+
+    @Test
+    fun `a Wi-Fi reading cannot drag a cellular verdict`() {
+        val s = VerdictStabiliser()
+
+        // Fill the window with a genuinely poor cellular level.
+        repeat(8) { s.update(VerdictStabiliser.Source.CELLULAR, -110, null) }
+        val cellular = s.update(VerdictStabiliser.Source.CELLULAR, -110, null)
+        assertEquals(Verdict.Severity.POOR, cellular.severity)
+
+        // One Wi-Fi sample arrives. It must not be averaged against -110.
+        val wifi = s.update(VerdictStabiliser.Source.WIFI, -42, null, wifiCoChannel = 0)
+        assertEquals(-42, s.medianDbm)
+    }
+
+    @Test
+    fun `switching source clears the spread, so the screen cannot report a gap between radios`() {
+        val s = VerdictStabiliser()
+        repeat(8) { s.update(VerdictStabiliser.Source.CELLULAR, -110, null) }
+
+        s.update(VerdictStabiliser.Source.WIFI, -42, null, wifiCoChannel = 0)
+
+        // The handset printed "moving 69 dB over the last few seconds" -- the gap between the two
+        // radios, presented as though the signal were swinging. After one Wi-Fi sample there is no
+        // spread to report at all.
+        assertNull("spread must not span two radios", s.spreadDb)
+    }
+
+    @Test
+    fun `alternating radios never blends them`() {
+        // The actual no-SIM behaviour: the caller flips back and forth every sample or two.
+        val s = VerdictStabiliser()
+        val seen = mutableListOf<Int?>()
+        repeat(6) {
+            s.update(VerdictStabiliser.Source.CELLULAR, -110, null)
+            seen += s.medianDbm
+            s.update(VerdictStabiliser.Source.WIFI, -42, null, wifiCoChannel = 0)
+            seen += s.medianDbm
+        }
+
+        // Every median must be one of the two real values, never anything between them.
+        for (m in seen) {
+            assertTrue("median $m was measured by neither radio", m == -110 || m == -42)
+        }
+    }
+
+    @Test
+    fun `staying on one source still smooths as before`() {
+        // The guard must not defeat the smoothing it sits in front of.
+        val s = VerdictStabiliser()
+        listOf(-88, -95, -91, -92, -89).forEach {
+            s.update(VerdictStabiliser.Source.CELLULAR, it, 20)
+        }
+
+        assertEquals(-91, s.medianDbm)
+        assertEquals(7, s.spreadDb)
+    }
+
+    @Test
+    fun `source is taken from the parameter, not from the co-channel count`() {
+        // A Wi-Fi sample whose co-channel count is unknown used to be treated as cellular,
+        // because the source was inferred from that optional field being non-null.
+        val s = VerdictStabiliser()
+
+        val v = s.update(VerdictStabiliser.Source.WIFI, -42, null, wifiCoChannel = null)
+
+        assertEquals(Verdict.wifi(-42, null), v)
     }
 }

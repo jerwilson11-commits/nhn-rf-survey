@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import com.nhnengineering.rftest.cellular.CellularCollector
 import com.nhnengineering.rftest.location.LocationCollector
 import com.nhnengineering.rftest.model.CellularSample
+import com.nhnengineering.rftest.model.VerdictStabiliser
 import com.nhnengineering.rftest.model.GeoPoint
 import com.nhnengineering.rftest.model.RssiBucket
 import com.nhnengineering.rftest.model.ThroughputSample
@@ -187,13 +188,28 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
         item { LevelBar(cell, wifi) }
         item { HeroKpi(cell, wifi) }
         item {
-            val steady = if (cell?.servingRsrpDbm != null || wifi == null) {
+            // Which radio this screen is speaking about. Decided once per sample and passed
+            // explicitly, because the stabiliser keeps a window and a window that changes
+            // quantity mid-flight produces a median of two different things.
+            //
+            // The condition deliberately asks whether cellular is *present at all*, not whether
+            // this particular sample carried a level: with no SIM the serving RSRP appears and
+            // vanishes between samples, and keying off the level alone made the screen alternate
+            // between the two radios several times a second.
+            val onCellular = cell?.servingRsrpDbm != null || wifi == null
+            val steady = if (onCellular) {
                 stabiliser.update(
+                    VerdictStabiliser.Source.CELLULAR,
                     cell?.servingRsrpDbm,
                     cell?.nr?.ssSinrDb ?: cell?.lte?.rssnrDb,
                 )
             } else {
-                stabiliser.update(wifi.rssiDbm, null, wifiCoChannel = wifi.coChannelCount)
+                stabiliser.update(
+                    VerdictStabiliser.Source.WIFI,
+                    wifi.rssiDbm,
+                    null,
+                    wifiCoChannel = wifi.coChannelCount,
+                )
             }
             VerdictLine(steady, spreadDb = stabiliser.spreadDb)
         }

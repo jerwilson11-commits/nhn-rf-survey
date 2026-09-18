@@ -38,8 +38,18 @@ class VerdictStabiliser(
     private val confirmSamples: Int = 3,
 ) {
 
+    /**
+     * Which physical quantity a reading is.
+     *
+     * Passed explicitly rather than inferred. The first version deduced it from whether a Wi-Fi
+     * co-channel count happened to be present, which made the source a side effect of an unrelated
+     * optional field -- a Wi-Fi sample with no co-channel count was silently treated as cellular.
+     */
+    enum class Source { CELLULAR, WIFI }
+
     private val levels = ArrayDeque<Int>()
     private val qualities = ArrayDeque<Int>()
+    private var lastSource: Source? = null
 
     private var shown: Verdict? = null
     private var candidate: Verdict? = null
@@ -56,10 +66,31 @@ class VerdictStabiliser(
     /**
      * Feeds one raw sample and returns the verdict to display.
      *
-     * @param wifiCoChannel supplied when the reading is Wi-Fi rather than cellular, so the same
-     *   stabiliser serves both surfaces instead of duplicating the logic.
+     * @param source which quantity this reading is. A change of source clears the window.
+     * @param wifiCoChannel co-channel count, used only to word a Wi-Fi verdict. It no longer
+     *   decides whether the reading is Wi-Fi -- [source] does.
      */
-    fun update(levelDbm: Int?, qualityDb: Int?, wifiCoChannel: Int? = null): Verdict {
+    fun update(
+        source: Source,
+        levelDbm: Int?,
+        qualityDb: Int?,
+        wifiCoChannel: Int? = null,
+    ): Verdict {
+        // A median is only meaningful across one quantity. Cellular RSRP and Wi-Fi RSSI are
+        // different measurements on different scales, and mixing them does not average to
+        // anything -- it invents a number that was never measured.
+        //
+        // Found on a handset with no SIM, where the serving RSRP appeared and vanished sample to
+        // sample: the screen showed a hero reading of -110 dBm beside a verdict of "Strong
+        // signal", because the window held cellular -110 and Wi-Fi -42 at once and the median
+        // landed between them. The app even printed the evidence -- "moving 69 dB over the last
+        // few seconds" -- which is exactly the gap between the two.
+        //
+        // Clearing on a change of source is the fix, and it belongs here rather than in the
+        // caller: any caller can make this mistake, and the next one will.
+        if (lastSource != null && source != lastSource) reset()
+        lastSource = source
+
         if (levelDbm != null) {
             levels.addLast(levelDbm)
             while (levels.size > windowSize) levels.removeFirst()
@@ -75,7 +106,7 @@ class VerdictStabiliser(
         // empty, so a phone that had been fine a second ago kept reporting fine.
         if (levelDbm == null) {
             reset()
-            return if (wifiCoChannel != null) Verdict.wifi(null, null) else Verdict.cellular(null, null)
+            return if (source == Source.WIFI) Verdict.wifi(null, null) else Verdict.cellular(null, null)
         }
 
         val medLevel = levels.median()
@@ -83,7 +114,7 @@ class VerdictStabiliser(
         medianDbm = medLevel
         spreadDb = if (levels.size >= 2) (levels.max() - levels.min()) else null
 
-        val fresh = if (wifiCoChannel != null) {
+        val fresh = if (source == Source.WIFI) {
             Verdict.wifi(medLevel, wifiCoChannel)
         } else {
             Verdict.cellular(medLevel, medQuality)
