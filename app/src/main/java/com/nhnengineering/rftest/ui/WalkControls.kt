@@ -152,8 +152,14 @@ fun RecordButton(recording: Boolean, onStart: () -> Unit, onStop: () -> Unit) {
  * the site name.
  */
 @Composable
-fun BandLockEntry(current: String?, onBandLock: (String?) -> Unit) {
+fun BandLockEntry(
+    current: String?,
+    onBandLock: (String?) -> Unit,
+    ratLock: String?,
+    onRatLock: (String?) -> Unit,
+) {
     var text by remember(current) { mutableStateOf(current.orEmpty()) }
+    var ratText by remember(ratLock) { mutableStateOf(ratLock.orEmpty()) }
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
@@ -170,13 +176,29 @@ fun BandLockEntry(current: String?, onBandLock: (String?) -> Unit) {
             )
             Button(onClick = { onBandLock(text.trim().ifBlank { null }) }) { Text("Set") }
         }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = ratText,
+                onValueChange = { ratText = it },
+                label = { Text("Technology locked to (blank = not locked)") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            Button(onClick = { onRatLock(ratText.trim().ifBlank { null }) }) { Text("Set") }
+        }
         Text(
-            text = if (current != null) {
-                "Recorded as locked to $current. Statistics will describe that band, not the " +
+            text = listOfNotNull(
+                current?.let { "Band: $it" },
+                ratLock?.let { "Technology: $it" },
+            ).ifEmpty { null }?.joinToString("  ·  ")?.let {
+                "$it. Statistics will describe what the handset was restricted to, not the " +
                     "service a subscriber would get."
-            } else {
-                "Free-running. Set this only after locking the modem in the handset's RF toolkit."
-            },
+            } ?: "Free-running. Set these only after restricting the modem in the handset's RF " +
+                "toolkit or RadioInfo screen — this app records what you did, it does not do it.",
             style = MaterialTheme.typography.bodySmall,
         )
     }

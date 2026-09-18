@@ -1128,6 +1128,28 @@ object PdfReportGenerator {
                         "than the service a user would receive. " + verdict
             )
         }
+        if (summary.ratLocks.isNotEmpty()) {
+            val rats = points.mapNotNull { it.rat }
+            val distribution = rats.groupingBy { it }.eachCount()
+                .entries.sortedByDescending { it.value }
+                .joinToString(", ") { (rat, n) ->
+                    String.format(Locale.US, "%s %.0f %%", rat, 100.0 * n / rats.size)
+                }
+            add(
+                "Technology lock declared" to
+                    "${summary.ratLocks.joinToString(", ")}. Set outside this app and recorded as " +
+                        "declared; nothing here performs or verifies it. " +
+                        if (rats.isEmpty()) {
+                            "No radio technology was recorded in this session, so there is nothing " +
+                                "to compare the declaration against."
+                        } else {
+                            "Technologies actually observed: $distribution. These are stated rather " +
+                                "than checked against the declaration, because the two are written " +
+                                "in different vocabularies and a machine comparison would " +
+                                "manufacture disagreements as readily as find them."
+                        }
+            )
+        }
         add(
             "Sampling" to
                 "Continuous logging at approximately one sample per second, written to CSV as " +

@@ -168,7 +168,7 @@ private val THROUGHPUT_COLUMNS = listOf(
  * image filename, so an exported session and its floorplan can be handed over together.
  */
 private val INDOOR_COLUMNS = listOf(
-    "floorplan_id", "floorplan_x", "floorplan_y", "waypoint", "floor", "band_lock",
+    "floorplan_id", "floorplan_x", "floorplan_y", "waypoint", "floor", "band_lock", "rat_lock",
 )
 
 private val TRAILING_COLUMNS = listOf("note")
@@ -347,6 +347,7 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += ind?.label ?: areaLabel
     cells += floor
     cells += bandLock
+    cells += ratLock
 
     cells += note
 

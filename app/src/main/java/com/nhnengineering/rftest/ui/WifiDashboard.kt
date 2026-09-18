@@ -89,6 +89,7 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val areaLabel by RecordingState.areaLabel.collectAsState()
     val floor by RecordingState.floor.collectAsState()
     val bandLock by RecordingState.bandLock.collectAsState()
+    val ratLock by RecordingState.ratLock.collectAsState()
     val walkThroughput by RecordingState.walkThroughputEnabled.collectAsState()
     val liveView by RecordingState.liveViewEnabled.collectAsState()
     val liveViewError by RecordingState.liveServerError.collectAsState()
@@ -280,6 +281,8 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 onFloor = { RecordingState.floor.value = it },
                 bandLock = bandLock,
                 onBandLock = { RecordingState.bandLock.value = it },
+                ratLock = ratLock,
+                onRatLock = { RecordingState.ratLock.value = it },
                 walkThroughput = walkThroughput,
                 onWalkThroughputChange = { RecordingState.walkThroughputEnabled.value = it },
                 liveView = liveView,

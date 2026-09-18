@@ -243,6 +243,8 @@ data class MeasurementSample(
     val floor: String? = null,
     /** Band the operator declared the handset locked to; null for a free-running walk. */
     val bandLock: String? = null,
+    /** Radio technology the operator declared the handset restricted to. */
+    val ratLock: String? = null,
     /** Present only on the sample written when a speed test completes, so the throughput row
      *  carries the position and RF conditions the test actually ran under. */
     val throughput: ThroughputSample? = null,

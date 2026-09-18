@@ -171,6 +171,7 @@ class RecordingService : Service() {
                             areaLabel = RecordingState.areaLabel.value,
                             floor = RecordingState.floor.value,
                             bandLock = RecordingState.bandLock.value,
+                            ratLock = RecordingState.ratLock.value,
                             throughput = throughput,
                             note = if (throughput != null) "speedtest" else null,
                         )

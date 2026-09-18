@@ -50,6 +50,8 @@ fun SetupPanel(
     onFloor: (String?) -> Unit,
     bandLock: String?,
     onBandLock: (String?) -> Unit,
+    ratLock: String?,
+    onRatLock: (String?) -> Unit,
     walkThroughput: Boolean,
     onWalkThroughputChange: (Boolean) -> Unit,
     liveView: Boolean,
@@ -113,7 +115,12 @@ fun SetupPanel(
 
             Text("Labels", style = MaterialTheme.typography.titleSmall)
             LabelEntry(onArea = onArea, onFloor = onFloor)
-            BandLockEntry(current = bandLock, onBandLock = onBandLock)
+            BandLockEntry(
+                current = bandLock,
+                onBandLock = onBandLock,
+                ratLock = ratLock,
+                onRatLock = onRatLock,
+            )
 
             HorizontalDivider()
 

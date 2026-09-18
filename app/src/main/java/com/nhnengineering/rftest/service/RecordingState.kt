@@ -90,6 +90,22 @@ object RecordingState {
     val bandLock = MutableStateFlow<String?>(null)
 
     /**
+     * The radio technology the operator has restricted the handset to, or null for free-running.
+     *
+     * Same standing as [bandLock]: a declaration of something done outside this app -- in the
+     * handset's RadioInfo screen or its RF toolkit -- not something performed or verified here.
+     *
+     * Reported alongside the RAT actually observed rather than cross-checked by string matching.
+     * An operator writes "NR only" or "5G SA" or "LTE only" as the mood takes them, and the app
+     * records RATs as "5G SA", "5G NSA", "LTE". Matching those loosely enough to be useful is
+     * matching them loosely enough to be wrong, and a false contradiction in a methodology section
+     * is worse than none. Printing the declaration next to the observed distribution lets an
+     * engineer see "declared NR only, observed 100% LTE" at a glance, which is the finding, without
+     * the instrument having to guess at synonyms.
+     */
+    val ratLock = MutableStateFlow<String?>(null)
+
+    /**
      * Positions logged this session, paired with the serving KPI colour recorded there, for
      * drawing on the floorplan. Capped so a long session cannot grow this without bound — the
      * authoritative record is the CSV, this is only what the plan draws.
