@@ -1,5 +1,6 @@
 package com.nhnengineering.rftest.cellular
 
+import android.annotation.SuppressLint
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -243,6 +244,10 @@ class CellularCollector(context: Context) {
      * Some OEMs return a cached `getAllCellInfo()` indefinitely until an update is requested.
      * Throttled because the request itself is rate-limited by the framework.
      */
+    // Lint cannot see through runCatching, and this call is guarded twice: by the
+    // hasFineLocation check below and by the runCatching around it. Suppressed so that a real
+    // finding -- an API-level violation, say -- is visible rather than buried in known noise.
+    @SuppressLint("MissingPermission")
     private fun maybeRequestRefresh() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastRefreshElapsedMs < REFRESH_INTERVAL_MS) return
@@ -407,6 +412,9 @@ class CellularCollector(context: Context) {
      * registration, and adding one that throws takes the working ones down with it silently. A
      * `runCatching` around a pull can fail alone.
      */
+    // Same as above: guarded by runCatching, which lint does not model. The failure mode this
+    // protects against is a SecurityException, and returning an empty list is the intended answer.
+    @SuppressLint("MissingPermission")
     private fun cellBandwidthsKhz(): List<Int> = runCatching {
         tm?.serviceState?.cellBandwidths?.filter { it > 0 }.orEmpty()
     }.getOrDefault(emptyList())

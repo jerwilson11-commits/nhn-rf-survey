@@ -2,6 +2,7 @@ package com.nhnengineering.rftest.location
 
 import android.content.Context
 import android.location.Location
+import android.os.SystemClock
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Looper
@@ -115,7 +116,14 @@ class LocationCollector(context: Context) {
         speedMps = if (hasSpeed()) speed else null,
         bearingDeg = if (hasBearing()) bearing else null,
         fixTimeUtcMillis = time,
-        fixAgeMs = elapsedRealtimeAgeMillis.takeIf { it >= 0 },
+        // Computed rather than taken from Location.getElapsedRealtimeAgeMillis(), which is API 33
+        // and this app's minSdk is 31. That method was used first and crashed every device below
+        // Android 13 with NoSuchMethodError the moment a fix arrived -- invisible on the Android 17
+        // development handset, and invisible to unit tests, because it is a link-time fact about
+        // the device rather than anything the code can express. getElapsedRealtimeNanos() is API 17
+        // and the subtraction is exactly what the newer method does.
+        fixAgeMs = ((SystemClock.elapsedRealtimeNanos() - elapsedRealtimeNanos) / 1_000_000L)
+            .takeIf { it >= 0 },
         provider = provider ?: "unknown",
     )
 }
