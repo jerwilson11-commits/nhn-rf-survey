@@ -29,7 +29,7 @@ import java.net.URL
  */
 class TileProxy(
     private val cacheDir: File,
-    private val urlTemplate: String = ESRI_WORLD_IMAGERY,
+    private val basemap: Basemap = Basemap.SATELLITE,
 ) {
 
     /**
@@ -44,12 +44,15 @@ class TileProxy(
         val max = 1 shl z
         if (x < 0 || y < 0 || x >= max || y >= max) return null
 
-        val cached = File(cacheDir, "$z-$x-$y.jpg")
+        // The layer is part of the filename. Without it a cached satellite tile is served for a
+        // street request at the same coordinates, and the map silently shows the wrong basemap
+        // with no error anywhere -- the cache would have to be cleared to notice.
+        val cached = File(cacheDir, "${basemap.cacheTag}-$z-$x-$y.jpg")
         if (cached.isFile && cached.length() > 0) {
             return runCatching { cached.readBytes() }.getOrNull()
         }
 
-        val url = urlTemplate
+        val url = basemap.url
             .replace("{z}", z.toString())
             .replace("{x}", x.toString())
             .replace("{y}", y.toString())
@@ -91,6 +94,38 @@ class TileProxy(
         cacheDir.listFiles()?.forEach { runCatching { it.delete() } }
     }
 
+    /**
+     * Base maps available, all on the same tile scheme and none needing an API key.
+     *
+     * Street was added because the satellite view has no road names, which is what an operator
+     * actually navigates by when deciding where to walk next. It is the same provider and the
+     * same {z}/{y}/{x} axis order, so it costs nothing beyond a URL.
+     *
+     * A hybrid -- labels drawn over imagery -- was tried and abandoned: Esri's reference
+     * overlay returned a fully transparent tile over the test area, so it would have looked
+     * like a broken satellite view rather than a hybrid one.
+     */
+    enum class Basemap(
+        val label: String,
+        val url: String,
+        val attribution: String,
+        /** Part of the cache key. Without it, switching serves the other layer's tiles. */
+        val cacheTag: String,
+    ) {
+        SATELLITE(
+            "Satellite",
+            ESRI_WORLD_IMAGERY,
+            "Imagery © Esri, Maxar, Earthstar Geographics",
+            "img",
+        ),
+        STREET(
+            "Street",
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+            "© Esri, HERE, Garmin, OpenStreetMap contributors",
+            "str",
+        ),
+    }
+
     companion object {
         private const val TAG = "TileProxy"
         private const val CONNECT_TIMEOUT_MS = 8_000
@@ -106,5 +141,6 @@ class TileProxy(
             "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 
         const val ATTRIBUTION = "Imagery © Esri, Maxar, Earthstar Geographics"
+
     }
 }

@@ -50,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material3.FilterChip
 
 /**
  * Satellite map of the walk, on the handset.
@@ -98,11 +99,16 @@ fun MapScreen(modifier: Modifier = Modifier) {
     val shownFix = if (recording) fix else localFix
 
     var showImagery by remember { mutableStateOf(true) }
+    var basemap by remember {
+        mutableStateOf(com.nhnengineering.rftest.live.TileProxy.Basemap.SATELLITE)
+    }
     // Bumped when a tile finishes loading, purely to force a redraw. Compose does not observe the
     // cache, and without this the imagery appears only when some other state happens to change.
     var tileGeneration by remember { mutableIntStateOf(0) }
 
-    val tiles = remember { TileCache(context, scope) { tileGeneration++ } }
+    val tiles = remember(basemap) {
+        TileCache(context, scope, basemap) { tileGeneration++ }
+    }
     DisposableEffect(Unit) { onDispose { } }
 
     Column(
@@ -126,9 +132,27 @@ fun MapScreen(modifier: Modifier = Modifier) {
                         },
                         style = MaterialTheme.typography.titleMedium,
                     )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Satellite", style = MaterialTheme.typography.bodySmall)
-                        Switch(checked = showImagery, onCheckedChange = { showImagery = it })
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        // Satellite shows what a building looks like; street shows what it is
+                        // called. An operator deciding where to walk next needs the second more
+                        // often than the first, and the app only offered the first.
+                        for (option in com.nhnengineering.rftest.live.TileProxy.Basemap.entries) {
+                            FilterChip(
+                                selected = showImagery && basemap == option,
+                                onClick = {
+                                    if (showImagery && basemap == option) {
+                                        showImagery = false
+                                    } else {
+                                        basemap = option
+                                        showImagery = true
+                                    }
+                                },
+                                label = { Text(option.label, maxLines = 1) },
+                            )
+                        }
                     }
                 }
 
@@ -183,10 +207,10 @@ fun MapScreen(modifier: Modifier = Modifier) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Imagery", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "Imagery © Esri, Maxar, Earthstar Geographics. Tiles are fetched over this " +
-                        "phone's own connection and cached, so they cost mobile data — and they " +
-                        "use the same radio the survey is measuring. Switch the layer off if a " +
-                        "measurement matters more than the picture.",
+                    basemap.attribution + ". Tiles are fetched over this phone's own " +
+                        "connection and cached, so they cost mobile data — and they use the same " +
+                        "radio the survey is measuring. Tap the selected layer again to turn the " +
+                        "base map off if a measurement matters more than the picture.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Row(

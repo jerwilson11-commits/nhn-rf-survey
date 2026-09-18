@@ -27,10 +27,11 @@ import java.io.File
 class TileCache(
     context: Context,
     private val scope: CoroutineScope,
+    private val basemap: TileProxy.Basemap = TileProxy.Basemap.SATELLITE,
     private val onLoaded: () -> Unit,
 ) {
 
-    private val proxy = TileProxy(File(context.cacheDir, "tiles"))
+    private val proxy = TileProxy(File(context.cacheDir, "tiles"), basemap)
 
     // Roughly an eighth of the app's heap. A 256px ARGB_8888 tile is 256 KB, so this holds a few
     // dozen — comfortably more than one screenful, which is all that is ever drawn at once.
@@ -53,7 +54,8 @@ class TileCache(
 
     /** The bitmap if it is already decoded; otherwise null, having possibly started a fetch. */
     fun get(z: Int, x: Int, y: Int): Bitmap? {
-        val key = "$z/$x/$y"
+        // Layer-qualified for the same reason the disk cache is: two basemaps share coordinates.
+        val key = "${basemap.cacheTag}/$z/$x/$y"
         memory.get(key)?.let { return it }
         if (key in failed) return null
 
