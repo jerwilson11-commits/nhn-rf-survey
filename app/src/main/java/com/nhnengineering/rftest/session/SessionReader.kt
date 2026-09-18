@@ -123,6 +123,13 @@ data class SessionSummary(
      * first one seen.
      */
     val devices: List<String> = emptyList(),
+    /**
+     * Bands the operator declared the handset locked to during this session.
+     *
+     * A list because a walk may legitimately change lock partway -- one band per leg is a normal
+     * way to survey a multi-band system -- and because a merged file carries more than one.
+     */
+    val bandLocks: List<String> = emptyList(),
 ) {
     val hasTrack: Boolean get() = pointCount >= 2 && (maxLat > minLat || maxLon > minLon)
 
@@ -169,6 +176,7 @@ object SessionReader {
             val iNrRsrq = idx("nr_ss_rsrq"); val iLteRsrq = idx("lte_rsrq")
             val iLteBand = idx("lte_band"); val iNrBand = idx("nr_band"); val iRat = idx("rat")
             val iDevModel = idx("device_model"); val iDevBuild = idx("device_build")
+            val iBandLock = idx("band_lock")
             val iNrPci = idx("nr_pci"); val iLtePci = idx("lte_pci")
             val iNrNci = idx("nr_nci")
             val iNrArfcn = idx("nr_arfcn"); val iEarfcn = idx("lte_earfcn")
@@ -182,6 +190,7 @@ object SessionReader {
             val points = mutableListOf<TrackPoint>()
             // Insertion-ordered so the first handset seen is named first in the report.
             val devicesSeen = linkedSetOf<String>()
+            val bandLocksSeen = linkedSetOf<String>()
             var firstTime: Long? = null
             var lastTime: Long? = null
             var rows = 0
@@ -192,6 +201,7 @@ object SessionReader {
                 val c = splitCsv(line)
                 fun s(i: Int?) = i?.let { c.getOrNull(it) }?.takeIf { it.isNotEmpty() }
 
+                s(iBandLock)?.let { bandLocksSeen += it }
                 s(iDevModel)?.let { model ->
                     devicesSeen += listOfNotNull(model, s(iDevBuild)).joinToString(", ")
                 }
@@ -290,6 +300,7 @@ object SessionReader {
                 waypoints = points.mapNotNull { it.waypoint }.distinct(),
                 floors = points.mapNotNull { it.floor }.distinct(),
                 devices = devicesSeen.toList(),
+                bandLocks = bandLocksSeen.toList(),
             )
             summary to points
         }

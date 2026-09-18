@@ -70,6 +70,26 @@ object RecordingState {
     val floor = MutableStateFlow<String?>(null)
 
     /**
+     * The band the operator has locked the handset to externally, or null for a free-running walk.
+     *
+     * **This is a declaration, not a measurement.** Nothing in this app performs the lock, and
+     * nothing in it can confirm one is in force -- band lock needs vendor or privileged access that
+     * no ordinary application has. The operator sets it after locking the modem with the handset's
+     * own RF toolkit or a diagnostic tool.
+     *
+     * It is recorded because a band-locked survey means something different from a free one. The
+     * handset has been prevented from doing what a user's phone would do, so compliance
+     * percentages, dominance and overlap are no longer statements about what a subscriber would
+     * experience. A locked file and a free file are indistinguishable without this, and the
+     * difference only surfaces when somebody compares two sessions months later and cannot work
+     * out why they disagree.
+     *
+     * The report cross-checks the declaration against the bands actually observed, which is the
+     * one part of this that can be verified.
+     */
+    val bandLock = MutableStateFlow<String?>(null)
+
+    /**
      * Positions logged this session, paired with the serving KPI colour recorded there, for
      * drawing on the floorplan. Capped so a long session cannot grow this without bound — the
      * authoritative record is the CSV, this is only what the plan draws.
@@ -146,6 +166,9 @@ object RecordingState {
         error.value = null
         placedPositions.value = emptyList()
         areaLabel.value = null
+        // Deliberately NOT cleared: a lock set in the modem outlives one recording, and silently
+        // forgetting it would mark the next walk as free-running while the handset was still
+        // locked. The operator clears it when they clear the lock.
         floor.value = null
         liveTrack.value = emptyList()
         lastThroughput.value = null

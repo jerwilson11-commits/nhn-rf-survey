@@ -140,6 +140,48 @@ fun RecordButton(recording: Boolean, onStart: () -> Unit, onStop: () -> Unit) {
  * Real buildings have areas the presets do not cover and floors that are not numbers — M, LL, B2,
  * PH. Those get typed once, standing still, which is why they live here and not in [WalkControls].
  */
+/**
+ * Records that the handset has been band-locked elsewhere.
+ *
+ * Deliberately worded as a declaration. This app does not lock anything and cannot verify a lock --
+ * that needs vendor or privileged access no ordinary application holds -- so the control asks what
+ * the operator did, and the report says so in those terms and cross-checks it against the bands the
+ * walk actually saw.
+ *
+ * It sits in setup rather than the walk controls because it is set once, standing still, alongside
+ * the site name.
+ */
+@Composable
+fun BandLockEntry(current: String?, onBandLock: (String?) -> Unit) {
+    var text by remember(current) { mutableStateOf(current.orEmpty()) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                label = { Text("Band locked to (blank = not locked)") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            Button(onClick = { onBandLock(text.trim().ifBlank { null }) }) { Text("Set") }
+        }
+        Text(
+            text = if (current != null) {
+                "Recorded as locked to $current. Statistics will describe that band, not the " +
+                    "service a subscriber would get."
+            } else {
+                "Free-running. Set this only after locking the modem in the handset's RF toolkit."
+            },
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
 @Composable
 fun LabelEntry(onArea: (String?) -> Unit, onFloor: (String?) -> Unit) {
     var areaText by remember { mutableStateOf("") }

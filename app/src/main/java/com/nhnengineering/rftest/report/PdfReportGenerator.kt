@@ -1100,6 +1100,34 @@ object PdfReportGenerator {
                         "rather than as a property of the site alone."
             )
         }
+        // Immediately after the handset, because it qualifies the statistics the same way.
+        if (summary.bandLocks.isNotEmpty()) {
+            val observed = points.mapNotNull { it.cellBand }.distinct()
+            val findings = BandLockCheck.check(summary.bandLocks, observed)
+            val verdict = when {
+                // No bands observed is not agreement. BandLockCheck stays silent here because it
+                // has nothing to compare, and reporting that silence as "consistent" would turn an
+                // absence of evidence into a confirmation -- the precise error this whole section
+                // exists to prevent.
+                observed.isEmpty() ->
+                    "No band was recorded anywhere in this session, so the declaration could not " +
+                        "be checked against anything."
+                findings.isEmpty() ->
+                    "Bands observed are consistent with that lock."
+                else ->
+                    findings.joinToString(" ") { "${it.headline}: ${it.detail}" }
+            }
+            add(
+                "Band lock declared" to
+                    "${summary.bandLocks.joinToString(", ")}. This was set outside this app, in " +
+                        "the handset's own RF toolkit or a diagnostic tool, and is recorded here " +
+                        "as the operator declared it -- nothing in this instrument performs a band " +
+                        "lock or can confirm one is in force. " +
+                        "A locked walk prevents the handset doing what a subscriber's phone would " +
+                        "do, so compliance, dominance and overlap describe the locked band rather " +
+                        "than the service a user would receive. " + verdict
+            )
+        }
         add(
             "Sampling" to
                 "Continuous logging at approximately one sample per second, written to CSV as " +

@@ -88,6 +88,7 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val breaches by RecordingState.breaches.collectAsState()
     val areaLabel by RecordingState.areaLabel.collectAsState()
     val floor by RecordingState.floor.collectAsState()
+    val bandLock by RecordingState.bandLock.collectAsState()
     val walkThroughput by RecordingState.walkThroughputEnabled.collectAsState()
     val liveView by RecordingState.liveViewEnabled.collectAsState()
     val liveViewError by RecordingState.liveServerError.collectAsState()
@@ -277,6 +278,8 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 lastFile = lastFile,
                 onArea = { RecordingState.areaLabel.value = it },
                 onFloor = { RecordingState.floor.value = it },
+                bandLock = bandLock,
+                onBandLock = { RecordingState.bandLock.value = it },
                 walkThroughput = walkThroughput,
                 onWalkThroughputChange = { RecordingState.walkThroughputEnabled.value = it },
                 liveView = liveView,
