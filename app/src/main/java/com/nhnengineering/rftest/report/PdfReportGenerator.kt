@@ -1,6 +1,7 @@
 package com.nhnengineering.rftest.report
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
@@ -903,6 +904,20 @@ object PdfReportGenerator {
                     bmp, null,
                     Rect(left.toInt(), top.toInt(), (left + w).toInt(), (top + h).toInt()), null,
                 )
+
+                // Interpolated coverage, under the sample dots so the real measurements stay
+                // visible on top of the inference. Unmeasured area is left transparent rather than
+                // filled: see Heatmap for why that is the whole point of the feature.
+                val grid = heatmapFor(indoor, kpi, bmp.width.toFloat() / max(bmp.height, 1))
+                val overlay = heatmapBitmap(grid, kpi)
+                if (overlay != null) {
+                    canvas.drawBitmap(
+                        overlay, null,
+                        Rect(left.toInt(), top.toInt(), (left + w).toInt(), (top + h).toInt()),
+                        Paint().apply { isFilterBitmap = true },
+                    )
+                }
+
                 canvas.drawRect(left, top, left + w, top + h, frame)
                 val dot = Paint().apply { isAntiAlias = true }
                 indoor.forEach { p ->
@@ -913,6 +928,20 @@ object PdfReportGenerator {
                 c.y += drawLegend(c, kpi, MARGIN, c.y)
                 c.gap(6f)
                 c.text("$planId — ${indoor.size} positioned samples.", c.small)
+                c.para(
+                    "Shaded area is interpolated between measurements by inverse distance " +
+                        "weighting: each point is the average of the samples near it, weighted by " +
+                        // No markdown: this is drawn straight onto a PDF canvas, so asterisks
+                        // arrive as asterisks. Emphasis comes from sentence order instead.
+                        "one over the distance squared. Unshaded floor was not surveyed — " +
+                        "nothing within the interpolation radius was measured there, so nothing " +
+                        "is claimed about it. " +
+                        String.format(
+                            Locale.US,
+                            "%.0f %% of the plan is within range of a measurement.",
+                            grid.coveredFraction * 100,
+                        ),
+                )
                 // Deliberately no north arrow and no scale bar. The operator supplies a plan image,
                 // not a georeferenced raster, so neither its orientation nor its scale is known to
                 // this app. Drawing either would be an invention the reader could not check.
@@ -989,6 +1018,46 @@ object PdfReportGenerator {
             "${gps.size} GPS-located samples, north up, equal scale on both axes. " +
                 "S marks the start of the walk and E the end.",
         )
+    }
+
+    /**
+     * Builds the interpolation grid for the plan.
+     *
+     * Resolution is modest on purpose. A finer grid does not add information -- the information is
+     * bounded by the samples, not the pixels -- it only makes a sparse survey look dense, which is
+     * the failure this feature is built to avoid.
+     */
+    private fun heatmapFor(indoor: List<TrackPoint>, kpi: SessionStats.Kpi, aspectWH: Float): Heatmap.Grid {
+        val samples = indoor.mapNotNull { p ->
+            val v = if (kpi == SessionStats.Kpi.CELL_RSRP) p.rsrpDbm else p.rssiDbm
+            v?.let { Heatmap.Sample(p.floorplanX!!, p.floorplanY!!, it.toFloat()) }
+        }
+        val gw = 200
+        val gh = max(1, (gw / max(aspectWH, 0.05f)).toInt())
+        // aspect here is height/width, which is what Heatmap measures distance in.
+        return Heatmap.interpolate(samples, gw, gh, aspect = 1f / max(aspectWH, 0.05f))
+    }
+
+    /** Renders the grid to a translucent bitmap, leaving unmeasured cells fully transparent. */
+    private fun heatmapBitmap(grid: Heatmap.Grid, kpi: SessionStats.Kpi): Bitmap? {
+        if (grid.covered == 0) return null
+        val pixels = IntArray(grid.width * grid.height)
+        for (i in pixels.indices) {
+            val v = grid.values[i]
+            pixels[i] = if (v == null) {
+                Color.TRANSPARENT
+            } else {
+                val argb = if (kpi == SessionStats.Kpi.CELL_RSRP) {
+                    com.nhnengineering.rftest.model.RsrpBucket.of(Math.round(v))?.argb
+                } else {
+                    com.nhnengineering.rftest.model.RssiBucket.of(Math.round(v))?.argb
+                } ?: Color.GRAY
+                // Translucent so the plan's walls and labels stay readable underneath. A heatmap
+                // that hides the floorplan makes its own findings unplaceable.
+                (argb and 0x00FFFFFF) or (0xA0 shl 24)
+            }
+        }
+        return Bitmap.createBitmap(pixels, grid.width, grid.height, Bitmap.Config.ARGB_8888)
     }
 
     private fun pointColor(p: TrackPoint): Int {
