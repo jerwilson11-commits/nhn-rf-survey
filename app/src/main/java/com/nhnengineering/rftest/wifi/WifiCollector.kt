@@ -272,6 +272,26 @@ class WifiCollector(context: Context) {
         }
     }
 
+    /**
+     * Pulls the raw information elements out of a scan result.
+     *
+     * `getInformationElements()` is API 30 and this app's minSdk is 31, so no guard is needed --
+     * a fact checked against the API level rather than assumed, after an API 33 call shipped here
+     * and crashed every Android 12 device for a fortnight.
+     *
+     * The bytes arrive as a read-only ByteBuffer that must not be consumed in place: the same
+     * ScanResult is handed to every caller, so reading through the buffer would leave it drained
+     * for whoever looks next.
+     */
+    private fun elementsOf(result: ScanResult): List<Pair<Int, ByteArray>> = runCatching {
+        result.informationElements.mapNotNull { element ->
+            val buffer = element.bytes.duplicate()
+            val bytes = ByteArray(buffer.remaining())
+            buffer.get(bytes)
+            element.id to bytes
+        }
+    }.getOrDefault(emptyList())
+
     private fun refreshScanResults() {
         try {
             val results = wifiManager?.scanResults.orEmpty()
@@ -288,6 +308,7 @@ class WifiCollector(context: Context) {
             observedAps.entries.removeAll { now - it.value.observedElapsedMs > AP_RETENTION_MS }
             recordScanGap(now)
             latestScanElapsedMs = now
+
         } catch (e: SecurityException) {
             Log.w(TAG, "scanResults denied — missing ACCESS_FINE_LOCATION", e)
         }
@@ -364,6 +385,7 @@ class WifiCollector(context: Context) {
             rxLinkMbps = (live ?: info)?.rxLinkSpeedMbps?.takeIf { it > 0 },
             maxSupportedTxMbps = (live ?: info)?.maxSupportedTxLinkSpeedMbps?.takeIf { it > 0 },
             neighbors = observed.map { it.result.toNeighbor(now - it.observedElapsedMs) },
+            beacon = ourScanResult?.let { BeaconElements.parse(elementsOf(it)) },
             neighborScanAgeMs = scanAgeMs,
             coChannelCount = ourScanResult?.let { WifiFrequency.countCoChannel(it, scans) } ?: 0,
             adjacentChannelCount = ourScanResult
@@ -390,6 +412,7 @@ class WifiCollector(context: Context) {
             standard = WifiStandard.fromScanResultConstant(wifiStandard),
             security = WifiSecurity.fromCapabilitiesString(capabilities.orEmpty()),
             ageMs = ageMs,
+            beacon = BeaconElements.parse(elementsOf(this)),
         )
     }
 }

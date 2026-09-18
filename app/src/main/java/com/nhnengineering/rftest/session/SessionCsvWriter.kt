@@ -125,6 +125,11 @@ private val WIFI_COLUMNS = listOf(
     "wifi_tx_mbps", "wifi_rx_mbps", "wifi_max_tx_mbps",
     "wifi_neighbor_count", "wifi_cochannel_count", "wifi_adjacent_count",
     "wifi_neighbors_json", "wifi_scan_age_ms",
+    // From the serving AP's beacon rather than from ScanResult's own fields. Channel utilisation
+    // is the one that changes conclusions: a site at -55 dBm everywhere with 80% airtime busy has
+    // a capacity problem that no amount of signal measurement will find.
+    "wifi_chan_util_pct", "wifi_sta_count", "wifi_min_basic_mbps", "wifi_dtim",
+    "wifi_country", "wifi_11k", "wifi_11v", "wifi_11r",
 )
 
 /**
@@ -270,6 +275,19 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += w?.adjacentChannelCount?.toString()
     cells += w?.neighbors?.let { neighborsToJson(it) }
     cells += w?.neighborScanAgeMs?.toString()
+
+    // Booleans are emitted only when a beacon was parsed at all. Writing "false" for an AP whose
+    // elements never arrived would assert that it lacks 802.11k, which is a different claim from
+    // not having looked.
+    val beacon = w?.beacon
+    cells += beacon?.bssLoad?.channelUtilisationPct?.toString()
+    cells += beacon?.bssLoad?.stationCount?.toString()
+    cells += beacon?.rates?.minBasicMbps?.let { String.format(Locale.US, "%.1f", it) }
+    cells += beacon?.dtimPeriod?.toString()
+    cells += beacon?.countryCode
+    cells += beacon?.radioMeasurement?.toString()
+    cells += beacon?.bssTransition?.toString()
+    cells += beacon?.fastTransition?.toString()
 
     val tp = throughput
     cells += tp?.downloadMbps?.let { String.format(Locale.US, "%.3f", it) }

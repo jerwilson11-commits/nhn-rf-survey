@@ -143,6 +143,12 @@ data class WifiNeighbor(
      * large age was seen recently but not *now*, which matters while walking.
      */
     val ageMs: Long,
+    /**
+     * What this AP's beacon advertises beyond the fields ScanResult exposes.
+     *
+     * Null when the scan carried no elements, which happens on some vendor builds.
+     */
+    val beacon: com.nhnengineering.rftest.wifi.BeaconElements.Beacon? = null,
 )
 
 /**
@@ -167,6 +173,8 @@ data class WifiSample(
     val maxSupportedTxMbps: Int?,
     val neighbors: List<WifiNeighbor>,
     val neighborScanAgeMs: Long?,
+    /** Beacon elements for the AP this handset is associated with. */
+    val beacon: com.nhnengineering.rftest.wifi.BeaconElements.Beacon? = null,
     /** Other BSSIDs sharing our exact primary channel, above the RSSI floor. */
     val coChannelCount: Int,
     /** Other BSSIDs whose occupied spectrum overlaps ours on a different primary channel. */
