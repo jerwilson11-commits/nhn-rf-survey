@@ -1,6 +1,7 @@
 package com.nhnengineering.rftest.session
 
 import android.content.Context
+import android.os.Build
 import com.nhnengineering.rftest.model.MeasurementSample
 import com.nhnengineering.rftest.model.NeighborCell
 import com.nhnengineering.rftest.model.WifiNeighbor
@@ -96,7 +97,19 @@ class SessionCsvWriter private constructor(
 // Schema
 // ---------------------------------------------------------------------------
 
-private val CORE_COLUMNS = listOf("timestamp_utc", "session_id", "seq")
+private val CORE_COLUMNS = listOf(
+    "timestamp_utc", "session_id", "seq",
+    // Which handset produced this row.
+    //
+    // Repeated on every sample deliberately. It is constant within one file, but the comparison
+    // walk records two handsets over one route and merged analysis has to attribute each sample to
+    // the receiver that made it -- a level is only meaningful next to the thing that measured it.
+    //
+    // Captured when the session opens rather than read back at report time: a report may be
+    // generated on a different device, or after an OS update, and either would make it a record of
+    // where the PDF was produced instead of where the measurement was taken.
+    "device_model", "device_build",
+)
 
 private val LOCATION_COLUMNS = listOf(
     "lat", "lon", "alt_m", "gps_accuracy_m", "gps_fix_age_ms", "speed_mps", "bearing_deg",
@@ -184,6 +197,30 @@ internal val CSV_COLUMN_COUNT = COLUMNS.size
 
 private val TIMESTAMP: DateTimeFormatter = DateTimeFormatter.ISO_INSTANT
 
+/**
+ * The handset that produced a session.
+ *
+ * Read through runCatching and null-guarded because `android.os.Build` is a stub on the JVM, where
+ * every field returns null. A unit test must not be the thing that decides whether this compiles.
+ */
+internal object DeviceInfo {
+    val model: String by lazy {
+        runCatching {
+            listOfNotNull(Build.MANUFACTURER, Build.MODEL)
+                .filter { it.isNotBlank() }
+                .joinToString(" ")
+        }.getOrDefault("")
+    }
+
+    val build: String by lazy {
+        runCatching {
+            listOfNotNull(Build.VERSION.RELEASE?.let { "Android $it" }, Build.ID)
+                .filter { it.isNotBlank() }
+                .joinToString(" / ")
+        }.getOrDefault("")
+    }
+}
+
 internal fun MeasurementSample.toCsvRow(): String {
     val g = location
     val w = wifi
@@ -192,6 +229,8 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += TIMESTAMP.format(Instant.ofEpochMilli(timestampUtcMillis))
     cells += sessionId
     cells += sequence.toString()
+    cells += DeviceInfo.model.ifBlank { null }
+    cells += DeviceInfo.build.ifBlank { null }
 
     // Location. Six decimal places is ~0.1 m — beyond any consumer GPS, and enough that rounding
     // never becomes the error term.

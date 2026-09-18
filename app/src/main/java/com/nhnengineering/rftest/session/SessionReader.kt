@@ -115,6 +115,14 @@ data class SessionSummary(
     val indoorPointCount: Int = 0,
     val waypoints: List<String> = emptyList(),
     val floors: List<String> = emptyList(),
+    /**
+     * Handsets that recorded this session, as written at capture time.
+     *
+     * A list rather than a single value because two files may be merged, and because a session that
+     * somehow carries two devices is a fact the report should state rather than hide behind the
+     * first one seen.
+     */
+    val devices: List<String> = emptyList(),
 ) {
     val hasTrack: Boolean get() = pointCount >= 2 && (maxLat > minLat || maxLon > minLon)
 
@@ -160,6 +168,7 @@ object SessionReader {
             val iNrSinr = idx("nr_ss_sinr"); val iRssnr = idx("lte_rssnr")
             val iNrRsrq = idx("nr_ss_rsrq"); val iLteRsrq = idx("lte_rsrq")
             val iLteBand = idx("lte_band"); val iNrBand = idx("nr_band"); val iRat = idx("rat")
+            val iDevModel = idx("device_model"); val iDevBuild = idx("device_build")
             val iNrPci = idx("nr_pci"); val iLtePci = idx("lte_pci")
             val iNrNci = idx("nr_nci")
             val iNrArfcn = idx("nr_arfcn"); val iEarfcn = idx("lte_earfcn")
@@ -171,6 +180,8 @@ object SessionReader {
             if (iLat == null || iLon == null) return@withContext null
 
             val points = mutableListOf<TrackPoint>()
+            // Insertion-ordered so the first handset seen is named first in the report.
+            val devicesSeen = linkedSetOf<String>()
             var firstTime: Long? = null
             var lastTime: Long? = null
             var rows = 0
@@ -180,6 +191,10 @@ object SessionReader {
                 rows++
                 val c = splitCsv(line)
                 fun s(i: Int?) = i?.let { c.getOrNull(it) }?.takeIf { it.isNotEmpty() }
+
+                s(iDevModel)?.let { model ->
+                    devicesSeen += listOfNotNull(model, s(iDevBuild)).joinToString(", ")
+                }
 
                 val t = s(iTime)?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() }
                 if (t != null) {
@@ -274,6 +289,7 @@ object SessionReader {
                 indoorPointCount = indoor.size,
                 waypoints = points.mapNotNull { it.waypoint }.distinct(),
                 floors = points.mapNotNull { it.floor }.distinct(),
+                devices = devicesSeen.toList(),
             )
             summary to points
         }

@@ -1078,6 +1078,28 @@ object PdfReportGenerator {
         points: List<TrackPoint>,
         report: SessionStats.Report,
     ): List<Pair<String, String>> = buildList {
+        // First, because it qualifies every number that follows.
+        //
+        // A level is only meaningful next to the receiver that measured it, and receivers differ by
+        // more than most readers assume. The handset this project developed on -- a Pixel 6 Pro --
+        // is widely reported to have among the weakest cellular reception of its generation, its
+        // Exynos modem consistently capturing less than the Qualcomm parts it shipped against. A
+        // survey walked on it reads lower than the same survey walked on a better receiver, and a
+        // reader comparing this report against one produced elsewhere deserves to know which
+        // instrument produced which.
+        //
+        // Naming the handset does not quantify the offset. It does let a reader ask.
+        if (summary.devices.isNotEmpty()) {
+            add(
+                "Measuring handset" to
+                    summary.devices.joinToString("; ") + ". " +
+                        "Levels are what this receiver reported. Handsets differ materially in " +
+                        "receive performance -- several dB between models is ordinary -- so " +
+                        "readings are not directly comparable with a survey walked on different " +
+                        "hardware, and an absolute level should be read as this device's view " +
+                        "rather than as a property of the site alone."
+            )
+        }
         add(
             "Sampling" to
                 "Continuous logging at approximately one sample per second, written to CSV as " +
