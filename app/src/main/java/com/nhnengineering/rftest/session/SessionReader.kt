@@ -13,6 +13,24 @@ import java.time.Instant
  * serving level — invents a measurement. Dominance analysis simply excludes them and says how
  * many it excluded.
  */
+/** A neighbouring access point as recorded in `wifi_neighbors_json`. */
+data class ObservedAp(
+    val bssid: String,
+    val ssid: String?,
+    val rssiDbm: Int?,
+    val channel: Int?,
+    val freqMhz: Int?,
+    /**
+     * How long ago this AP was actually seen.
+     *
+     * Load-bearing for roaming analysis. The neighbour set ages entries out over a minute, so a
+     * list can legitimately contain an AP last heard thirty seconds and thirty metres ago. Treating
+     * that as "a better AP was available right now" would invent sticky-client findings out of
+     * stale data.
+     */
+    val ageMs: Long,
+)
+
 data class ObservedCell(
     val pci: Int?,
     /**
@@ -88,6 +106,8 @@ data class TrackPoint(
      * sessions and for cellular sessions recorded before neighbour logging existed.
      */
     val cells: List<ObservedCell> = emptyList(),
+    /** Neighbouring APs at this sample, strongest first. */
+    val aps: List<ObservedAp> = emptyList(),
 ) {
     /** True when this sample can be placed on a floorplan even though GPS could not place it. */
     val hasIndoorPosition: Boolean
@@ -179,6 +199,7 @@ object SessionReader {
             val iLteBand = idx("lte_band"); val iNrBand = idx("nr_band"); val iRat = idx("rat")
             val iDevModel = idx("device_model"); val iDevBuild = idx("device_build")
             val iBandLock = idx("band_lock"); val iRatLock = idx("rat_lock")
+            val iWifiNeighbors = idx("wifi_neighbors_json")
             val iNrPci = idx("nr_pci"); val iLtePci = idx("lte_pci")
             val iNrNci = idx("nr_nci")
             val iNrArfcn = idx("nr_arfcn"); val iEarfcn = idx("lte_earfcn")
@@ -276,6 +297,7 @@ object SessionReader {
                     mnc = s(iMnc),
                     servingPci = servingPci,
                     servingNci = s(iNrNci)?.toLongOrNull(),
+                    aps = parseWifiNeighbors(s(iWifiNeighbors)),
                     cells = cells,
                 )
             }
@@ -320,6 +342,69 @@ object SessionReader {
      * `null` in the file stays null here. The writer emits JSON null for an absent level precisely
      * so that it cannot be mistaken for a measurement, and parsing it back to 0 would undo that.
      */
+    /**
+     * Reads `wifi_neighbors_json` back into typed APs.
+     *
+     * Deliberately **not** a copy of [parseCellNeighbors]. That one splits objects on commas, which
+     * is safe for cellular neighbours because every field is a number or a short band label. An
+     * SSID is neither: the writer escapes quotes and backslashes but a comma inside a network name
+     * survives as a literal comma, so a naive split would cut "Bob, Alice's WiFi" into two broken
+     * fields and silently mangle every AP after it in the row.
+     *
+     * So this scans with quote awareness. It is the same class of defect as splitting a CSV line on
+     * commas without honouring quoting -- a bug that never appears in testing and appears
+     * immediately in somebody's building.
+     */
+    internal fun parseWifiNeighbors(json: String?): List<ObservedAp> {
+        if (json.isNullOrBlank() || json == "[]") return emptyList()
+        val out = mutableListOf<ObservedAp>()
+        var i = 0
+        while (true) {
+            val open = json.indexOf('{', i)
+            if (open < 0) break
+            val close = json.indexOf('}', open)
+            if (close < 0) break
+
+            val fields = mutableMapOf<String, String>()
+            val body = json.substring(open + 1, close)
+            var start = 0
+            var inQuotes = false
+            var k = 0
+            while (k <= body.length) {
+                val atEnd = k == body.length
+                val ch = if (atEnd) ',' else body[k]
+                if (!atEnd && ch == '"' && (k == 0 || body[k - 1] != '\\')) inQuotes = !inQuotes
+                if (ch == ',' && !inQuotes) {
+                    val part = body.substring(start, k)
+                    val colon = part.indexOf(':')
+                    if (colon >= 0) {
+                        val key = part.substring(0, colon).trim().trim('"')
+                        val raw = part.substring(colon + 1).trim()
+                        // "null" stays out of the map, so a missing level reads as null rather
+                        // than a parsed zero -- 0 dBm would win every comparison it entered.
+                        if (raw != "null") fields[key] = raw.trim('"').replace("\\\"", "\"")
+                    }
+                    start = k + 1
+                }
+                k++
+            }
+
+            val bssid = fields["bssid"]
+            if (bssid != null) {
+                out += ObservedAp(
+                    bssid = bssid,
+                    ssid = fields["ssid"]?.takeIf { it.isNotEmpty() },
+                    rssiDbm = fields["rssi"]?.toIntOrNull(),
+                    channel = fields["ch"]?.toIntOrNull(),
+                    freqMhz = fields["freq"]?.toIntOrNull(),
+                    ageMs = fields["age_ms"]?.toLongOrNull() ?: 0L,
+                )
+            }
+            i = close + 1
+        }
+        return out
+    }
+
     internal fun parseCellNeighbors(json: String?): List<ObservedCell> {
         if (json.isNullOrBlank() || json == "[]") return emptyList()
         val out = mutableListOf<ObservedCell>()

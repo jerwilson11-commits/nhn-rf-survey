@@ -677,6 +677,85 @@ object PdfReportGenerator {
 
         // ---- Coverage holes -----------------------------------------------
         c.ensure(120f)
+        // ---- Roaming ------------------------------------------------------
+        //
+        // Coverage answers "is there signal here". Roaming answers "does the connection survive
+        // walking", which is the complaint an operator actually receives -- a call that drops in a
+        // corridor on a network whose coverage map looks perfect.
+        val roaming = WifiRoaming.analyse(points)
+        if (roaming.samplesWithServing > 0 && roaming.distinctAps > 1) {
+            c.ensure(160f)
+            c.text("Roaming", c.h2)
+            c.kv("Access points used", roaming.distinctAps.toString())
+            c.kv("Roams", roaming.roams.size.toString())
+            if (roaming.pingPongs > 0) {
+                c.kv("Returned to the previous AP", roaming.pingPongs.toString())
+            }
+            c.gap()
+
+            if (roaming.roams.isNotEmpty()) {
+                c.text(
+                    String.format(Locale.US, "%-20s %-20s %9s %9s", "From", "To", "Before", "After"),
+                    c.monoBold,
+                )
+                for (r in roaming.roams.take(15)) {
+                    c.ensure(LINE)
+                    c.text(
+                        String.format(
+                            Locale.US, "%-20s %-20s %9s %9s",
+                            r.fromBssid.takeLast(11), r.toBssid.takeLast(11),
+                            r.rssiBeforeDbm?.toString() ?: "--",
+                            r.rssiAfterDbm?.toString() ?: "--",
+                        ),
+                        c.mono,
+                    )
+                }
+                c.gap()
+                c.para(
+                    "The level in the \"Before\" column is what the client tolerated before moving. " +
+                        "Consistently low values mean the client roams late, which is felt as a " +
+                        "stall rather than a disconnection. Repeated returns to a previous access " +
+                        "point mean it roams too eagerly, which costs airtime on every bounce.",
+                )
+            }
+
+            if (roaming.sticky.isNotEmpty()) {
+                c.gap()
+                c.text("Stayed on a weaker access point", c.monoBold)
+                c.text(
+                    String.format(Locale.US, "%-20s %8s %9s  %s", "Stayed on", "Samples", "Best by", "Better AP"),
+                    c.monoBold,
+                )
+                for (st in roaming.sticky.take(10)) {
+                    c.ensure(LINE)
+                    c.text(
+                        String.format(
+                            Locale.US, "%-20s %8d %8d dB  %s",
+                            st.bssid.takeLast(11), st.samples, st.maxDeltaDb,
+                            st.bestAlternativeBssid.takeLast(11),
+                        ),
+                        c.mono,
+                    )
+                }
+                c.para(
+                    "A better access point on the same network was available and fresh for these " +
+                        "stretches and the client stayed where it was. This is invisible to a " +
+                        "coverage map -- the signal was adequate, from the wrong access point. " +
+                        "The roam decision belongs to the client, so this describes the measuring " +
+                        "handset's behaviour; another vendor's client may differ on the same " +
+                        "network. It is still worth investigating, because a building where a " +
+                        "common client goes sticky usually has access points too close together " +
+                        "or a minimum basic rate low enough to let a distant one stay usable.",
+                )
+            } else if (roaming.roams.isNotEmpty()) {
+                c.para(
+                    "No stretch was found where a materially stronger access point on the same " +
+                        "network was available and ignored.",
+                )
+            }
+            c.gap(); c.rule()
+        }
+
         c.text("Coverage holes", c.h2)
         if (report.holes.isEmpty()) {
             c.text("No contiguous run of samples fell below the threshold.", c.body)
