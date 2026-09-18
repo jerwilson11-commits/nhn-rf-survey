@@ -13,6 +13,7 @@ import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import java.util.concurrent.ConcurrentHashMap
 import com.nhnengineering.rftest.model.WifiBand
@@ -48,8 +49,38 @@ class WifiCollector(context: Context) {
         /** Placeholder SSID Android substitutes under the same conditions. */
         const val REDACTED_SSID = "<unknown ssid>"
 
-        /** Don't ask the OS for a scan more often than this; it would be throttled anyway. */
-        const val MIN_SCAN_INTERVAL_MS = 30_000L
+        /**
+         * Scan cadence when the OS throttle is in force.
+         *
+         * Android allows a foreground app four scans per two minutes. Asking faster does not fail
+         * loudly -- `getScanResults()` simply keeps returning the previous list -- so requesting
+         * more often would only produce the illusion of fresher data.
+         */
+        const val SCAN_INTERVAL_THROTTLED_MS = 30_000L
+
+        /**
+         * Scan cadence when throttling has been turned off.
+         *
+         * Thirty seconds is roughly thirty-five metres at walking pace, which is not a survey; it
+         * is a handful of disconnected spot checks joined by a line. Unthrottled, the limit becomes
+         * the chipset: a sweep of 2.4, 5 and 6 GHz takes a few seconds, and asking faster than the
+         * radio can sweep just queues requests behind each other.
+         *
+         * This is the single biggest lever on Wi-Fi survey quality, and it is why most Android
+         * Wi-Fi apps cannot survey a building properly.
+         */
+        const val SCAN_INTERVAL_FAST_MS = 3_000L
+
+        /** Re-reading a global setting at sample rate is wasteful; it changes rarely. */
+        const val THROTTLE_RECHECK_MS = 10_000L
+
+        /**
+         * The global setting that governs it. The AOSP constant
+         * `Settings.Global.WIFI_SCAN_THROTTLE_ENABLED` is @hide, so the key is named here rather
+         * than reaching for a hidden field -- the same rule this project applies to every other
+         * hidden API it has been tempted by.
+         */
+        const val THROTTLE_SETTING = "wifi_scan_throttle_enabled"
 
         /**
          * Sentinel WifiInfo.getRssi() returns when no value is available.
@@ -86,6 +117,37 @@ class WifiCollector(context: Context) {
     private val observedAps = ConcurrentHashMap<String, ObservedAp>()
     @Volatile private var latestScanElapsedMs: Long? = null
     @Volatile private var lastScanRequestElapsedMs: Long = 0L
+
+    /** Cached throttle state and when it was last read, so the setting is not polled at 1 Hz. */
+    @Volatile private var throttleDisabled: Boolean = false
+    @Volatile private var throttleCheckedElapsedMs: Long = 0L
+
+    /** Gaps between consecutive scan results, kept short. The measured cadence, not the intended one. */
+    private val scanGapsMs = ArrayDeque<Long>()
+    @Volatile private var previousScanElapsedMs: Long? = null
+
+    /**
+     * What the OS setting says.
+     *
+     * Reported separately from [achievedScanIntervalMs] on purpose. The setting states an
+     * intention; the achieved interval states what happened. They disagree more often than not --
+     * a chipset busy with a connection sweeps more slowly than the setting permits, and a vendor
+     * build may ignore the setting entirely.
+     */
+    val scanThrottleDisabled: Boolean get() = throttleDisabled
+
+    /**
+     * Median gap actually observed between scan results, or null before two have arrived.
+     *
+     * This is the number that decides whether a walk is a survey or a row of spot checks, so it is
+     * measured rather than assumed and shown to the operator before they set off.
+     */
+    val achievedScanIntervalMs: Long?
+        get() = synchronized(scanGapsMs) {
+            if (scanGapsMs.size < 2) return null
+            val sorted = scanGapsMs.sorted()
+            sorted[(sorted.size - 1) / 2]
+        }
 
     private var started = false
 
@@ -163,7 +225,7 @@ class WifiCollector(context: Context) {
      */
     fun requestScanRefresh(): Boolean {
         val now = SystemClock.elapsedRealtime()
-        if (now - lastScanRequestElapsedMs < MIN_SCAN_INTERVAL_MS) return false
+        if (now - lastScanRequestElapsedMs < currentScanIntervalMs(now)) return false
         lastScanRequestElapsedMs = now
 
         return try {
@@ -174,6 +236,39 @@ class WifiCollector(context: Context) {
         } catch (e: SecurityException) {
             Log.w(TAG, "startScan denied — missing CHANGE_WIFI_STATE or location permission", e)
             false
+        }
+    }
+
+    /**
+     * The interval to use right now, re-reading the throttle setting occasionally.
+     *
+     * The operator can change this setting mid-session -- it lives in Developer Options -- and a
+     * survey that silently kept the slow cadence after they fixed it would be the worst outcome:
+     * they would believe they were sampling five times faster than they were.
+     */
+    private fun currentScanIntervalMs(nowElapsedMs: Long): Long {
+        if (nowElapsedMs - throttleCheckedElapsedMs >= THROTTLE_RECHECK_MS) {
+            throttleCheckedElapsedMs = nowElapsedMs
+            throttleDisabled = runCatching {
+                // Absent means enabled: Android throttles by default, so an unreadable or missing
+                // value must read as "throttled" and never as "free to scan fast".
+                Settings.Global.getInt(appContext.contentResolver, THROTTLE_SETTING, 1) == 0
+            }.getOrDefault(false)
+        }
+        return if (throttleDisabled) SCAN_INTERVAL_FAST_MS else SCAN_INTERVAL_THROTTLED_MS
+    }
+
+    private fun recordScanGap(nowElapsedMs: Long) {
+        val previous = previousScanElapsedMs
+        previousScanElapsedMs = nowElapsedMs
+        if (previous == null) return
+        val gap = nowElapsedMs - previous
+        // A zero or negative gap means two results landed in the same millisecond, which is the OS
+        // redelivering rather than rescanning. Counting it would report a cadence never achieved.
+        if (gap <= 0) return
+        synchronized(scanGapsMs) {
+            scanGapsMs.addLast(gap)
+            while (scanGapsMs.size > 10) scanGapsMs.removeFirst()
         }
     }
 
@@ -191,6 +286,7 @@ class WifiCollector(context: Context) {
                 observedAps[bssid] = ObservedAp(result, now)
             }
             observedAps.entries.removeAll { now - it.value.observedElapsedMs > AP_RETENTION_MS }
+            recordScanGap(now)
             latestScanElapsedMs = now
         } catch (e: SecurityException) {
             Log.w(TAG, "scanResults denied — missing ACCESS_FINE_LOCATION", e)
