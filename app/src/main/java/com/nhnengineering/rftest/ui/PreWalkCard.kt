@@ -119,7 +119,7 @@ fun PreWalkCard(checks: List<PreWalkCheck.Check>) {
                             fontSize = 12.sp,
                             color = Color.White,
                         )
-                        Text(
+                        YieldingText(
                             text = check.label,
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,

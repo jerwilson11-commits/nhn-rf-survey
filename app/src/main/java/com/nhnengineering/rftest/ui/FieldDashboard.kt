@@ -148,10 +148,11 @@ fun StatusStrip(
         // Area and floor sit here rather than in their own card, because during a walk they are
         // status, not settings — the operator needs to see at a glance what is being written to
         // every row, and a mislabelled stretch is not recoverable afterwards.
-        Text(
+        YieldingText(
             text = listOfNotNull(area, floor?.let { "Fl $it" })
                 .joinToString(" · ").ifEmpty { "no label" },
             fontSize = 13.sp,
+            textAlign = TextAlign.End,
             color = if (recording) Color(0xFFFFCDD2) else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -323,7 +324,7 @@ fun ThroughputStrip(tp: ThroughputSample?, busy: Boolean) {
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
+        YieldingText(
             text = if (busy) "transferring — radio loaded" else "throughput",
             fontSize = 11.sp,
             color = if (busy) Color(0xFFEF6C00) else MaterialTheme.colorScheme.onSurfaceVariant,

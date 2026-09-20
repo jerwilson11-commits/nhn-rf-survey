@@ -137,7 +137,7 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text(
+                                YieldingText(
                                     p.displayName,
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = if (p.id == selected?.id) {

@@ -67,7 +67,7 @@ fun SetupPanel(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
+                YieldingText(
                     text = if (recording) "Session setup" else "Setup",
                     style = MaterialTheme.typography.titleMedium,
                 )

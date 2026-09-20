@@ -243,7 +243,7 @@ fun MapScreen(modifier: Modifier = Modifier) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
+                        YieldingText(
                             // Zoom is worth showing because the base maps behave differently at
                             // different scales: the street layer has nothing to draw past 18.
                             "z%.1f".format(zoom),
@@ -293,7 +293,7 @@ fun MapScreen(modifier: Modifier = Modifier) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
+                    YieldingText(
                         "Cached: " + formatBytes(tiles.diskBytes()),
                         style = MaterialTheme.typography.bodySmall,
                     )

@@ -63,7 +63,7 @@ fun SpeedTestCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(stage ?: "Running…", style = MaterialTheme.typography.titleMedium)
+                    YieldingText(stage ?: "Running…", style = MaterialTheme.typography.titleMedium)
                     Text(
                         liveMbps?.let { String.format(Locale.US, "%.1f Mbps", it) } ?: "—",
                         style = MaterialTheme.typography.titleMedium,

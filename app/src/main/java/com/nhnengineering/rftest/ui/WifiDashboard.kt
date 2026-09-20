@@ -433,7 +433,7 @@ private fun ServingApCard(sample: WifiSample) {
                     fontWeight = FontWeight.Bold,
                     color = rssiColor(sample.rssiDbm),
                 )
-                Text(
+                YieldingText(
                     text = "  dBm",
                     style = MaterialTheme.typography.titleMedium,
                     color = rssiColor(sample.rssiDbm),

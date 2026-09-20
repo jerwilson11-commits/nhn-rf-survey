@@ -172,7 +172,7 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(p.title, fontWeight = FontWeight.SemiBold)
+                        YieldingText(p.title, fontWeight = FontWeight.SemiBold)
                         Row {
                             TextButton(onClick = { editing = p }) { Text("Edit") }
                             TextButton(onClick = {

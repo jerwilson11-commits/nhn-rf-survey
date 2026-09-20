@@ -55,7 +55,7 @@ fun CellularCard(sample: CellularSample?) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Cellular", style = MaterialTheme.typography.titleMedium)
+                YieldingText("Cellular", style = MaterialTheme.typography.titleMedium)
                 Text(
                     sample.rat.label,
                     style = MaterialTheme.typography.titleMedium,
@@ -88,7 +88,7 @@ fun CellularCard(sample: CellularSample?) {
                     fontWeight = FontWeight.Bold,
                     color = rsrpColor(rsrp),
                 )
-                Text(
+                YieldingText(
                     text = if (sample.nr != null) "  dBm SS-RSRP" else "  dBm RSRP",
                     style = MaterialTheme.typography.titleMedium,
                     color = rsrpColor(rsrp),
