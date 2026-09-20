@@ -45,10 +45,11 @@ import androidx.compose.material3.FilterChip
 /**
  * The TDD and SSB profile library.
  *
- * Everything on this screen was told to a person, not measured by the app. The rendering keeps
- * that visible: entries carry their source and the date they were recorded, and the panel that
- * shows a match on other screens says "from your profile" rather than displaying the values as
- * though they had been read off the air.
+ * Most of this was told to a person rather than measured. Some of it was not: SIB1 carries the
+ * slot pattern, SSB positions and subcarrier spacing, and an engineer with a diagnostic tool on
+ * a rooted handset can read them off the air and paste the decode straight in. The rendering
+ * keeps the difference visible -- every entry carries its provenance, its source and the date,
+ * and a reported value is never shown with the weight of a reading.
  *
  * Starts empty deliberately. Seeding it with typical values would be the worst of both worlds — a
  * plausible slot pattern nobody verified, presented with the same weight as one an operator
@@ -264,12 +265,36 @@ private fun ProfileEditor(
     onSave: (TddProfile) -> Unit,
 ) {
     var p by remember { mutableStateOf(initial) }
+    var pasting by remember { mutableStateOf(false) }
+
+    if (pasting) {
+        Sib1PasteDialog(
+            onCancel = { pasting = false },
+            onApply = { r ->
+                p = p.withSib1(r, System.currentTimeMillis())
+                pasting = false
+            },
+        )
+    }
 
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onCancel,
         title = { Text(if (initial.source.isBlank()) "New profile" else "Edit profile") },
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                item {
+                    // First, because it is the fast path: an engineer who has just decoded SIB1
+                    // in a diagnostic tool should not have to retype nine fields off the screen.
+                    OutlinedButton(
+                        onClick = { pasting = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Paste a SIB1 decode") }
+                    Text(
+                        "Fills the configuration below from a decode and marks it measured. " +
+                            "Everything stays editable afterwards.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 item {
                     Field("Vendor (Ericsson, Nokia, Samsung)", p.vendor) { p = p.copy(vendor = it) }
                 }

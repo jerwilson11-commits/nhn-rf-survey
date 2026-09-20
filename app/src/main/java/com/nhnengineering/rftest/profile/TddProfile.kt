@@ -23,10 +23,11 @@ package com.nhnengineering.rftest.profile
  *
  * ## The rule this must never break
  *
- * **Nothing here was measured.** Every value is something a person typed after being told it. It
- * is carried in its own type, rendered separately, and always labelled with where it came from and
- * when — so a remembered value can never be mistaken on a page for a reading off the air. That is
- * why [source] is not nullable.
+ * **A reader must always be able to tell which kind of value they are looking at.** Some of these
+ * were typed after somebody said them; some were read off the air and pasted out of a SIB1 decode.
+ * Both are carried in this one type, so [provenance] is what separates them, and [source] is not
+ * nullable -- a configuration without a provenance is a rumour, and one claiming to be measured
+ * without saying what measured it is worse than a rumour.
  */
 /**
  * Where a profile's radio configuration came from.
