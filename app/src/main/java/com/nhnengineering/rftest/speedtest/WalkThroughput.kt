@@ -177,12 +177,12 @@ class WalkThroughput(private val config: Config = Config()) {
 
             // Back off when the endpoint is throttling us, rather than hammering it for the rest
             // of the walk and filling the session with failures that say nothing about the venue.
-            backoffMs = if (rateLimited) {
-                (if (backoffMs == 0L) config.backoffStepMs else backoffMs * 2)
-                    .coerceAtMost(config.maxBackoffMs)
-            } else {
-                0
-            }
+            backoffMs = nextBackoffMs(
+                current = backoffMs,
+                rateLimited = rateLimited,
+                stepMs = config.backoffStepMs,
+                maxMs = config.maxBackoffMs,
+            )
             RecordingState.throughputRateLimited.value = rateLimited
         } finally {
             RecordingState.throughputBusy.value = false
@@ -193,3 +193,14 @@ class WalkThroughput(private val config: Config = Config()) {
         private const val TAG = "WalkThroughput"
     }
 }
+
+/**
+ * The idle time to add after a burst.
+ *
+ * Pulled out of the loop so the progression can be pinned by a test. It was correct all along and
+ * never ran: the rate-limit flag driving it was keyed on an exception type that
+ * [SpeedTester.transfer] had already thrown away, so `rateLimited` was false on every burst of
+ * every walk and this arithmetic only ever returned zero.
+ */
+internal fun nextBackoffMs(current: Long, rateLimited: Boolean, stepMs: Long, maxMs: Long): Long =
+    if (!rateLimited) 0L else (if (current == 0L) stepMs else current * 2).coerceAtMost(maxMs)

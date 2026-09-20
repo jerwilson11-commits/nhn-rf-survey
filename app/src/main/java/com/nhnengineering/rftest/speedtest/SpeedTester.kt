@@ -266,7 +266,12 @@ class SpeedTester(private val config: SpeedTestConfig = SpeedTestConfig()) {
         val start = System.currentTimeMillis()
         val deadline = start + config.testDurationMs
 
-        val failures = java.util.concurrent.ConcurrentLinkedQueue<String>()
+        // Throwables, not their messages. Keeping only the text discarded the one thing a caller
+        // can act on: WalkThroughput backs off when it sees a RateLimited, and for every walk so
+        // far it never saw one. The 2026-09-20 walk took eight consecutive 429s at an unchanged
+        // 41-second cadence while the session recorded the words "rate-limited" on every row --
+        // the message survived this queue and the type did not.
+        val failures = java.util.concurrent.ConcurrentLinkedQueue<Throwable>()
         val workers = (1..streams).map { n ->
             async(Dispatchers.IO) {
                 runCatching { body(counter, deadline) }
@@ -275,7 +280,7 @@ class SpeedTester(private val config: SpeedTestConfig = SpeedTestConfig()) {
                         // Log every stream failure. Silently swallowing these is what turned an
                         // HTTP 403 into an unexplained null result.
                         Log.w(TAG, "stream $n failed", it)
-                        failures += (it.message ?: it::class.java.simpleName)
+                        failures += it
                     }
             }
         }
@@ -296,10 +301,16 @@ class SpeedTester(private val config: SpeedTestConfig = SpeedTestConfig()) {
         }
         workers.awaitAll()
 
+        // A rate limit is raised even when some bytes did arrive. With more than one stream, one
+        // rejected and one accepted produces a figure that is roughly half the link and looks
+        // entirely plausible -- and reporting half a link as the measurement puts a wrong number
+        // in an acceptance report. The endpoint refusing us says nothing about the venue.
+        pickFailure(failures.toList())?.let { if (it is RateLimited) throw it }
+
         val end = System.currentTimeMillis()
         val total = counter.get()
         if (total <= 0L) {
-            failures.firstOrNull()?.let { error(it) }
+            pickFailure(failures.toList())?.let { throw it }
             return@coroutineScope null
         }
         // If the transfer never got past the ramp window, fall back to the whole window and accept
@@ -377,3 +388,17 @@ class SpeedTester(private val config: SpeedTestConfig = SpeedTestConfig()) {
         }
     }
 }
+
+/**
+ * Which stream failure to report when several streams failed differently.
+ *
+ * A [SpeedTester.RateLimited] outranks everything else, whatever order the streams failed in,
+ * because it is the only one that changes what the caller should do next: a connection reset is
+ * worth recording and retrying at the normal cadence, while a 429 means the endpoint wants us to
+ * stop and every further attempt makes it worse.
+ *
+ * Returns the throwable itself rather than its message. That distinction is the whole bug this
+ * function exists to close.
+ */
+internal fun pickFailure(failures: List<Throwable>): Throwable? =
+    failures.firstOrNull { it is SpeedTester.RateLimited } ?: failures.firstOrNull()
