@@ -52,11 +52,25 @@ fun VerdictLine(verdict: Verdict, spreadDb: Int? = null) {
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(verdict.headline, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = color)
-            if (verdict.interferenceLimited) {
+            Text(
+                verdict.headline,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                color = color,
+                // Takes the space it needs and no more, so the marker beside it is laid out
+                // against what is left rather than overflowing the row.
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            // Only when the headline does not already say it. "Adequate, some interference ·
+            // interference" is what the first version rendered, and because the row had no width
+            // constraint the marker wrapped inside itself -- the separator and the word landed on
+            // separate lines, straddling the headline. Redundant and broken at once.
+            if (verdict.interferenceLimited && !verdict.headline.contains("interference", true)) {
                 Text(
                     "  · interference",
                     fontSize = 12.sp,
+                    maxLines = 1,
+                    softWrap = false,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
