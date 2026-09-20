@@ -19,7 +19,13 @@
         per-component-carrier band, ARFCN, bandwidth and PCI, including aggregated secondary
         carriers, which no unprivileged surface on this platform reports.
     -->
-    <uses-permission android:name="android.permission.READ_PRECISE_PHONE_STATE" />
+    <!--
+        Suppressed deliberately, not waved away: lint is correct that this is granted only
+        to system apps, and that is the whole point. It is declared so a privileged install
+        can be granted it, and the collector treats refusal as the normal path.
+    -->
+    <uses-permission android:name="android.permission.READ_PRECISE_PHONE_STATE"
+        tools:ignore="ProtectedPermissions" />
 
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Required to call startScan(). Does not actually change any Wi-Fi state. -->
