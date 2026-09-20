@@ -41,8 +41,11 @@ jobs:
 
       # JDK 25 matches the daemon toolchain, so Gradle uses this JVM directly and never needs to
       # provision one from foojay.
+      # v4 is deprecated and receives no further updates; v6 is the current major. v6.0.0
+      # migrated the Zulu distribution to Azul's metadata API, which does not affect us -- the
+      # toolchain below is temurin -- and it moved the action off Node 20.
       - name: Set up JDK 25
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '25'
