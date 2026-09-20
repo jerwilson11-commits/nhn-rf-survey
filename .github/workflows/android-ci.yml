@@ -14,6 +14,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Runs on its own rather than as a step in unit-tests, for two reasons: it needs nothing but
+  # Python, so it answers in seconds instead of waiting on a Gradle build, and a red check that
+  # says "Layout audit" is one somebody can act on without opening the log.
+  layout-audit:
+    name: Layout audit (no unguarded text rows)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      # Three text-collision defects shipped in one week before this existed -- an ARFCN
+      # overflowing its field, the map strip clipping "PCI", and a verdict headline wrapping into
+      # its own marker. Each was found by a person noticing it on a screen. The script exits
+      # non-zero when a row holds two or more texts with no width discipline, which makes the
+      # fourth one a failed check rather than a field report.
+      - name: Check for rows that can clip their own text
+        run: python3 tools/layout_audit.py
+
   unit-tests:
     name: Unit tests (testDebugUnitTest)
     runs-on: ubuntu-latest
