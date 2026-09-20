@@ -208,6 +208,18 @@ data class CellularSample(
      * to look" far more often than it means "one carrier", and reporting the second when the
      * first is true is how this project already put a confident 0.0% overlap in a client report.
      */
+    /**
+     * Whether any neighbour has been reported at any point since collection started.
+     *
+     * Distinguishes the two things a neighbour count of zero can mean. "No neighbour right now"
+     * is a measurement of the site. "This handset has never reported one" is a fact about the
+     * instrument, and on some handsets it never will -- verified on the OnePlus, where all three
+     * Android cell surfaces return the serving cell alone while a diagnostic tool reading the
+     * modem lists two neighbours alongside it.
+     *
+     * A bare 0 in front of an engineer reads as the first and is often the second.
+     */
+    val neighboursEverSeen: Boolean = false,
     val carriers: List<ComponentCarrier> = emptyList(),
     /**
      * Whether the privileged channel-config listener is actually registered.

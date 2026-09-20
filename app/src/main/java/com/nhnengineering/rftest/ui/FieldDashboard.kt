@@ -287,7 +287,14 @@ fun KpiGrid(cell: CellularSample?, wifi: WifiSample?, fix: GeoPoint?) {
             )
             RowScopeTile(
                 Modifier.weight(1f), "NEIGHBOURS",
-                cell?.neighbors?.size?.toString() ?: "—",
+                // A dash, not a zero, until this handset has reported a neighbour at least once.
+                // Zero is a measurement of the site; on a handset that never reports any it is a
+                // measurement of nothing, and the two look identical at a glance.
+                if (cell?.neighboursEverSeen == true) {
+                    cell.neighbors.size.toString()
+                } else {
+                    "—"
+                },
             )
             RowScopeTile(
                 Modifier.weight(1f), "GPS ±m",

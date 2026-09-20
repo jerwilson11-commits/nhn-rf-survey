@@ -101,6 +101,8 @@ class CellularCollector(context: Context) {
     @Volatile private var callbackCells: List<CellInfo> = emptyList()
     @Volatile private var listenerCells: List<CellInfo> = emptyList()
     /** Logged once per surface, so the log says which ones this handset actually feeds. */
+    /** Latched once any surface reports a neighbour; cleared only by [stop]. */
+    @Volatile private var neighbourEverSeen = false
     private var loggedCallbackSurface = false
     private var loggedListenerSurface = false
     @Volatile private var latestCarriers: List<ComponentCarrier> = emptyList()
@@ -267,6 +269,7 @@ class CellularCollector(context: Context) {
         latestCarriers = emptyList()
         callbackCells = emptyList()
         listenerCells = emptyList()
+        neighbourEverSeen = false
     }
 
     // -----------------------------------------------------------------------
@@ -318,6 +321,7 @@ class CellularCollector(context: Context) {
             nrCells.filter { it !== servingNr }.forEach { add(neighborFromNr(it)) }
         }
         val neighbors = mergeNeighbors(seenNow)
+        if (neighbors.isNotEmpty()) neighbourEverSeen = true
 
         return CellularSample(
             simState = sim,
@@ -331,6 +335,7 @@ class CellularCollector(context: Context) {
             lte = lte,
             nr = nr,
             neighbors = neighbors,
+            neighboursEverSeen = neighbourEverSeen,
             cellBandwidthsKhz = cellBandwidthsKhz(),
             permissionLimited = !hasPhoneState,
             carriers = latestCarriers,

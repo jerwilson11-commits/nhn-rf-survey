@@ -874,7 +874,34 @@ object PdfReportGenerator {
         c.newPage()
         c.text("Methodology and limitations", c.h2)
         c.gap()
-        methodologyNotes(summary, points, report).forEach {
+        val nbr = SessionStats.neighbourVisibility(points)
+        val nbrNote: Pair<String, String>? = when (nbr.visibility) {
+            SessionStats.NeighbourVisibility.NEVER_REPORTED -> Pair(
+                "This handset reported no neighbour cells",
+                "Across ${nbr.cellularSamples} cellular samples, not one carried a second cell. " +
+                    "That is a property of the measuring handset rather than of this site: some " +
+                    "handsets never pass 5G NR neighbour cells to an application, and on those " +
+                    "the modem still measures them and the handset still hands over normally. " +
+                    "Sector overlap and cell dominance therefore could not be assessed here, and " +
+                    "any figure of zero for them in this report means not measured. Assessing " +
+                    "them on this site needs a handset that reports neighbours, or a diagnostic " +
+                    "tool reading the modem directly.",
+            )
+            SessionStats.NeighbourVisibility.TOO_FEW_SAMPLES -> Pair(
+                "Too few samples to judge neighbour visibility",
+                "No neighbour cell appeared in ${nbr.cellularSamples} cellular samples, which is " +
+                    "too short a survey to tell an empty neighbourhood from a handset that does " +
+                    "not report one. Neither conclusion is drawn.",
+            )
+            SessionStats.NeighbourVisibility.REPORTED -> Pair(
+                "Neighbour cells were reported",
+                "${nbr.distinctNeighbours} distinct neighbour cells appeared across " +
+                    "${nbr.samplesWithNeighbour} of ${nbr.cellularSamples} cellular samples, so " +
+                    "overlap and dominance below are measurements rather than absences.",
+            )
+            SessionStats.NeighbourVisibility.NO_CELLULAR -> null
+        }
+        (methodologyNotes(summary, points, report) + listOfNotNull(nbrNote)).forEach {
             c.text("•  ${it.first}", c.body)
             c.para(it.second, c.small, indent = 12f)
             c.gap(4f)

@@ -349,6 +349,65 @@ object SessionStats {
             p.band
         }
 
+    // ---- Neighbour visibility ---------------------------------------------
+
+    /**
+     * Below this many cellular samples, "no neighbour was ever reported" is not evidence of
+     * anything. A handful of samples in a quiet spot legitimately sees nothing.
+     */
+    const val NEIGHBOUR_EVIDENCE_SAMPLES = 30
+
+    enum class NeighbourVisibility {
+        /** Neighbours were reported; counts of zero elsewhere are measurements of the site. */
+        REPORTED,
+
+        /**
+         * No sample carried a second cell, across enough samples for that to mean something.
+         *
+         * This is a statement about the instrument, not the venue. Some handsets never pass NR
+         * neighbours to an application: on the OnePlus all three Android cell surfaces return the
+         * serving cell alone, while a diagnostic tool reading the modem lists two neighbours
+         * beside it and the handset hands over between cells normally.
+         */
+        NEVER_REPORTED,
+
+        /** Too few cellular samples to distinguish an absence from a limitation. */
+        TOO_FEW_SAMPLES,
+
+        /** No cellular samples at all -- a Wi-Fi-only survey. */
+        NO_CELLULAR,
+    }
+
+    data class NeighbourReport(
+        val visibility: NeighbourVisibility,
+        val cellularSamples: Int,
+        val samplesWithNeighbour: Int,
+        val distinctNeighbours: Int,
+    )
+
+    /**
+     * Whether this survey could see neighbour cells at all.
+     *
+     * Reported separately from any count, because a neighbour count of zero answers two different
+     * questions and the report must not let one stand in for the other.
+     */
+    fun neighbourVisibility(points: List<TrackPoint>): NeighbourReport {
+        val cellular = points.filter { it.cells.isNotEmpty() }
+        if (cellular.isEmpty()) {
+            return NeighbourReport(NeighbourVisibility.NO_CELLULAR, 0, 0, 0)
+        }
+        val withNeighbour = cellular.count { it.cells.size > 1 }
+        val distinct = cellular
+            .flatMap { p -> p.cells.filterNot { it.serving }.mapNotNull { it.pci?.to(it.channel) } }
+            .distinct().size
+        val visibility = when {
+            withNeighbour > 0 -> NeighbourVisibility.REPORTED
+            cellular.size < NEIGHBOUR_EVIDENCE_SAMPLES -> NeighbourVisibility.TOO_FEW_SAMPLES
+            else -> NeighbourVisibility.NEVER_REPORTED
+        }
+        return NeighbourReport(visibility, cellular.size, withNeighbour, distinct)
+    }
+
     // ---- Throughput by band and technology --------------------------------
 
     /**

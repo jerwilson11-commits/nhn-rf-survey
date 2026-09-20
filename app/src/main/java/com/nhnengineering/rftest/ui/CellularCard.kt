@@ -170,9 +170,25 @@ fun CellularCard(sample: CellularSample?) {
             KeyValue("Roaming", if (sample.isRoaming) "yes" else "no")
             KeyValue(
                 "Neighbours",
-                sample.neighbors.size.toString() +
-                    sample.neighbors.count { it.ageMs == 0L }.let { " ($it this report)" },
+                if (sample.neighboursEverSeen) {
+                    sample.neighbors.size.toString() +
+                        sample.neighbors.count { it.ageMs == 0L }.let { " ($it this report)" }
+                } else {
+                    "none reported"
+                },
             )
+
+            if (!sample.neighboursEverSeen && sample.rat != Rat.NO_SERVICE) {
+                Text(
+                    "This handset has not reported a neighbour cell since the app started. That " +
+                        "is not the same as there being none: some handsets never pass NR " +
+                        "neighbours to an application, and on those the modem still measures " +
+                        "them and hands over normally. Overlap and dominance cannot be assessed " +
+                        "from this handset.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
             if (sample.neighbors.isNotEmpty()) {
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
