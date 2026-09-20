@@ -28,6 +28,34 @@ package com.nhnengineering.rftest.profile
  * when — so a remembered value can never be mistaken on a page for a reading off the air. That is
  * why [source] is not nullable.
  */
+/**
+ * Where a profile's radio configuration came from.
+ *
+ * ## Why this exists
+ *
+ * This library was built on the premise that the TDD configuration cannot be measured by a
+ * handset -- the slot pattern, SSB periodicity and subcarrier spacing live in SIB1, which no
+ * ordinary application can reach across Android's RIL boundary. That is still true of this app and
+ * always will be.
+ *
+ * It is not true of the engineer holding the phone. On a rooted handset a diagnostic tool reads
+ * SIB1 and prints `tdd-UL-DL-ConfigurationCommon`, `ssb-PositionsInBurst` and
+ * `subcarrierSpacing` in full, off the air, from the network's own broadcast. Demonstrated on the
+ * OnePlus on 2026-09-19.
+ *
+ * So a profile may now hold either kind of value, and **the difference is the whole point**. A slot
+ * pattern somebody was told is hearsay that happens to be usually right. The same pattern read out
+ * of SIB1 is evidence. A commissioning document that cannot tell a reader which one it is holding
+ * is worth less than one that can, and the default is deliberately the weaker claim.
+ */
+enum class Provenance(val label: String) {
+    /** Supplied by a person -- operator RF team, design document, vendor default. */
+    REPORTED("reported"),
+
+    /** Read off the air from the network's own broadcast, typically SIB1 via a diagnostic tool. */
+    MEASURED("measured from SIB1"),
+}
+
 data class TddProfile(
     val id: String,
     /** RAN vendor — the strongest predictor, since these are vendor defaults. */
@@ -54,6 +82,14 @@ data class TddProfile(
     val scsKhz: Int?,
 
     /** Where this came from. Required — a remembered value without a provenance is a rumour. */
+    /**
+     * Whether the configuration values above were measured or reported.
+     *
+     * Covers the radio configuration block only. Vendor, operator and market are metadata and are
+     * never measured, so a single flag describes the profile honestly without pretending to
+     * per-field provenance the workflow does not produce.
+     */
+    val provenance: Provenance = Provenance.REPORTED,
     val source: String,
     val recordedAtUtcMillis: Long,
     val note: String?,

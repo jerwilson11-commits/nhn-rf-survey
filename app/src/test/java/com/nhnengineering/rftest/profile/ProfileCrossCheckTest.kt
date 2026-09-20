@@ -22,12 +22,14 @@ class ProfileCrossCheckTest {
         site: String? = null,
         scs: Int? = 30,
         operator: String = "T-Mobile",
+        provenance: Provenance = Provenance.REPORTED,
     ) = TddProfile(
         id = "p", vendor = "Ericsson", operator = operator, mcc = "310", mnc = "260",
         band = band, market = null, siteName = site,
         tddPattern = "DDDSU", tddPeriodicityMs = "2.5", dlSlots = 3, dlSymbols = 10,
         ulSlots = 1, ulSymbols = 2, ssbPeriodicityMs = 20, ssbPositionsInBurst = "10101010",
-        scsKhz = scs, source = "Operator RF team", recordedAtUtcMillis = 1_756_000_000_000,
+        scsKhz = scs, provenance = provenance, source = "Operator RF team",
+        recordedAtUtcMillis = 1_756_000_000_000,
         note = null,
     )
 
@@ -189,5 +191,51 @@ class ProfileCrossCheckTest {
             assertTrue("must not mention the slot pattern: $text", !text.contains("DDDSU"))
             assertTrue("must not claim to check periodicity: $text", !text.contains("periodicity"))
         }
+    }
+
+    @Test
+    fun `a measured profile is never described as unmeasured`() {
+        // The sentence "Neither is measured" is true of a reported profile and false of one read
+        // out of SIB1. Getting this wrong would rank our own band-based inference alongside the
+        // network's own broadcast, which is the opposite of the truth.
+        val f = ProfileCrossCheck.check(
+            profile(scs = 15, provenance = Provenance.MEASURED),
+            listOf(layout(arrangement = SessionStats.SsbArrangement.SINGLE, positions = 1)),
+            "n41",
+        )
+
+        val finding = f.single { it.headline.contains("Subcarrier") }
+        assertTrue(
+            "must not claim nothing was measured: ${finding.detail}",
+            !finding.detail.contains("Neither is measured"),
+        )
+        assertTrue(
+            "must say where the value came from: ${finding.detail}",
+            finding.detail.contains("SIB1"),
+        )
+        assertTrue(
+            "must not cast doubt on a measurement: ${finding.detail}",
+            finding.detail.contains("the one to believe"),
+        )
+    }
+
+    @Test
+    fun `a reported profile still gets the cautious wording`() {
+        val f = ProfileCrossCheck.check(
+            profile(scs = 15, provenance = Provenance.REPORTED),
+            listOf(layout(arrangement = SessionStats.SsbArrangement.SINGLE, positions = 1)),
+            "n41",
+        )
+
+        assertTrue(f.single { it.headline.contains("Subcarrier") }.detail.contains("Neither is measured"))
+    }
+
+    @Test
+    fun `provenance defaults to reported, which is the weaker claim`() {
+        // An older stored profile, or one saved before the operator thought about it, must not be
+        // promoted to evidence by omission.
+        val p = profile()
+
+        assertEquals(Provenance.REPORTED, p.provenance)
     }
 }

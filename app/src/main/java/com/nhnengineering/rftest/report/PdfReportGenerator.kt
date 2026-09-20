@@ -537,14 +537,36 @@ object PdfReportGenerator {
             )
             if (matched != null) {
                 c.ensure(170f)
-                c.text("Configuration — from profile, not measured", c.h2)
+                val measured = matched.provenance ==
+                    com.nhnengineering.rftest.profile.Provenance.MEASURED
+                c.text(
+                    if (measured) {
+                        "Configuration — measured from SIB1"
+                    } else {
+                        "Configuration — from profile, not measured"
+                    },
+                    c.h2,
+                )
                 c.para(
-                    "These values were not read off the air during this survey. They cannot be: " +
-                        "SSB periodicity, the slot pattern and CSI-RS periodicity live in SIB1 and " +
-                        "the physical layer, which no ordinary handset application can reach. They " +
-                        "are reproduced here from the recorded configuration profile so that a " +
-                        "commissioning form can be completed alongside the measurements, and they " +
-                        "carry their source so a reader can judge them.",
+                    if (measured) {
+                        // A different claim entirely, so it gets different words rather than the
+                        // same paragraph with a flag flipped.
+                        "These values were read off the air from the network's own broadcast. " +
+                            "SIB1 carries the slot pattern, SSB positions and subcarrier spacing, " +
+                            "and an engineer decoded them on site with a diagnostic tool -- this " +
+                            "application cannot reach SIB1 itself and did not produce them. They " +
+                            "are evidence rather than report, and the source below records what " +
+                            "read them."
+                    } else {
+                        "These values were not read off the air during this survey. They are " +
+                            "reproduced from the recorded configuration profile so that a " +
+                            "commissioning form can be completed alongside the measurements, and " +
+                            "they carry their source so a reader can judge them. SSB periodicity, " +
+                            "the slot pattern and CSI-RS periodicity live in SIB1 and the physical " +
+                            "layer, which this application cannot reach -- though a diagnostic " +
+                            "tool on a rooted handset can, and a profile recorded that way is " +
+                            "marked as measured."
+                    },
                 )
                 c.gap()
                 c.kv("Profile", matched.title)

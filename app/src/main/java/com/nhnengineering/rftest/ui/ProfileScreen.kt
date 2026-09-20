@@ -40,6 +40,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import androidx.compose.material3.FilterChip
 
 /**
  * The TDD and SSB profile library.
@@ -109,8 +110,11 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
-                        "Nothing here is measured. Every value is recorded with where it came " +
-                            "from, and reports label it as a profile rather than a reading.",
+                        "Most of this is not measured. SSB periodicity, the slot pattern and CSI-RS " +
+                        "periodicity cannot be read by this app — but a diagnostic tool on a " +
+                        "rooted handset reads them out of SIB1, so an entry can be marked as " +
+                        "measured. Every value records where it came from, and the report says " +
+                        "which kind it is.",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFFEF6C00),
                     )
@@ -316,7 +320,42 @@ private fun ProfileEditor(
                 item { HorizontalDivider() }
                 item {
                     // Required, and the dialog will not save without it.
-                    Field("Source — who told you, and when", p.source) { p = p.copy(source = it) }
+                    // Provenance first, because it changes what the field below is asking for:
+                    // a person's name, or the tool the values were read with.
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        for (option in com.nhnengineering.rftest.profile.Provenance.entries) {
+                            FilterChip(
+                                selected = p.provenance == option,
+                                onClick = { p = p.copy(provenance = option) },
+                                label = { Text(option.label, maxLines = 1) },
+                            )
+                        }
+                    }
+                    Text(
+                        text = when (p.provenance) {
+                            com.nhnengineering.rftest.profile.Provenance.MEASURED ->
+                                "Read off the air — SIB1 carries tdd-UL-DL-ConfigurationCommon, " +
+                                    "ssb-PositionsInBurst and subcarrierSpacing in full. The " +
+                                    "report will say these were measured. Only choose this for " +
+                                    "values you actually saw decoded."
+                            com.nhnengineering.rftest.profile.Provenance.REPORTED ->
+                                "Somebody told you. The report will say so, and will not present " +
+                                    "these values as measurements."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Field(
+                        if (p.provenance == com.nhnengineering.rftest.profile.Provenance.MEASURED) {
+                            "Source — what you read it with, and when"
+                        } else {
+                            "Source — who told you, and when"
+                        },
+                        p.source,
+                    ) { p = p.copy(source = it) }
                 }
                 item { Field("Note (optional)", p.note ?: "") { p = p.copy(note = it.ifBlank { null }) } }
                 if (p.source.isBlank()) {

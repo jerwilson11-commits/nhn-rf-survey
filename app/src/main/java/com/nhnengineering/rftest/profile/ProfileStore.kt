@@ -77,6 +77,7 @@ class ProfileStore(private val file: File) {
         num("ssbPeriodicityMs", p.ssbPeriodicityMs); comma()
         str("ssbPositionsInBurst", p.ssbPositionsInBurst); comma()
         num("scsKhz", p.scsKhz); comma()
+        str("provenance", p.provenance.name); comma()
         str("source", p.source); comma()
         append("\"recordedAtUtcMillis\":").append(p.recordedAtUtcMillis); comma()
         str("note", p.note)
@@ -162,6 +163,12 @@ class ProfileStore(private val file: File) {
             ssbPeriodicityMs = int("ssbPeriodicityMs"),
             ssbPositionsInBurst = map["ssbPositionsInBurst"],
             scsKhz = int("scsKhz"),
+            // Absent means an older line written before provenance existed, and those were all
+            // hand-entered. Defaulting to REPORTED keeps the weaker claim rather than silently
+            // promoting old hearsay to evidence.
+            provenance = map["provenance"]
+                ?.let { runCatching { Provenance.valueOf(it) }.getOrNull() }
+                ?: Provenance.REPORTED,
             source = map["source"] ?: "",
             recordedAtUtcMillis = map["recordedAtUtcMillis"]?.toLongOrNull() ?: 0L,
             note = map["note"],

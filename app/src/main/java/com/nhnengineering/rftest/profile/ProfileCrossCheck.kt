@@ -115,12 +115,29 @@ object ProfileCrossCheck {
             NrSsb.inferredScsKhz(it.substringBefore('/'), null)
         }
         if (profile.scsKhz != null && inferredScs != null && profile.scsKhz != inferredScs) {
+            // The wording turns on provenance, because the claim does. Against a reported profile
+            // this is two conventions disagreeing and neither is evidence. Against one read from
+            // SIB1 it is a measurement contradicting an assumption, and the assumption is ours --
+            // saying "neither is measured" there would be false, and would quietly rank our own
+            // inference alongside the network's own broadcast.
+            val measured = profile.provenance == Provenance.MEASURED
             findings += Finding(
-                "Subcarrier spacing differs from the usual value",
-                "The profile records ${profile.scsKhz} kHz; ${inferredScs} kHz is the common " +
-                    "choice for this band. Neither is measured — the app infers from the band and " +
-                    "the profile is what someone was told — so this is a prompt to confirm, not a " +
-                    "discrepancy.",
+                if (measured) {
+                    "Subcarrier spacing is not the usual value for this band"
+                } else {
+                    "Subcarrier spacing differs from the usual value"
+                },
+                if (measured) {
+                    "SIB1 reports ${profile.scsKhz} kHz where ${inferredScs} kHz is the common " +
+                        "choice for this band. The measured value is the one to believe; this is " +
+                        "noted because a band running an unusual subcarrier spacing is worth " +
+                        "knowing about, not because the reading is in doubt."
+                } else {
+                    "The profile records ${profile.scsKhz} kHz; ${inferredScs} kHz is the common " +
+                        "choice for this band. Neither is measured — the app infers from the band " +
+                        "and the profile is what someone was told — so this is a prompt to " +
+                        "confirm, not a discrepancy."
+                },
                 Severity.INFO,
             )
         }
