@@ -48,8 +48,12 @@ jobs:
           java-version: '25'
           cache: gradle
 
+      # v3 installs the legacy `tools` SDK package, which Google has removed from the
+      # repository -- sdkmanager exits 1 on "Failed to find package 'tools'" and the job dies
+      # before Gradle is ever invoked, so the unit tests were silently skipped rather than run.
+      # v4.0.2 fixes exactly that; v4.0.0 also moved the action to Node 24.
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Run unit tests
         run: |
