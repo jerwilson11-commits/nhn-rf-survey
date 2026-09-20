@@ -350,6 +350,32 @@ object PdfReportGenerator {
             c.gap(); c.rule()
         }
 
+        // ---- Throughput per band and technology ---------------------------
+        val throughput = SessionStats.throughputBreakdown(points) {
+            SessionStats.bandOf(it, SessionStats.Kpi.CELL_RSRP)
+        }
+        if (throughput.anyMeasured) {
+            c.ensure(170f)
+            c.text("Throughput by band and technology", c.h2)
+            c.para(
+                "What each carrier actually delivered, split by the band it ran on and the " +
+                    "technology running on that band. A band carrying both LTE and 5G is two " +
+                    "different services sharing one label, and a single figure for the pair " +
+                    "describes neither of them.",
+            )
+            c.para(
+                "This application does not set a band or technology lock and does not claim to. " +
+                    "Where a lock was in force it was applied externally and declared to the app, " +
+                    "and the section below checks that declaration against what the walk actually " +
+                    "saw. Where no lock was in force these rows describe whatever the network " +
+                    "chose to serve, which is a different measurement and a weaker one for " +
+                    "comparing sectors.",
+            )
+            c.gap()
+            throughputTable(c, throughput)
+            c.gap(); c.rule()
+        }
+
         // ---- Per-floor ----------------------------------------------------
         val floors = SessionStats.breakdown(points, { it.floor }, report.kpi, report.thresholdDbm)
         if (floors.groups.isNotEmpty()) {
@@ -881,6 +907,74 @@ object PdfReportGenerator {
             c.para(
                 "${b.unlabelled} measured samples carried no label and are excluded from this " +
                     "table. They remain in the site-wide figures above.",
+            )
+        }
+    }
+
+    /**
+     * Throughput per group.
+     *
+     * Median rather than mean, with the range beside it. A walk yields a handful of speed tests
+     * per band, not hundreds, so one run that started while the radio was still ramping moves a
+     * mean and does not move a median -- and the range is printed so that the reader can see the
+     * spread the median is hiding rather than having to trust it.
+     */
+    private fun throughputTable(c: Ctx, b: SessionStats.ThroughputBreakdown) {
+        fun mbps(v: Double?) = v?.let { String.format(Locale.US, "%.1f", it) } ?: "—"
+        fun range(lo: Double?, hi: Double?, n: Int) =
+            if (n < 2 || lo == null || hi == null) "—" else "${mbps(lo)}–${mbps(hi)}"
+
+        c.text(
+            String.format(
+                Locale.US, "%-20s %7s %13s %4s %7s %4s %6s",
+                "", "DL med", "DL range", "n", "UL med", "n", "Failed",
+            ),
+            c.monoBold,
+        )
+        for (g in b.groups) {
+            c.ensure(LINE * 2)
+            c.text(
+                String.format(
+                    Locale.US, "%-20s %7s %13s %4d %7s %4d %6d",
+                    g.label.take(20),
+                    mbps(g.dlMedianMbps),
+                    range(g.dlMinMbps, g.dlMaxMbps, g.downloadCount),
+                    g.downloadCount,
+                    mbps(g.ulMedianMbps),
+                    g.uploadCount,
+                    g.failedCount,
+                ),
+                c.mono,
+            )
+        }
+        c.gap(4f)
+        c.para("Mbps. n is the number of completed tests in that direction.")
+
+        val thin = b.groups.filter { it.isThin }
+        if (thin.isNotEmpty()) {
+            c.para(
+                "Fewer than ${SessionStats.MIN_THROUGHPUT_TESTS} completed tests, so the centre " +
+                    "is indicative rather than representative: " +
+                    thin.joinToString(", ") { it.label } + ". A speed test takes tens of seconds, " +
+                    "so this is normal on a walk rather than a defect in the survey — but a " +
+                    "sector should not be condemned on two runs.",
+            )
+        }
+        val failed = b.groups.filter { it.failedCount > 0 }
+        if (failed.isNotEmpty()) {
+            c.para(
+                "Tests that recorded an error are counted in the Failed column and are not in the " +
+                    "medians: " + failed.joinToString(", ") { "${it.label} (${it.failedCount})" } +
+                    ". A direction that mostly failed is a result about that band, not missing " +
+                    "data — a test can also succeed one way and fail the other, and then it " +
+                    "appears in both a count and the failure tally.",
+            )
+        }
+        if (b.unlabelled > 0) {
+            c.para(
+                "${b.unlabelled} completed test${if (b.unlabelled == 1) "" else "s"} carried no " +
+                    "serving band and ${if (b.unlabelled == 1) "is" else "are"} excluded from " +
+                    "this table.",
             )
         }
     }

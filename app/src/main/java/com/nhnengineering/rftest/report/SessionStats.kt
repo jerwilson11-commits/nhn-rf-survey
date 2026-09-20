@@ -349,6 +349,126 @@ object SessionStats {
             p.band
         }
 
+    // ---- Throughput by band and technology --------------------------------
+
+    /**
+     * Below this many completed tests, a group's centre is reported but flagged.
+     *
+     * Three is not a statistical threshold, it is an honesty threshold. A speed test takes tens of
+     * seconds, so a walk yields a handful per band rather than hundreds, and a median of two
+     * numbers is just the two numbers. The figure is still shown -- suppressing it would lose real
+     * information -- but a reader deciding whether a sector needs an upgrade should know how much
+     * evidence is behind it.
+     */
+    const val MIN_THROUGHPUT_TESTS = 3
+
+    /**
+     * What one band, or one band on one technology, actually delivered.
+     *
+     * Download and upload are counted separately rather than as one "tests" figure, because a test
+     * can half-succeed: the 2026-09-02 walk produced eight rows carrying an upload and no
+     * download. Collapsing them would either discard those uploads or imply downloads that never
+     * happened.
+     */
+    data class ThroughputGroup(
+        val label: String,
+        val downloadCount: Int,
+        val dlMedianMbps: Double?,
+        val dlMinMbps: Double?,
+        val dlMaxMbps: Double?,
+        val uploadCount: Int,
+        val ulMedianMbps: Double?,
+        val ulMinMbps: Double?,
+        val ulMaxMbps: Double?,
+        /**
+         * Tests here that recorded a reason for a missing direction.
+         *
+         * A row can be counted both as a completed upload and as a failure, because that is what a
+         * half-successful test is. A band where four of five downloads failed is a finding in its
+         * own right, and quoting the median of the one that worked would bury it.
+         */
+        val failedCount: Int,
+    ) {
+        /** Too few completed tests for the centre to carry much weight. */
+        val isThin: Boolean
+            get() = maxOf(downloadCount, uploadCount) < MIN_THROUGHPUT_TESTS
+    }
+
+    data class ThroughputBreakdown(
+        val groups: List<ThroughputGroup>,
+        /**
+         * Tests that ran where the selector had no label to give them -- no serving band recorded,
+         * or no technology. They are counted rather than dropped, because a report that silently
+         * analyses six of ten tests overstates how much of the survey it covers.
+         */
+        val unlabelled: Int,
+    ) {
+        val anyMeasured: Boolean get() = groups.isNotEmpty()
+    }
+
+    /**
+     * Splits the throughput measurements in a session by band, technology, or both.
+     *
+     * Separate from [breakdown] because the two aggregate different things. [breakdown] works on a
+     * KPI present on nearly every sample; throughput is present on the handful of rows where a
+     * speed test finished, so a share-of-survey percentage would be meaningless and a count is
+     * what a reader needs instead.
+     *
+     * The centre is a median, not a mean. Sample counts are small and the distribution is skewed
+     * by construction -- a test that ran while the radio was still ramping, or through one bad
+     * handover, pulls a mean down in a way it does not pull a median. Minimum and maximum are
+     * carried alongside so the spread stays visible rather than being averaged away.
+     */
+    fun throughputBreakdown(
+        points: List<TrackPoint>,
+        selector: (TrackPoint) -> String?,
+    ): ThroughputBreakdown {
+        fun isTest(p: TrackPoint) =
+            p.downloadMbps != null || p.uploadMbps != null || !p.throughputError.isNullOrBlank()
+
+        val tests = points.filter(::isTest)
+        if (tests.isEmpty()) return ThroughputBreakdown(emptyList(), 0)
+
+        val labelled = tests.mapNotNull { p -> selector(p)?.takeIf { it.isNotBlank() }?.let { it to p } }
+        val groups = labelled.groupBy({ it.first }, { it.second }).map { (label, ps) ->
+            val dl = ps.mapNotNull { it.downloadMbps }.sorted()
+            val ul = ps.mapNotNull { it.uploadMbps }.sorted()
+            ThroughputGroup(
+                label = label,
+                downloadCount = dl.size,
+                dlMedianMbps = medianOf(dl),
+                dlMinMbps = dl.firstOrNull(),
+                dlMaxMbps = dl.lastOrNull(),
+                uploadCount = ul.size,
+                ulMedianMbps = medianOf(ul),
+                ulMinMbps = ul.firstOrNull(),
+                ulMaxMbps = ul.lastOrNull(),
+                failedCount = ps.count { !it.throughputError.isNullOrBlank() },
+            )
+        }
+
+        // Slowest median download first. The point of this table is finding the sector that needs
+        // an upgrade, and sorting by name or by sample count buries it.
+        val ordered = groups.sortedWith(
+            compareBy(
+                { it.dlMedianMbps ?: Double.MAX_VALUE },
+                { it.label },
+            ),
+        )
+        return ThroughputBreakdown(ordered, tests.size - labelled.size)
+    }
+
+    /** Median of an already-sorted list, matching [percentile]'s interpolation at p50. */
+    private fun medianOf(sorted: List<Double>): Double? {
+        if (sorted.isEmpty()) return null
+        if (sorted.size == 1) return sorted[0]
+        val k = (sorted.size - 1) * 0.5
+        val lo = floor(k).toInt()
+        val hi = ceil(k).toInt()
+        if (lo == hi) return sorted[lo]
+        return sorted[lo] + (sorted[hi] - sorted[lo]) * (k - lo)
+    }
+
     // ---- Dominance / best server -----------------------------------------
 
     /**

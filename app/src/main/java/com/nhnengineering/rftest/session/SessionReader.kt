@@ -108,6 +108,24 @@ data class TrackPoint(
     val cells: List<ObservedCell> = emptyList(),
     /** Neighbouring APs at this sample, strongest first. */
     val aps: List<ObservedAp> = emptyList(),
+    /**
+     * Throughput measured at this point, present only on the row where a speed test finished.
+     *
+     * Sparse by nature rather than by omission: a speed test is a point measurement, and the
+     * writer deliberately leaves every other row empty. Carrying it on the sample means the result
+     * keeps the band, technology, cell and position it ran under, which is the whole basis for
+     * reporting throughput per band.
+     */
+    val downloadMbps: Double? = null,
+    val uploadMbps: Double? = null,
+    /**
+     * Why a direction is missing, when it is.
+     *
+     * Without it an empty [downloadMbps] means either "no test ran here" or "the download failed
+     * and we are not saying so". A band whose tests mostly failed is a finding, and averaging the
+     * one that succeeded would hide it.
+     */
+    val throughputError: String? = null,
 ) {
     /** True when this sample can be placed on a floorplan even though GPS could not place it. */
     val hasIndoorPosition: Boolean
@@ -199,6 +217,8 @@ object SessionReader {
             val iLteBand = idx("lte_band"); val iNrBand = idx("nr_band"); val iRat = idx("rat")
             val iDevModel = idx("device_model"); val iDevBuild = idx("device_build")
             val iBandLock = idx("band_lock"); val iRatLock = idx("rat_lock")
+            val iDl = idx("dl_mbps"); val iUl = idx("ul_mbps")
+            val iTpErr = idx("tp_error")
             val iWifiNeighbors = idx("wifi_neighbors_json")
             val iNrPci = idx("nr_pci"); val iLtePci = idx("lte_pci")
             val iNrNci = idx("nr_nci")
@@ -299,6 +319,9 @@ object SessionReader {
                     servingNci = s(iNrNci)?.toLongOrNull(),
                     aps = parseWifiNeighbors(s(iWifiNeighbors)),
                     cells = cells,
+                    downloadMbps = s(iDl)?.toDoubleOrNull(),
+                    uploadMbps = s(iUl)?.toDoubleOrNull(),
+                    throughputError = s(iTpErr),
                 )
             }
 
