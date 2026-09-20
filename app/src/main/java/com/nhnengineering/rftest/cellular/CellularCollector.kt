@@ -86,6 +86,23 @@ class CellularCollector(context: Context) {
 
     @Volatile private var latestDisplayInfo: TelephonyDisplayInfo? = null
     @Volatile private var latestSignalStrength: SignalStrength? = null
+    /**
+     * Cells from surfaces other than `getAllCellInfo()`.
+     *
+     * Three surfaces report cells and they do not always agree. `getAllCellInfo()` can serve a
+     * cached, filtered list; `requestCellInfoUpdate()` hands its own fresh list to a callback --
+     * which this collector used to request and then discard, keeping only the side effect of
+     * warming the cache; and `CellInfoListener` pushes updates as the modem produces them.
+     *
+     * An OEM that populates one and not another is common, and reading only the first is how a
+     * neighbour the modem can see never reaches the survey. They are unioned rather than chosen
+     * between, because a cell present in any of them is a cell that was really observed.
+     */
+    @Volatile private var callbackCells: List<CellInfo> = emptyList()
+    @Volatile private var listenerCells: List<CellInfo> = emptyList()
+    /** Logged once per surface, so the log says which ones this handset actually feeds. */
+    private var loggedCallbackSurface = false
+    private var loggedListenerSurface = false
     @Volatile private var latestCarriers: List<ComponentCarrier> = emptyList()
     /** Set when the privileged listener registered without throwing. See [PreciseCallback]. */
     @Volatile private var channelConfigActive: Boolean = false
@@ -140,7 +157,19 @@ class CellularCollector(context: Context) {
     private inner class Callback :
         TelephonyCallback(),
         TelephonyCallback.DisplayInfoListener,
+        TelephonyCallback.CellInfoListener,
         TelephonyCallback.SignalStrengthsListener {
+
+        // Non-privileged -- it needs ACCESS_FINE_LOCATION, which start() has already checked --
+        // so it belongs on this callback. The rule about separate registration applies to
+        // privileged listeners, which can be refused and take their siblings down with them.
+        override fun onCellInfoChanged(cellInfo: MutableList<CellInfo>) {
+            listenerCells = cellInfo.toList()
+            if (!loggedListenerSurface) {
+                loggedListenerSurface = true
+                Log.i(TAG, "CellInfoListener delivers: ${cellInfo.size} cell(s)")
+            }
+        }
 
 
 
@@ -236,6 +265,8 @@ class CellularCollector(context: Context) {
         preciseCallback = null
         channelConfigActive = false
         latestCarriers = emptyList()
+        callbackCells = emptyList()
+        listenerCells = emptyList()
     }
 
     // -----------------------------------------------------------------------
@@ -258,8 +289,20 @@ class CellularCollector(context: Context) {
             emptyList()
         }
 
-        val lteCells = cells.filterIsInstance<CellInfoLte>()
-        val nrCells = cells.filterIsInstance<CellInfoNr>()
+        val merged = unionCellSources(cells)
+        if (merged.size != cells.size) {
+            // Only when the surfaces disagree, which is the only interesting case and keeps this
+            // quiet on a handset where they agree. A difference here means getAllCellInfo() alone
+            // was losing cells the modem had already reported.
+            Log.i(
+                TAG,
+                "cell sources differ: getAllCellInfo=${cells.size} " +
+                    "requestUpdate=${callbackCells.size} listener=${listenerCells.size} " +
+                    "union=${merged.size}",
+            )
+        }
+        val lteCells = merged.filterIsInstance<CellInfoLte>()
+        val nrCells = merged.filterIsInstance<CellInfoNr>()
 
         val servingLte = lteCells.firstOrNull { it.isRegistered } ?: lteCells.firstOrNull()
         val servingNr = nrCells.firstOrNull { it.isRegistered } ?: nrCells.firstOrNull()
@@ -314,6 +357,37 @@ class CellularCollector(context: Context) {
     // hasFineLocation check below and by the runCatching around it. Suppressed so that a real
     // finding -- an API-level violation, say -- is visible rather than buried in known noise.
     @SuppressLint("MissingPermission")
+    /**
+     * Every cell any surface reported, deduplicated, keeping the freshest sighting of each.
+     *
+     * Keyed on PCI and channel together rather than on the object, because the same cell arrives
+     * as a different instance from each surface -- and because a PCI is unique only within a
+     * carrier, so the same PCI on two channels is two different physical cells and must not be
+     * collapsed into one.
+     */
+    private fun unionCellSources(direct: List<CellInfo>): List<CellInfo> {
+        if (callbackCells.isEmpty() && listenerCells.isEmpty()) return direct
+        val all = direct + callbackCells + listenerCells
+        return all
+            .groupBy { cellKey(it) }
+            .values
+            .mapNotNull { group -> group.maxByOrNull { it.timestampMillis } }
+    }
+
+    /** Identity of a cell for deduplication: type, PCI and channel. Null channel stays distinct. */
+    private fun cellKey(c: CellInfo): String = when (c) {
+        is CellInfoNr -> (c.cellIdentity as? CellIdentityNr)
+            ?.let { "nr:${it.pci}:${it.nrarfcn}" } ?: "nr:?:${System.identityHashCode(c)}"
+        is CellInfoLte -> "lte:${c.cellIdentity.pci}:${c.cellIdentity.earfcn}"
+        else -> "other:${System.identityHashCode(c)}"
+    }
+
+    /**
+     * Lint cannot see the permission check because it is behind the [hasFineLocation] property,
+     * so the guard is invisible to it and the call reads as unchecked. The check is real -- this
+     * returns early without it -- and the call is wrapped in runCatching besides.
+     */
+    @SuppressLint("MissingPermission")
     private fun maybeRequestRefresh() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastRefreshElapsedMs < REFRESH_INTERVAL_MS) return
@@ -321,7 +395,15 @@ class CellularCollector(context: Context) {
         if (!hasFineLocation) return
         runCatching {
             tm?.requestCellInfoUpdate(executor, object : TelephonyManager.CellInfoCallback() {
-                override fun onCellInfo(cellInfo: MutableList<CellInfo>) = Unit
+                override fun onCellInfo(cellInfo: MutableList<CellInfo>) {
+                    // Previously discarded. The request was made only to warm the cache that
+                    // getAllCellInfo() reads, throwing away the very list it was asked for.
+                    callbackCells = cellInfo.toList()
+                    if (!loggedCallbackSurface) {
+                        loggedCallbackSurface = true
+                        Log.i(TAG, "requestCellInfoUpdate delivers: ${cellInfo.size} cell(s)")
+                    }
+                }
                 override fun onError(errorCode: Int, detail: Throwable?) {
                     Log.w(TAG, "requestCellInfoUpdate error $errorCode")
                 }
