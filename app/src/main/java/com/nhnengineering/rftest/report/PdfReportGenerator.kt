@@ -419,26 +419,50 @@ object PdfReportGenerator {
             )
             c.gap()
             c.kv("Samples analysed", dom.samples.toString())
-            c.kv("Mean dominant sectors", String.format(Locale.US, "%.2f", dom.meanCount))
-            c.kv(
-                "Overlap (2 or more within ${dom.windowDb} dB)",
-                String.format(Locale.US, "%.1f %% of samples", dom.overlapPct),
-            )
+            if (dom.overlapAssessable) {
+                c.kv("Mean dominant sectors", String.format(Locale.US, "%.2f", dom.meanCount))
+                c.kv(
+                    "Overlap (2 or more within ${dom.windowDb} dB)",
+                    String.format(Locale.US, "%.1f %% of samples", dom.overlapPct),
+                )
+            } else {
+                c.kv("Overlap (2 or more within ${dom.windowDb} dB)", "not measured — see below")
+            }
             if (dom.excluded > 0) {
                 c.kv("Samples excluded", "${dom.excluded}  (cells seen, none with a level)")
             }
             c.gap()
-            c.text(
-                String.format(Locale.US, "%-22s %9s %9s", "Dominant sectors", "Samples", "Share"),
-                c.monoBold,
-            )
-            for ((n, count) in dom.countHistogram) {
+            if (dom.overlapAssessable) {
                 c.text(
-                    String.format(
-                        Locale.US, "%-22d %9d %8.1f%%",
-                        n, count, 100.0 * count / dom.samples,
-                    ),
-                    c.mono,
+                    String.format(Locale.US, "%-22s %9s %9s", "Dominant sectors", "Samples", "Share"),
+                    c.monoBold,
+                )
+                for ((n, count) in dom.countHistogram) {
+                    c.text(
+                        String.format(
+                            Locale.US, "%-22d %9d %8.1f%%",
+                            n, count, 100.0 * count / dom.samples,
+                        ),
+                        c.mono,
+                    )
+                }
+            } else {
+                // Printing 0.0% here would be a measurement this survey did not make. Overlap
+                // drives remediation decisions, so a confident zero can retire a justified
+                // recommendation -- the one direction this error must never take.
+                c.para(
+                    "No sample in this survey carried more than one cell, so there was nothing " +
+                        "to compare and overlap was not measured. Read this as not measured, not " +
+                        "as no overlap.",
+                )
+                c.para(
+                    "This is a limitation of the measuring platform rather than a property of " +
+                        "the site. Android does not pass 5G NR neighbour cells to an application " +
+                        "on any handset tested. The modem does measure them — the handset handed " +
+                        "over between cells normally during surveys where this section is blank, " +
+                        "and a diagnostic tool reading the modem directly lists the neighbours " +
+                        "throughout — but the operating system does not expose them. Assessing " +
+                        "overlap on a 5G standalone system needs that diagnostic tool alongside.",
                 )
             }
 

@@ -513,7 +513,32 @@ object SessionStats {
         /** Share of contributing samples with two or more dominant sectors, 0-100. */
         val overlapPct: Double,
         val servers: List<ServerRow>,
-    )
+        /**
+         * The most cells any single sample offered for comparison.
+         *
+         * Overlap is "two or more cells within [windowDb] of the strongest". Where no sample ever
+         * carried more than one cell, that question was never put to anything: [overlapPct] comes
+         * out 0.0 and means "nothing to compare with", not "no overlap". Those are opposite
+         * conclusions in front of a client, and the wrong one is expensive -- overlap is the usual
+         * driver of remediation work, so a confident 0% can retire a recommendation that was
+         * justified.
+         *
+         * This is 1 for an entire 5G SA session on every device tested, because Android does not
+         * expose NR neighbours through CellInfo. It is not a property of the venue or the handset:
+         * on 2026-09-20 the phone handed over between four cells over 1.31 km while reporting a
+         * neighbour count of zero on all 355 samples, and a diagnostic tool reading the modem
+         * directly showed the neighbours throughout.
+         */
+        val maxCellsInSample: Int,
+    ) {
+        /**
+         * Whether overlap could be assessed at all.
+         *
+         * False means the platform never showed two cells at once, so [overlapPct] carries no
+         * information and must not be rendered as a finding.
+         */
+        val overlapAssessable: Boolean get() = maxCellsInSample > 1
+    }
 
     /**
      * Dominant-sector count, overlap and per-cell best-server share.
@@ -558,7 +583,7 @@ object SessionStats {
         }
         val contributing = ranked.filter { it.isNotEmpty() }
         if (contributing.isEmpty()) {
-            return Dominance(windowDb, 0, withCells.size, emptyList(), 0.0, 0.0, emptyList())
+            return Dominance(windowDb, 0, withCells.size, emptyList(), 0.0, 0.0, emptyList(), 0)
         }
 
         val counts = contributing.map { cells ->
@@ -610,6 +635,7 @@ object SessionStats {
             meanCount = counts.sum().toDouble() / counts.size,
             overlapPct = 100.0 * counts.count { it >= 2 } / counts.size,
             servers = servers,
+            maxCellsInSample = contributing.maxOf { it.size },
         )
     }
 
