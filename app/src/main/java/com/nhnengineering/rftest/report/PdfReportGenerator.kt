@@ -456,13 +456,14 @@ object PdfReportGenerator {
                         "as no overlap.",
                 )
                 c.para(
-                    "This is a limitation of the measuring platform rather than a property of " +
-                        "the site. Android does not pass 5G NR neighbour cells to an application " +
-                        "on any handset tested. The modem does measure them — the handset handed " +
-                        "over between cells normally during surveys where this section is blank, " +
-                        "and a diagnostic tool reading the modem directly lists the neighbours " +
-                        "throughout — but the operating system does not expose them. Assessing " +
-                        "overlap on a 5G standalone system needs that diagnostic tool alongside.",
+                    "This is a limitation of the measuring handset rather than a property of the " +
+                        "site. Some handsets do not pass 5G NR neighbour cells to an application " +
+                        "at all, and this survey was recorded on one of them. The modem still " +
+                        "measures them — such a handset hands over between cells normally, and a " +
+                        "diagnostic tool reading the modem directly lists the neighbours " +
+                        "throughout — but nothing reaches the application. Other handsets report " +
+                        "them without difficulty, so this is a property of the instrument used " +
+                        "and is recorded in the methodology section.",
                 )
             }
 
