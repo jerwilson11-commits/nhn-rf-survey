@@ -127,6 +127,47 @@ data class NeighborCell(
     val ageMs: Long = 0,
 )
 
+/** Which role a configured carrier plays. Secondary means carrier aggregation is active. */
+enum class CarrierRole(val label: String) {
+    PRIMARY("primary"),
+    SECONDARY("secondary"),
+    UNKNOWN("unknown"),
+}
+
+/**
+ * One carrier the modem currently has configured, from `PhysicalChannelConfig`.
+ *
+ * ## Why this is worth the privileged install
+ *
+ * `getAllCellInfo()` describes the cell the handset is camped on. This describes what the modem
+ * has actually configured, which is not the same thing: an aggregated deployment has a primary
+ * carrier and one or more secondary ones, and only this surface names them. A survey that reports
+ * the primary alone describes a fraction of the radio the user is actually being served by.
+ *
+ * It also answers a question no other surface on this platform can: **which bands is this handset
+ * genuinely using**, component by component, rather than which one it happens to be camped on.
+ *
+ * The listener behind it needs `READ_PRECISE_PHONE_STATE`, which is `signature|privileged` --
+ * available to an app installed in `/system/priv-app`, not to an ordinary one. So this is empty
+ * on a normal install and populated on a survey handset, and [CellularSample.channelConfigAvailable]
+ * is what separates those two cases.
+ */
+data class ComponentCarrier(
+    val role: CarrierRole,
+    /** True when this carrier is NR. The numbering spaces differ -- n41 is not band 41. */
+    val isNr: Boolean,
+    val band: Int?,
+    val downlinkArfcn: Int?,
+    val downlinkFrequencyKhz: Int?,
+    val downlinkBandwidthKhz: Int?,
+    val uplinkBandwidthKhz: Int?,
+    val pci: Int?,
+) {
+    /** "n41" or "B2", or null when the modem did not report a band. */
+    val bandLabel: String?
+        get() = band?.let { if (isNr) "n$it" else "B$it" }
+}
+
 data class CellularSample(
     val simState: SimState,
     val rat: Rat,
@@ -159,6 +200,23 @@ data class CellularSample(
      * identically to one meaning "no coverage", and only one of those is a finding.
      */
     val permissionLimited: Boolean = false,
+    /**
+     * Every carrier the modem has configured, primary and aggregated secondaries.
+     *
+     * Empty on an ordinary install, where the listener behind it cannot be registered. Read it
+     * together with [channelConfigAvailable] and never alone: an empty list means "not permitted
+     * to look" far more often than it means "one carrier", and reporting the second when the
+     * first is true is how this project already put a confident 0.0% overlap in a client report.
+     */
+    val carriers: List<ComponentCarrier> = emptyList(),
+    /**
+     * Whether the privileged channel-config listener is actually registered.
+     *
+     * False is the normal case and not an error -- it means the app is not installed privileged,
+     * so [carriers] carries no information at all. Anything reporting on aggregation must branch
+     * on this before it says a word about how many carriers were in use.
+     */
+    val channelConfigAvailable: Boolean = false,
 ) {
     /** Primary serving-cell coverage KPI, whichever radio is serving. */
     val servingRsrpDbm: Int? get() = nr?.ssRsrpDbm ?: lte?.rsrpDbm

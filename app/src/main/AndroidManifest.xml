@@ -12,6 +12,15 @@
          which is precisely the thing worth knowing at a venue. Requested but not gated on. -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
+    <!--
+        Privileged (signature|privileged). Granted only where the app is installed in
+        /system/priv-app AND allowlisted in a privapp-permissions XML; refused on an ordinary
+        install, which is the normal case and is handled. It unlocks PhysicalChannelConfig:
+        per-component-carrier band, ARFCN, bandwidth and PCI, including aggregated secondary
+        carriers, which no unprivileged surface on this platform reports.
+    -->
+    <uses-permission android:name="android.permission.READ_PRECISE_PHONE_STATE" />
+
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Required to call startScan(). Does not actually change any Wi-Fi state. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />

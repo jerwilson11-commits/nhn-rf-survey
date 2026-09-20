@@ -10,6 +10,7 @@ import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
 import android.telephony.CellSignalStrengthLte
 import android.telephony.CellSignalStrengthNr
+import android.telephony.PhysicalChannelConfig
 import android.telephony.SignalStrength
 import android.telephony.CellIdentityLte
 import android.telephony.CellIdentityNr
@@ -18,7 +19,9 @@ import android.telephony.TelephonyDisplayInfo
 import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.nhnengineering.rftest.model.CarrierRole
 import com.nhnengineering.rftest.model.CellularSample
+import com.nhnengineering.rftest.model.ComponentCarrier
 import com.nhnengineering.rftest.model.LteCell
 import com.nhnengineering.rftest.model.NeighborCell
 import com.nhnengineering.rftest.model.NrCell
@@ -83,6 +86,10 @@ class CellularCollector(context: Context) {
 
     @Volatile private var latestDisplayInfo: TelephonyDisplayInfo? = null
     @Volatile private var latestSignalStrength: SignalStrength? = null
+    @Volatile private var latestCarriers: List<ComponentCarrier> = emptyList()
+    /** Set when the privileged listener registered without throwing. See [PreciseCallback]. */
+    @Volatile private var channelConfigActive: Boolean = false
+    private var preciseCallback: TelephonyCallback? = null
     @Volatile private var lastRefreshElapsedMs = 0L
 
     /** Keyed by rat|pci|channel, which identifies a cell uniquely enough within one locality. */
@@ -148,6 +155,44 @@ class CellularCollector(context: Context) {
         }
     }
 
+    /**
+     * The privileged listener, deliberately kept as its own callback.
+     *
+     * Every listener on one [TelephonyCallback] shares a single registration, so a privileged
+     * listener that is refused takes the working ones down with it. This app has already done
+     * that once: adding a privileged listener to the main callback silently cost it NSA/SA
+     * detection and the SignalStrength fallback, and it kept running as though nothing had
+     * happened. Registering separately means a refusal here costs only this.
+     */
+    private inner class PreciseCallback :
+        TelephonyCallback(),
+        TelephonyCallback.PhysicalChannelConfigListener {
+
+        override fun onPhysicalChannelConfigChanged(configs: List<PhysicalChannelConfig>) {
+            latestCarriers = configs.map { c ->
+                ComponentCarrier(
+                    role = when (c.connectionStatus) {
+                        PhysicalChannelConfig.CONNECTION_PRIMARY_SERVING -> CarrierRole.PRIMARY
+                        PhysicalChannelConfig.CONNECTION_SECONDARY_SERVING -> CarrierRole.SECONDARY
+                        else -> CarrierRole.UNKNOWN
+                    },
+                    isNr = c.networkType == TelephonyManager.NETWORK_TYPE_NR,
+                    band = c.band.takeIf { it != PhysicalChannelConfig.BAND_UNKNOWN },
+                    downlinkArfcn = c.downlinkChannelNumber
+                        .takeIf { it != PhysicalChannelConfig.CHANNEL_NUMBER_UNKNOWN },
+                    downlinkFrequencyKhz = c.downlinkFrequencyKhz
+                        .takeIf { it != PhysicalChannelConfig.FREQUENCY_UNKNOWN },
+                    downlinkBandwidthKhz = c.cellBandwidthDownlinkKhz
+                        .takeIf { it != PhysicalChannelConfig.CELL_BANDWIDTH_UNKNOWN },
+                    uplinkBandwidthKhz = c.cellBandwidthUplinkKhz
+                        .takeIf { it != PhysicalChannelConfig.CELL_BANDWIDTH_UNKNOWN },
+                    pci = c.physicalCellId
+                        .takeIf { it != PhysicalChannelConfig.PHYSICAL_CELL_ID_UNKNOWN },
+                )
+            }
+        }
+    }
+
     fun start() {
         if (started) return
         started = true
@@ -165,6 +210,21 @@ class CellularCollector(context: Context) {
         } catch (e: SecurityException) {
             Log.w(TAG, "registerTelephonyCallback denied", e)
         }
+
+        // Separate registration, separate failure. READ_PRECISE_PHONE_STATE is
+        // signature|privileged, so this is refused on an ordinary install and granted on a
+        // handset where the app sits in /system/priv-app. Refusal is the normal case and is
+        // logged at info, not warn -- it is a deployment fact, not a fault.
+        try {
+            val pcb = PreciseCallback()
+            preciseCallback = pcb
+            tm?.registerTelephonyCallback(executor, pcb)
+            channelConfigActive = true
+        } catch (e: SecurityException) {
+            channelConfigActive = false
+            latestCarriers = emptyList()
+            Log.i(TAG, "PhysicalChannelConfig unavailable (needs a privileged install): " + e.message)
+        }
     }
 
     fun stop() {
@@ -172,6 +232,10 @@ class CellularCollector(context: Context) {
         started = false
         callback?.let { cb -> runCatching { tm?.unregisterTelephonyCallback(cb) } }
         callback = null
+        preciseCallback?.let { cb -> runCatching { tm?.unregisterTelephonyCallback(cb) } }
+        preciseCallback = null
+        channelConfigActive = false
+        latestCarriers = emptyList()
     }
 
     // -----------------------------------------------------------------------
@@ -226,6 +290,8 @@ class CellularCollector(context: Context) {
             neighbors = neighbors,
             cellBandwidthsKhz = cellBandwidthsKhz(),
             permissionLimited = !hasPhoneState,
+            carriers = latestCarriers,
+            channelConfigAvailable = channelConfigActive,
         )
     }
 
