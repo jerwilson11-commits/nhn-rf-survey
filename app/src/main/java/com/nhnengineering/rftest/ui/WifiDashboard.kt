@@ -187,26 +187,35 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 floor = floor,
             )
         }
+        // Re-read on every recomposition rather than remembered: these are exactly the settings
+        // an operator changes in the minute before setting off, and a cached answer would
+        // describe the state the app started in.
+        val preWalk = if (recording) {
+            emptyList()
+        } else {
+            com.nhnengineering.rftest.model.PreWalkCheck.evaluate(
+                preWalkInputs(
+                    context = context,
+                    hasGpsFix = fix != null,
+                    floorplanSelected = indoorPosition != null,
+                    simPresent = cell?.simState?.name?.contains("READY") == true,
+                ),
+            )
+        }
+        val preWalkHasFindings = preWalk.any {
+            it.status != com.nhnengineering.rftest.model.PreWalkCheck.Status.OK
+        }
+
         if (!recording) {
             item { NotRecordingBanner(onStart = { RecordingService.start(context, sessionName) }) }
-            item {
-                // Re-read on every recomposition rather than remembered: these are exactly the
-                // settings an operator changes in the minute before setting off, and a cached
-                // answer would describe the state the app started in.
-                PreWalkCard(
-                    com.nhnengineering.rftest.model.PreWalkCheck.evaluate(
-                        preWalkInputs(
-                            context = context,
-                            hasGpsFix = fix != null,
-                            floorplanSelected = indoorPosition != null,
-                            simPresent = cell?.simState?.name?.contains("READY") == true,
-                        ),
-                    ),
-                )
-            }
+            // A finding outranks the reading: it is the thing that makes the walk not worth
+            // taking, and the operator needs it before they press START. A clean result does not
+            // outrank anything, so it waits below the numbers as one line.
+            if (preWalkHasFindings) item { PreWalkCard(preWalk) }
         }
         item { LevelBar(cell, wifi) }
         item { HeroKpi(cell, wifi) }
+        if (!recording && !preWalkHasFindings) item { PreWalkPassLine() }
         item {
             // Which radio this screen is speaking about. Decided once per sample and passed
             // explicitly, because the stabiliser keeps a window and a window that changes

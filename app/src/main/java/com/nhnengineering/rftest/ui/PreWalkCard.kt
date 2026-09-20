@@ -86,18 +86,15 @@ fun PreWalkCard(checks: List<PreWalkCheck.Check>) {
     val blocking = checks.filter { it.status == PreWalkCheck.Status.BLOCK }
     val warning = checks.filter { it.status == PreWalkCheck.Status.WARN }
 
+    // A clean result is rendered by [PreWalkPassLine] instead, as one line below the readings.
+    // A whole card headed "Before you walk" saying only that nothing is wrong is ceremony: it
+    // costs the height of a reading to deliver no information, and it is between the operator and
+    // the numbers every time the app is opened and not recording.
+    if (blocking.isEmpty() && warning.isEmpty()) return
+
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Before you walk", style = MaterialTheme.typography.titleMedium)
-
-            if (blocking.isEmpty() && warning.isEmpty()) {
-                Text(
-                    "All checks pass.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0xFF2E7D32),
-                )
-                return@Column
-            }
 
             for (check in blocking + warning) {
                 val colour = if (check.status == PreWalkCheck.Status.BLOCK) {
@@ -135,4 +132,21 @@ fun PreWalkCard(checks: List<PreWalkCheck.Check>) {
             }
         }
     }
+}
+
+/**
+ * The clean pre-walk result, as one line rather than a card.
+ *
+ * Silence would be defensible -- the checks exist to stop a walk, and nothing stopping it is the
+ * normal case. But an operator about to spend an hour on a paid survey is entitled to see that the
+ * instrument agrees it is ready, so the confirmation stays and only the ceremony goes.
+ */
+@Composable
+fun PreWalkPassLine() {
+    Text(
+        text = "Ready to walk — all checks pass",
+        style = MaterialTheme.typography.bodySmall,
+        color = Color(0xFF2E7D32),
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
