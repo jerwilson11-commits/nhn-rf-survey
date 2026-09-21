@@ -15,9 +15,18 @@
     <!--
         Privileged (signature|privileged). Granted only where the app is installed in
         /system/priv-app AND allowlisted in a privapp-permissions XML; refused on an ordinary
-        install, which is the normal case and is handled. It unlocks PhysicalChannelConfig:
-        per-component-carrier band, ARFCN, bandwidth and PCI, including aggregated secondary
-        carriers, which no unprivileged surface on this platform reports.
+        install, which is the normal case and is handled. It unlocks PhysicalChannelConfig,
+        the modem's own view of which carriers it has configured.
+
+        How much that is worth is a property of the handset, not of the permission. Measured on
+        the OnePlus 9 (OOS 14, 2026-09-21) with the privileged install in place and a validated
+        NR SA data connection under active load: connectionStatus, networkType and frequencyRange
+        are populated; band, physicalCellId, channel number and bandwidth all come back as their
+        UNKNOWN sentinels. The vendor RIL does not fill them in. So what this reliably buys on
+        that handset is the carrier *count* and primary/secondary roles: still the only
+        aggregation evidence available, since ServiceState reports mCellBandwidths=[] and
+        isUsingCarrierAggregation=false regardless, plus the coarse LOW/MID/HIGH range.
+        Anything reporting per-carrier RF detail must treat those fields as optional and absent.
     -->
     <!--
         Suppressed deliberately, not waved away: lint is correct that this is granted only
@@ -25,6 +34,20 @@
         can be granted it, and the collector treats refusal as the normal path.
     -->
     <uses-permission android:name="android.permission.READ_PRECISE_PHONE_STATE"
+        tools:ignore="ProtectedPermissions" />
+
+    <!--
+        Also privileged, and required to hold the radio on one access technology for the length
+        of a measurement (see TechnologyLock). Selects a technology, never a band: Android exposes
+        no band selection at any privilege level.
+
+        Declaring this has a deployment consequence worth stating where it is declared. A handset
+        with ro.control_privapp_permissions=enforce refuses to boot when a privileged app declares
+        a privileged permission that no privapp-permissions XML allowlists. So this entry and the
+        allowlist file change together, and the allowlist must be in place before the next reboot,
+        not merely before the next install, which is the deadline it looks like.
+    -->
+    <uses-permission android:name="android.permission.MODIFY_PHONE_STATE"
         tools:ignore="ProtectedPermissions" />
 
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />

@@ -144,8 +144,19 @@ enum class CarrierRole(val label: String) {
  * carrier and one or more secondary ones, and only this surface names them. A survey that reports
  * the primary alone describes a fraction of the radio the user is actually being served by.
  *
- * It also answers a question no other surface on this platform can: **which bands is this handset
- * genuinely using**, component by component, rather than which one it happens to be camped on.
+ * ## How much of it a given handset actually reports
+ *
+ * The permission grants access to the surface; it does not make the modem fill it in. Measured on
+ * the OnePlus 9 (OOS 14, 2026-09-21), privileged install in place, NR SA connected and under
+ * active load: `connectionStatus`, `networkType` and `frequencyRange` are real, while [band],
+ * [pci], [downlinkArfcn] and the bandwidths are all UNKNOWN sentinels and are therefore null
+ * here. That is a vendor RIL limitation, and other handsets do populate them.
+ *
+ * So the dependable part of this on that handset is *how many* carriers are configured and which
+ * is primary -- which remains the only aggregation evidence the platform offers, since
+ * ServiceState reports `mCellBandwidths=[]` and `isUsingCarrierAggregation=false` either way.
+ * Every RF field below is nullable for this reason, and a reader that assumes otherwise will
+ * quietly report a band of "none" as though it were a measurement.
  *
  * The listener behind it needs `READ_PRECISE_PHONE_STATE`, which is `signature|privileged` --
  * available to an app installed in `/system/priv-app`, not to an ordinary one. So this is empty
