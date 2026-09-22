@@ -10,6 +10,7 @@ import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.os.Build
+import com.nhnengineering.rftest.cellular.TechnologyLock
 import com.nhnengineering.rftest.session.FloorplanStore
 import com.nhnengineering.rftest.session.SessionSummary
 import com.nhnengineering.rftest.session.TrackPoint
@@ -1391,10 +1392,23 @@ object PdfReportGenerator {
                 .joinToString(", ") { (rat, n) ->
                     String.format(Locale.US, "%s %.0f %%", rat, 100.0 * n / rats.size)
                 }
+            // A declaration and a verified lock are different claims and must read differently.
+            // Only when every value recorded this session carries the verified marker may the
+            // report say the app itself confirmed it -- one unverified entry in the set means
+            // some part of the session was self-reported, and the cautious wording is the honest
+            // one for the whole thing.
+            val allVerified = summary.ratLocks.isNotEmpty() &&
+                summary.ratLocks.all { TechnologyLock.isVerifiedLabel(it) }
+            val provenance = if (allVerified) {
+                "Applied and confirmed by this app, over a direct modem interface rather than " +
+                    "the platform's own network-type API. "
+            } else {
+                "Set outside this app and recorded as declared; nothing here performs or " +
+                    "verifies it. "
+            }
             add(
                 "Technology lock declared" to
-                    "${summary.ratLocks.joinToString(", ")}. Set outside this app and recorded as " +
-                        "declared; nothing here performs or verifies it. " +
+                    "${summary.ratLocks.joinToString(", ")}. $provenance" +
                         if (rats.isEmpty()) {
                             "No radio technology was recorded in this session, so there is nothing " +
                                 "to compare the declaration against."

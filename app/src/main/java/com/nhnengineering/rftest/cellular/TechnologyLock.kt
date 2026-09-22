@@ -1,7 +1,5 @@
 package com.nhnengineering.rftest.cellular
 
-import android.telephony.TelephonyManager
-
 /**
  * Holding the radio on one access technology for the length of a measurement.
  *
@@ -9,9 +7,24 @@ import android.telephony.TelephonyManager
  *
  * A survey that lets the handset roam across technologies measures the handset's preferences as
  * much as it measures the site. Asking "what does LTE look like here" is only answerable if the
- * phone can be held on LTE while the question is asked. The same applies to the harder one this
- * project has been chasing: **does this site have usable n41 coverage at all**, which cannot be
- * answered by a phone that camps on n25 and never looks.
+ * phone can be held on LTE while the question is asked.
+ *
+ * ## Why this is QMI's bit space, not Android's
+ *
+ * `TelephonyManager.setAllowedNetworkTypesForReason` is accepted by the framework and then
+ * silently recomputed back to the handset default by a vendor layer (`OplusNetworkUtils`),
+ * confirmed directly on this handset. The mechanism that actually works sits underneath that
+ * layer: `QMI_NAS_SET_SYSTEM_SELECTION_PREFERENCE`'s Mode Preference TLV, driven by hand on
+ * 2026-09-22 and confirmed to move the radio in under five seconds.
+ *
+ * That TLV's bit layout is **not** `TelephonyManager`'s `NETWORK_TYPE_BITMASK_*` numbering --
+ * they are two unrelated encodings for the same idea. QMI's is 7 bits wide and was reconstructed
+ * from what was actually observed: `0x005F` is the handset's baseline allowance, and it matches
+ * the modem RAF the framework itself logged (`UMTS|EvDo|1xRTT|LTE|GSM|LTE_CA|NR`) once decomposed
+ * bit by bit. Writing an Android bitmask value into this TLV would set the wrong technologies
+ * entirely, so this class was rewritten in QMI's numbering rather than translated at a boundary --
+ * a translation table covering bits nobody has individually verified is exactly the kind of guess
+ * this project keeps finding and removing.
  *
  * ## What it can and cannot do
  *
@@ -22,44 +35,46 @@ import android.telephony.TelephonyManager
  * The one indirect lever worth knowing: NSA is not a technology of its own, it is NR anchored on
  * LTE. Removing LTE from the mask therefore removes NSA as a possibility, so a handset that keeps
  * NR service under [Technology.NR_ONLY] is necessarily on standalone NR. See [forcesStandalone].
+ * Forcing the opposite -- NSA specifically, never SA -- needs a second lever this class does not
+ * yet carry: the separate NR5G SA Band Preference TLV, zeroed so standalone NR has no band left
+ * to camp on. That is a real mechanism found in the QMI service definition, but as of 2026-09-22
+ * it is untried, so it is not offered as a [Technology] here.
  *
  * ## Why it cannot add capability
  *
- * The modem's effective allowance is the bitwise AND across every reason the framework tracks
- * (user preference, carrier config, power saving). Writing one reason can only ever narrow what
- * the radio may use. Asking for a technology the carrier config already excludes changes nothing,
- * which is why [TechnologyLockController.lock] reports what actually took effect rather than
- * what was requested.
+ * The modem's effective allowance is the bitwise AND across every reason it tracks internally.
+ * Writing one reason can only ever narrow what the radio may use. Asking for a technology the
+ * carrier config already excludes changes nothing, which is why
+ * [TechnologyLockController.lock] reports what actually took effect rather than what was
+ * requested.
  *
- * ## Why REASON_USER
+ * ## Why change duration is always "until power cycle"
  *
- * Of the two reasons this SDK exposes, `REASON_CARRIER` fights the carrier configuration and is
- * reset underneath the app whenever that config reloads. `REASON_USER` is the slot Settings' own
- * network-type picker writes. That choice has a deliberate safety property: a lock this app
- * somehow fails to release is visible and clearable by hand from Settings, on a phone that would
- * otherwise be sitting in a drawer with no service and no obvious cause.
+ * Every write this app makes uses that duration, never "permanent". That choice has a deliberate
+ * safety property: a lock this app somehow fails to release clears itself the moment the phone is
+ * rebooted -- or, confirmed on 2026-09-22, the moment Airplane Mode is toggled off and back on,
+ * which needs no computer and takes seconds.
  *
- * Requires `MODIFY_PHONE_STATE` (`signature|privileged`), so this is available only on a
- * privileged install. [TechnologyLockController.unavailableReason] is how callers find out,
- * and refusal is the normal case.
+ * Requires root: the write goes over a QRTR socket, which needs it regardless of the app's own
+ * privilege level. [TechnologyLockController.unavailableReason] is how callers find out, and
+ * refusal is the normal case on any handset that is not rooted for development.
  */
 object TechnologyLock {
 
-    /** LTE, including the carrier-aggregated variant the framework tracks separately. */
-    private const val LTE_ALL =
-        TelephonyManager.NETWORK_TYPE_BITMASK_LTE or TelephonyManager.NETWORK_TYPE_BITMASK_LTE_CA
+    // RAT bits within QMI's Mode Preference TLV (0x11), confirmed by direct observation: 0x005F
+    // read back as this handset's baseline, and 0x0010 alone moved the radio to LTE in under
+    // five seconds. QMI has one bit per RAT family -- unlike Android's bitmask, there is no
+    // separate "carrier aggregation" bit alongside LTE's.
+    private const val RAT_CDMA_1X = 0x0001
+    private const val RAT_HRPD = 0x0002
+    private const val RAT_GSM = 0x0004
+    private const val RAT_UMTS = 0x0008
+    const val RAT_LTE = 0x0010
+    private const val RAT_TD_SCDMA = 0x0020
+    const val RAT_NR = 0x0040
 
     /** Pre-LTE circuit and packet technologies, kept together as one fallback group. */
-    private const val LEGACY_ALL =
-        TelephonyManager.NETWORK_TYPE_BITMASK_GSM or
-            TelephonyManager.NETWORK_TYPE_BITMASK_GPRS or
-            TelephonyManager.NETWORK_TYPE_BITMASK_EDGE or
-            TelephonyManager.NETWORK_TYPE_BITMASK_UMTS or
-            TelephonyManager.NETWORK_TYPE_BITMASK_HSPA or
-            TelephonyManager.NETWORK_TYPE_BITMASK_HSDPA or
-            TelephonyManager.NETWORK_TYPE_BITMASK_HSUPA or
-            TelephonyManager.NETWORK_TYPE_BITMASK_HSPAP or
-            TelephonyManager.NETWORK_TYPE_BITMASK_TD_SCDMA
+    private const val LEGACY_ALL = RAT_CDMA_1X or RAT_HRPD or RAT_GSM or RAT_UMTS or RAT_TD_SCDMA
 
     /**
      * A technology the radio can be held on.
@@ -69,67 +84,63 @@ object TechnologyLock {
      */
     enum class Technology(
         val label: String,
-        val mask: Long,
+        val modePref: Int,
         val warning: String? = null,
     ) {
+        /**
+         * Named for what it does, not for the bit it sets: with no LTE bit present there is no
+         * anchor for NSA, so any NR service this handset gets under this mask is necessarily
+         * standalone. See [forcesStandalone].
+         */
         NR_ONLY(
-            "5G NR only",
-            TelephonyManager.NETWORK_TYPE_BITMASK_NR,
+            "5G SA only",
+            RAT_NR,
             "Removes the LTE anchor, so NSA is no longer possible. If this site has no " +
                 "standalone NR, the handset will lose data service until the lock is released.",
         ),
         LTE_ONLY(
             "LTE only",
-            LTE_ALL,
-            "5G will not be used, including as an aggregated carrier.",
-        ),
-        NR_AND_LTE(
-            "5G + LTE",
-            TelephonyManager.NETWORK_TYPE_BITMASK_NR or LTE_ALL,
-        ),
-        LTE_AND_LEGACY(
-            "LTE + 3G/2G",
-            LTE_ALL or LEGACY_ALL,
+            RAT_LTE,
+            "5G will not be used.",
         ),
         ;
 
         /** True where holding this technology necessarily means standalone NR. */
-        val forcesStandalone: Boolean get() = forcesStandalone(mask)
+        val forcesStandalone: Boolean get() = forcesStandalone(modePref)
     }
 
     /**
      * Whether a mask can only be satisfied by standalone NR.
      *
      * NSA carries NR traffic on an LTE anchor, so it needs both bits. NR present with LTE absent
-     * leaves SA as the only way to hold NR service -- which makes this the closest thing the
-     * platform offers to an SA/NSA test, without any band control at all.
+     * leaves SA as the only way to hold NR service -- the closest thing this mechanism offers to
+     * an SA/NSA test on its own, without touching the band-preference TLVs at all.
      */
-    fun forcesStandalone(mask: Long): Boolean =
-        mask and TelephonyManager.NETWORK_TYPE_BITMASK_NR != 0L && mask and LTE_ALL == 0L
+    fun forcesStandalone(modePref: Int): Boolean =
+        modePref and RAT_NR != 0 && modePref and RAT_LTE == 0
 
     /**
-     * What a modem allowance actually permits, given every reason in force.
+     * What the modem's allowance actually permits, given every value observed for it.
      *
-     * The framework ANDs the reasons together, so this is the arithmetic that decides whether a
-     * requested lock means anything. A request for NR against a carrier config that excludes NR
-     * yields zero, not NR.
+     * Kept for the same reason it existed for the framework mechanism: a single authoritative
+     * reading is still just one number, and this is the arithmetic for combining more than one
+     * where that is ever needed.
      */
-    fun effective(masks: List<Long>): Long =
-        if (masks.isEmpty()) 0L else masks.reduce { a, b -> a and b }
+    fun effective(masks: List<Int>): Int =
+        if (masks.isEmpty()) 0 else masks.reduce { a, b -> a and b }
 
     /**
      * Human-readable technologies in a mask, widest first.
      *
      * Deliberately not a bit dump: this goes in front of an engineer reading a report, where
-     * "5G NR, LTE" is checkable against what they saw and `0x8`&#8203;`1000` is not.
+     * "5G NR, LTE" is checkable against what they saw and `0x0`&#8203;`05F` is not.
      */
-    fun describeMask(mask: Long): String {
-        if (mask == 0L) return "none"
+    fun describeMask(modePref: Int): String {
+        if (modePref == 0) return "none"
         val parts = buildList {
-            if (mask and TelephonyManager.NETWORK_TYPE_BITMASK_NR != 0L) add("5G NR")
-            if (mask and LTE_ALL != 0L) add("LTE")
-            if (mask and LEGACY_ALL != 0L) add("3G/2G")
-            if (mask and TelephonyManager.NETWORK_TYPE_BITMASK_IWLAN != 0L) add("IWLAN")
+            if (modePref and RAT_NR != 0) add("5G NR")
+            if (modePref and RAT_LTE != 0) add("LTE")
+            if (modePref and LEGACY_ALL != 0) add("3G/2G")
         }
         return if (parts.isEmpty()) "other" else parts.joinToString(", ")
     }
@@ -140,7 +151,7 @@ object TechnologyLock {
      * Returns the technologies that would actually be available. An empty result is the case
      * worth catching before applying anything: the lock would leave the radio with nothing.
      */
-    fun previewLock(requested: Long, otherReasons: List<Long>): Long =
+    fun previewLock(requested: Int, otherReasons: List<Int>): Int =
         effective(listOf(requested) + otherReasons)
 
     /**
@@ -148,35 +159,37 @@ object TechnologyLock {
      *
      * ## Why a write is not evidence
      *
-     * `setAllowedNetworkTypesForReason` returning without throwing means the framework accepted
-     * the value, not that the radio is holding it. Measured on the OnePlus 9 (OOS 14,
-     * 2026-09-21): the requested mask is applied and then recomputed straight back to the
-     * handset default a moment later, by a vendor layer that derives the allowance from its own
-     * preferred-network store rather than from the framework value:
-     *
-     * ```
-     * calculatePreferredNetworkType: networkType = 840583      <- what was asked for
-     * OplusNetworkUtils: getOplusUserPreferredNetworkFromDb: nwMode = -1
-     * OplusNetworkUtils: getNewPreferredNetworkMode, defaultNwMode = 33 newMode = 33
-     * calculatePreferredNetworkType: networkType = 916479      <- back to everything
-     * ```
-     *
-     * Nothing throws. An implementation that trusted the call would report "holding LTE only"
-     * over a handset sitting on 5G NR, and every reading taken under that claim would be
-     * mislabelled. This project has shipped that exact shape of defect once already, in the
-     * rate-limit backoff, where the displayed text was right and the machine-readable half was
-     * silently absent. So the lock is confirmed by observation or it is not claimed.
+     * A `SUCCESS` result TLV means the modem accepted the value, not that the radio is holding
+     * it. This project shipped that exact shape of defect once already for the framework
+     * mechanism -- accepted, then silently reverted -- and separately in the rate-limit backoff,
+     * where the displayed text was right and the machine-readable half was silently absent. QMI
+     * has been reliable in every test run against it so far, but "reliable so far" is not
+     * "verified", and the cost of checking is a few lines already written. So the lock is
+     * confirmed by observation or it is not claimed.
      *
      * ## The test
      *
      * A lock holds when the radio is left with something, and with nothing outside what was
-     * asked for. Narrower than requested is fine and expected -- the carrier's own reason is
-     * ANDed in. Anything *wider* means the request did not survive.
-     *
-     * The revert is not instant, so this must be read a few seconds after the write rather than
-     * immediately; an immediate read sees the accepted value and reports a lock that is about to
-     * evaporate.
+     * asked for. Narrower than requested is fine and expected -- the carrier's own configuration
+     * is ANDed in. Anything *wider* means the request did not survive.
      */
-    fun lockHeld(requested: Long, observed: Long): Boolean =
-        observed != 0L && observed and requested.inv() == 0L
+    fun lockHeld(requested: Int, observed: Int): Boolean =
+        observed != 0 && observed and requested.inv() == 0
+
+    /**
+     * The one-word difference between an operator's self-report and this app's own claim.
+     *
+     * The band-lock field beside this control is a declaration: "the operator says they did
+     * this," unverifiable and recorded as such. A technology lock through [TechnologyLockController]
+     * is not that -- it is applied and confirmed by observation before this label is ever
+     * written. The report needs to tell the two apart without a schema change, so the recorded
+     * string carries the distinction itself.
+     */
+    private const val VERIFIED_SUFFIX = " (locked and verified by this app)"
+
+    /** The string [TechnologyLockController] records once [Technology] is confirmed held. */
+    fun verifiedLabel(technology: Technology): String = technology.label + VERIFIED_SUFFIX
+
+    /** Whether a recorded technology-lock declaration was this app's own verified claim. */
+    fun isVerifiedLabel(declared: String): Boolean = declared.endsWith(VERIFIED_SUFFIX)
 }

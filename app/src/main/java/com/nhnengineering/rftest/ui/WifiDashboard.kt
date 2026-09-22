@@ -35,6 +35,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.nhnengineering.rftest.cellular.CellularCollector
+import com.nhnengineering.rftest.cellular.TechnologyLock
+import com.nhnengineering.rftest.cellular.TechnologyLockController
 import com.nhnengineering.rftest.location.LocationCollector
 import com.nhnengineering.rftest.model.CellularSample
 import com.nhnengineering.rftest.model.VerdictStabiliser
@@ -49,8 +51,10 @@ import com.nhnengineering.rftest.service.RecordingState
 import com.nhnengineering.rftest.speedtest.SpeedTestConfig
 import com.nhnengineering.rftest.speedtest.SpeedTester
 import com.nhnengineering.rftest.wifi.WifiCollector
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Ten seconds at the sampling interval — long enough to average out jitter, short enough to
  *  stand still for. */
@@ -104,9 +108,51 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val collector = remember { WifiCollector(context) }
     val locations = remember { LocationCollector(context) }
     val cellular = remember { CellularCollector(context) }
+    val techLock = remember { TechnologyLockController(context) }
     var localWifi by remember { mutableStateOf<WifiSample?>(null) }
     var localFix by remember { mutableStateOf<GeoPoint?>(null) }
     var localCell by remember { mutableStateOf<CellularSample?>(null) }
+
+    // Checked once per visit to this screen, off the composition thread: the check shells out
+    // (qrtr-lookup, then the helper), and calling that from a bare `remember {}` initializer --
+    // an earlier draft of this did exactly that -- would block first composition on a subprocess.
+    // techLockChecking is a real third state, not a loading gloss on top of the other two:
+    // showing "unavailable" before the check has actually run would be its own wrong answer.
+    var techLockChecking by remember { mutableStateOf(true) }
+    var techLockUnavailableReason by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        techLockUnavailableReason = withContext(Dispatchers.IO) { techLock.unavailableReason }
+        techLockChecking = false
+    }
+    var techLockBusy by remember { mutableStateOf(false) }
+    var techLockStatus by remember { mutableStateOf<String?>(null) }
+    val onTechnologyLock: (TechnologyLock.Technology?) -> Unit = { tech ->
+        techLockBusy = true
+        techLockStatus = null
+        scope.launch {
+            if (tech == null) {
+                val outcome = withContext(Dispatchers.IO) { techLock.release() }
+                techLockStatus = outcome.message
+                if (outcome.applied) RecordingState.ratLock.value = null
+            } else {
+                val requested = withContext(Dispatchers.IO) { techLock.lock(tech) }
+                techLockStatus = requested.message
+                if (requested.applied) {
+                    // The framework mechanism this replaced reverted within about a second; QMI
+                    // has not shown that in testing, but the wait and the read afterwards are the
+                    // only reason that claim can be trusted rather than assumed.
+                    delay(4_000)
+                    val verified = withContext(Dispatchers.IO) { techLock.verify() }
+                    techLockStatus = verified.message
+                    RecordingState.ratLock.value =
+                        if (verified.applied) TechnologyLock.verifiedLabel(tech) else null
+                }
+                // If the request itself failed, nothing changed on the modem, so ratLock is left
+                // exactly as it was rather than being overwritten with a guess either way.
+            }
+            techLockBusy = false
+        }
+    }
 
     var sessionName by remember { mutableStateOf("") }
 
@@ -316,7 +362,12 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 bandLock = bandLock,
                 onBandLock = { RecordingState.bandLock.value = it },
                 ratLock = ratLock,
-                onRatLock = { RecordingState.ratLock.value = it },
+                techLockChecking = techLockChecking,
+                techLockUnavailableReason = techLockUnavailableReason,
+                techLockPendingRestore = techLock.pendingRestore,
+                techLockBusy = techLockBusy,
+                techLockStatus = techLockStatus,
+                onTechnologyLock = onTechnologyLock,
                 walkThroughput = walkThroughput,
                 onWalkThroughputChange = { RecordingState.walkThroughputEnabled.value = it },
                 liveView = liveView,

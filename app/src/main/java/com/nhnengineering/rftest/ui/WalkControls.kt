@@ -143,10 +143,15 @@ fun RecordButton(recording: Boolean, onStart: () -> Unit, onStop: () -> Unit) {
 /**
  * Records that the handset has been band-locked elsewhere.
  *
- * Deliberately worded as a declaration. This app does not lock anything and cannot verify a lock --
- * that needs vendor or privileged access no ordinary application holds -- so the control asks what
- * the operator did, and the report says so in those terms and cross-checks it against the bands the
- * walk actually saw.
+ * Deliberately worded as a declaration. This app does not lock a band and cannot verify one --
+ * that lives in modem NV and is reachable only through vendor diagnostic channels -- so the
+ * control asks what the operator did, and the report says so in those terms and cross-checks it
+ * against the bands the walk actually saw.
+ *
+ * Technology is different: as of 2026-09-22 the app genuinely can lock and verify that, over a
+ * direct modem interface, so it has its own real control, [TechnologyLockControl], rather than a
+ * second declaration field beside this one. `ratLock` is still shown here because it is still
+ * worth reading alongside the band, whichever mechanism produced it.
  *
  * It sits in setup rather than the walk controls because it is set once, standing still, alongside
  * the site name.
@@ -156,10 +161,8 @@ fun BandLockEntry(
     current: String?,
     onBandLock: (String?) -> Unit,
     ratLock: String?,
-    onRatLock: (String?) -> Unit,
 ) {
     var text by remember(current) { mutableStateOf(current.orEmpty()) }
-    var ratText by remember(ratLock) { mutableStateOf(ratLock.orEmpty()) }
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
@@ -176,20 +179,6 @@ fun BandLockEntry(
             )
             Button(onClick = { onBandLock(text.trim().ifBlank { null }) }) { Text("Set") }
         }
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = ratText,
-                onValueChange = { ratText = it },
-                label = { Text("Technology locked to (blank = not locked)") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            Button(onClick = { onRatLock(ratText.trim().ifBlank { null }) }) { Text("Set") }
-        }
         Text(
             text = listOfNotNull(
                 current?.let { "Band: $it" },
@@ -197,9 +186,117 @@ fun BandLockEntry(
             ).ifEmpty { null }?.joinToString("  ·  ")?.let {
                 "$it. Statistics will describe what the handset was restricted to, not the " +
                     "service a subscriber would get."
-            } ?: "Free-running. Set these only after restricting the modem in the handset's RF " +
-                "toolkit or RadioInfo screen — this app records what you did, it does not do it.",
+            } ?: "Free-running. Set the band only after restricting the modem in the handset RF " +
+                "toolkit or RadioInfo screen — this app records what was done there, it does not " +
+                "do it. Technology has its own control below, which this app performs itself.",
             style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+/**
+ * Holds the radio on one technology via
+ * [com.nhnengineering.rftest.cellular.TechnologyLockController], or clears the hold.
+ *
+ * Unlike [BandLockEntry] beside it, this genuinely performs and verifies the lock over a direct
+ * modem interface, rather than only recording what the operator says was done in Settings. See
+ * `TechnologyLockController` for the mechanism and `TechnologyLock` for why the four names an
+ * engineer might expect (5G SA only / 5G NSA only / LTE only / Automatic) are, for now, three:
+ * NSA-only needs a second, still-unverified QMI write and is deliberately withheld until it has
+ * been watched working.
+ *
+ * Root-only, like every other modem-level feature in this app, so [unavailableReason] hides the
+ * whole control on a handset that is privileged-installed but not rooted rather than showing a
+ * button that would silently do nothing.
+ */
+@Composable
+fun TechnologyLockControl(
+    checking: Boolean,
+    unavailableReason: String?,
+    pendingRestore: Boolean,
+    activeLabel: String?,
+    busy: Boolean,
+    status: String?,
+    onSelect: (com.nhnengineering.rftest.cellular.TechnologyLock.Technology?) -> Unit,
+) {
+    // A real third state, not a loading gloss on the other two: showing "unavailable" before the
+    // check has actually run, even for a moment, would be its own wrong answer on a rooted phone.
+    if (checking) {
+        Text(
+            "Technology lock: checking availability…",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    if (unavailableReason != null) {
+        Text(
+            "Technology lock: unavailable. $unavailableReason",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Technology lock", style = MaterialTheme.typography.titleSmall)
+
+        // pendingRestore is true for the whole time any lock is held, including one this very
+        // session just applied -- activeLabel already says that plainly through the selected
+        // button. The warning earns its place only when the two disagree: a persisted baseline
+        // exists but nothing in this session's own state explains it, which is what "the app was
+        // killed while a lock was active" actually looks like on the next launch.
+        if (pendingRestore && activeLabel == null) {
+            Text(
+                "A lock from an earlier session may still be in force, and this launch has no " +
+                    "record of what it was. Tap Automatic to clear it, or restart the phone.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
+        val options = listOf(
+            "5G SA only" to com.nhnengineering.rftest.cellular.TechnologyLock.Technology.NR_ONLY,
+            "LTE only" to com.nhnengineering.rftest.cellular.TechnologyLock.Technology.LTE_ONLY,
+            "Automatic" to null,
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            options.forEach { (label, tech) ->
+                // activeLabel carries the verified string TechnologyLockController records
+                // (label plus a suffix marking it confirmed, not the bare button text), so the
+                // match has to go through the same helper that produced it.
+                val isCurrent = if (tech == null) {
+                    activeLabel == null
+                } else {
+                    activeLabel == com.nhnengineering.rftest.cellular.TechnologyLock.verifiedLabel(tech)
+                }
+                if (isCurrent) {
+                    FilledTonalButton(
+                        onClick = {},
+                        enabled = false,
+                        modifier = Modifier.weight(1f),
+                    ) { Text(label) }
+                } else {
+                    OutlinedButton(
+                        onClick = { onSelect(tech) },
+                        enabled = !busy,
+                        modifier = Modifier.weight(1f),
+                    ) { Text(label) }
+                }
+            }
+        }
+
+        status?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall)
+        }
+
+        Text(
+            "Clears itself on Airplane Mode or a restart, even if this app is closed or killed.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

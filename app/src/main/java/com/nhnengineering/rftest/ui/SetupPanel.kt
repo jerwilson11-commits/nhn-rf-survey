@@ -51,7 +51,12 @@ fun SetupPanel(
     bandLock: String?,
     onBandLock: (String?) -> Unit,
     ratLock: String?,
-    onRatLock: (String?) -> Unit,
+    techLockChecking: Boolean,
+    techLockUnavailableReason: String?,
+    techLockPendingRestore: Boolean,
+    techLockBusy: Boolean,
+    techLockStatus: String?,
+    onTechnologyLock: (com.nhnengineering.rftest.cellular.TechnologyLock.Technology?) -> Unit,
     walkThroughput: Boolean,
     onWalkThroughputChange: (Boolean) -> Unit,
     liveView: Boolean,
@@ -119,7 +124,15 @@ fun SetupPanel(
                 current = bandLock,
                 onBandLock = onBandLock,
                 ratLock = ratLock,
-                onRatLock = onRatLock,
+            )
+            TechnologyLockControl(
+                checking = techLockChecking,
+                unavailableReason = techLockUnavailableReason,
+                pendingRestore = techLockPendingRestore,
+                activeLabel = ratLock,
+                busy = techLockBusy,
+                status = techLockStatus,
+                onSelect = onTechnologyLock,
             )
 
             HorizontalDivider()
