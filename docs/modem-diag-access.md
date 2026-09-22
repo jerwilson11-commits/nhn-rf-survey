@@ -125,18 +125,98 @@ RSRQ −11.0 dB, RSRP −86.0 dBm and SNR 10.5 dB. The last of those changed bet
 runs (105 then 100), which is what a live measurement does. These three are the least certain part
 of the decode and should be confirmed against libqmi's field order before anything reports them.
 
-### What this does not yet give
+## Technology lock over QMI: works, in three seconds
 
-**No neighbour TLVs were present in this response.** The handset was camped on NR SA with a single
-serving cell, and only serving-cell TLVs came back. Whether neighbours appear in this message under
-other conditions — on LTE, or on NR with measurable neighbours — is the next thing to establish,
-and it is the open question for the neighbour feature. The classic LTE neighbour TLVs (0x13
-intra-frequency, 0x14 inter-frequency) are simply absent here because the radio is not on LTE.
+`QMI_NAS_SET_SYSTEM_SELECTION_PREFERENCE` (0x0033) with the RAT mode preference TLV does what the
+framework API could not. The radio moved from NR SA to LTE on the first poll:
 
-Band and technology lock are also untried: they need `QMI_NAS_SET_SYSTEM_SELECTION_PREFERENCE`
-(0x0033) with encoded request TLVs, where this probe so far only sends empty requests. That is a
-write to modem state and deserves the same care as the technology lock already in the app —
-applied, then verified by observation, never assumed from a SUCCESS result.
+```
+sending 16 bytes: 00 01 00 33 00 09 00 11 02 00 10 00 17 01 00 00
+  TLV 0x02 result: SUCCESS
+  t+3s  getRilDataRadioTechnology=14(LTE)
+```
+
+- **TLV 0x11** — RAT mode preference, u16 bitmask. Read back as `0x005F` on this handset, which
+  decodes as CDMA-1x | HRPD | GSM | UMTS | LTE | NR with TD-SCDMA absent, and matches the modem RAF
+  logged by the framework (`modemRafBitMask` → `UMTS|EvDo|1xRTT|LTE|GSM|LTE_CA|NR`) — an
+  independent confirmation of the bit assignment. Bits: 1<<0 CDMA-1x, 1<<1 HRPD, 1<<2 GSM,
+  1<<3 UMTS, 1<<4 LTE, 1<<5 TD-SCDMA, 1<<6 NR. LTE only is `0x0010`.
+- **TLV 0x17** — change duration, u8. `00` = until power cycle, `01` = permanent. Always write
+  `00` from a tool: it makes a reboot the backstop for anything that goes wrong.
+
+Contrast with the framework path, which is accepted and then recomputed away by `OplusNetworkUtils`
+within a second. QMI sits under that layer, so the vendor framework does not get a vote. Restoring
+`0x005F` afterwards put the handset straight back onto NR SA n25.
+
+This is the technology lock the app wants. It also means `TechnologyLockController.verify()` stays
+exactly as valuable: on this handset the framework route silently fails, and only observation
+distinguishes the two.
+
+## Neighbour cells: confirmed, on LTE
+
+With the radio held on LTE, `GET_CELL_LOCATION_INFO` returns the neighbour TLVs that never appear
+on NR SA. Three samples, four seconds apart:
+
+| | EARFCN | PCI | RSRP | RSRQ | RSSI |
+|---|---|---|---|---|---|
+| serving (TLV 0x13) | 1300 | 114 | −89.8 dBm | −9.7 dB | −65.0 dBm |
+| neighbour (TLV 0x14) | 1000 | 288 | −92.5 dBm | −14.0 dB | −69.0 dBm |
+| neighbour (TLV 0x14) | 1000 | 368 | −102.1 dBm | −18.0 dB | −73.7 dBm |
+
+PCI 288 is the cell previously observed by hand on LTE B2 in this project, which corroborates the
+decode from outside the tool.
+
+### TLV layouts, and how far to trust them
+
+Both structures consume **exactly** their declared length, which is the check that makes a
+byte-offset decode credible rather than merely plausible.
+
+`TLV 0x13`, LTE intra-frequency — 19 fixed bytes then a cell array:
+
+```
+u8  ue_in_idle
+u8[3] plmn (BCD, nibble-swapped: 13 00 62 -> 310-260)
+u16 tracking_area_code
+u32 global_cell_id
+u16 earfcn
+u16 serving_cell_id
+u8  cell_reselection_priority, s_non_intra_search, serving_cell_low_threshold, s_intra_search
+u8  cell_count
+  per cell (10 bytes): u16 pci, s16 rsrq, s16 rsrp, s16 rssi, s16 cell_selection_rx_level
+```
+
+`TLV 0x14`, LTE inter-frequency — a frequency array, each with its own cell array:
+
+```
+u8  ue_in_idle
+u8  frequency_count
+  per frequency: u16 earfcn, u8 priority, u8 high_threshold, u8 low_threshold, u8 cell_count
+    per cell (10 bytes): same shape as above
+```
+
+All signal values are 0.1-unit scaled integers.
+
+**Open: the serving EARFCN.** 1000 and 2300 map to Bands 2 and 4, which are T-Mobile's. The serving
+cell's 1300 maps to Band 3, which this operator does not use in the US. Either the field is
+something other than a plain EARFCN or the mapping needs care, so nothing should report a *band*
+derived from it until that is resolved. The neighbour EARFCNs are not in doubt.
+
+## Band lock: the mechanism is located, not yet exercised
+
+The `GET_SYSTEM_SELECTION_PREFERENCE` (0x0034) response carries band preference masks, which is
+what band lock would write:
+
+- **TLV 0x15**, 8 bytes — LTE band preference (64-bit mask).
+- **TLV 0x23**, 32 bytes — extended LTE band preference.
+- **TLV 0x2c / 0x2d**, 64 bytes each — NR5G band preference (512-bit masks, bit N = band n(N+1)).
+
+Decoding TLV 0x2c on this handset gives n1, n2, n3, n5, n7, n20, n25, n28, **n41**, n48, n66, n71,
+n77, n78. So the modem's own band preference already permits n41; whatever keeps this handset on
+n25 is not this mask.
+
+Writing these has not been attempted. It is the same message and the same safety rule applies:
+change duration `00`, record the baseline first, restore afterwards, and verify by observation
+rather than trusting a SUCCESS result.
 
 ## Ground rules
 

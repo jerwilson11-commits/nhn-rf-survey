@@ -10,8 +10,8 @@
  * and the MHI pipe that looked like DIAG belongs to the WCN6855 Wi-Fi chip.
  *
  * AF_QIPCRTR is not reachable from the Java/Kotlin socket API, so proving the
- * path needs a small native binary. This is that binary, and nothing more: it
- * sends one request and prints what comes back.
+ * path needs a small native binary. This is that binary: it sends one request,
+ * optionally carrying TLVs, and prints what comes back.
  *
  * Wire format
  * -----------
@@ -25,12 +25,21 @@
  *
  * then a sequence of TLVs: u8 id, u16 len, <len> bytes.
  *
- * TLV meanings are deliberately NOT guessed at here beyond the standard result
- * TLV (0x02). Everything else is dumped as hex to be cross-referenced against
- * libqmi, because a plausible-looking wrong decode is worse than raw bytes.
+ * Response TLV meanings are deliberately NOT guessed at beyond the standard
+ * result TLV (0x02). Everything else is dumped as hex to be cross-referenced
+ * against libqmi, because a plausible-looking wrong decode is worse than raw
+ * bytes -- this project has already lost a day to a confident wrong reading.
  *
- * usage: qmi_probe [node] [port] [msg_id_hex]
- *        defaults to the Network Access Service as qrtr-lookup reports it.
+ * usage: qmi_probe <node> <port> <msg_id_hex> [id:hexbytes ...]
+ *
+ *   read  the current selection preference:
+ *     qmi_probe 0 86 0034
+ *   hold the radio on LTE until the next power cycle:
+ *     qmi_probe 0 86 0033 11:1000 17:00
+ *
+ * TLV 0x17 is the change duration: 00 = until power cycle, 01 = permanent.
+ * Sending 00 means a reboot undoes whatever this did, which is the only reason
+ * writing modem state from a throwaway tool is a reasonable thing to do.
  */
 
 #include <errno.h>
@@ -76,13 +85,77 @@ static void hexdump(const uint8_t *p, size_t n, const char *indent)
     }
 }
 
+static int hexval(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Parse "11:1000" into a TLV appended to buf. Returns bytes written, or -1. */
+static int add_tlv(uint8_t *buf, size_t cap, const char *spec)
+{
+    const char *colon = strchr(spec, ':');
+    if (!colon) {
+        printf("bad TLV %s: expected id:hexbytes\n", spec);
+        return -1;
+    }
+    long id = strtol(spec, NULL, 16);
+    if (id < 0 || id > 0xFF) {
+        printf("bad TLV id in %s\n", spec);
+        return -1;
+    }
+    const char *hex = colon + 1;
+    size_t hexlen = strlen(hex);
+    if (hexlen % 2) {
+        printf("bad TLV %s: odd number of hex digits\n", spec);
+        return -1;
+    }
+    size_t vlen = hexlen / 2;
+    if (3 + vlen > cap) {
+        printf("TLV %s does not fit\n", spec);
+        return -1;
+    }
+    buf[0] = (uint8_t)id;
+    uint16_t l = (uint16_t)vlen;
+    memcpy(buf + 1, &l, 2);
+    for (size_t i = 0; i < vlen; i++) {
+        int hi = hexval(hex[i * 2]), lo = hexval(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) {
+            printf("bad hex in %s\n", spec);
+            return -1;
+        }
+        buf[3 + i] = (uint8_t)((hi << 4) | lo);
+    }
+    return (int)(3 + vlen);
+}
+
 int main(int argc, char **argv)
 {
-    uint32_t node = argc > 1 ? (uint32_t)strtoul(argv[1], NULL, 0) : 0;
-    uint32_t port = argc > 2 ? (uint32_t)strtoul(argv[2], NULL, 0) : 86;
-    uint16_t msg_id = argc > 3 ? (uint16_t)strtoul(argv[3], NULL, 16) : 0x0043;
+    if (argc < 4) {
+        printf("usage: %s <node> <port> <msg_id_hex> [id:hexbytes ...]\n", argv[0]);
+        return 1;
+    }
+    uint32_t node = (uint32_t)strtoul(argv[1], NULL, 0);
+    uint32_t port = (uint32_t)strtoul(argv[2], NULL, 0);
+    uint16_t msg_id = (uint16_t)strtoul(argv[3], NULL, 16);
 
-    printf("target: node %u port %u, msg_id 0x%04x\n", node, port, msg_id);
+    uint8_t req[4096];
+    size_t off = sizeof(struct qmi_hdr);
+    for (int i = 4; i < argc; i++) {
+        int n = add_tlv(req + off, sizeof(req) - off, argv[i]);
+        if (n < 0) return 1;
+        off += (size_t)n;
+    }
+    size_t tlv_bytes = off - sizeof(struct qmi_hdr);
+
+    struct qmi_hdr h = { .type = 0x00, .txn = 1, .msg_id = msg_id,
+                         .len = (uint16_t)tlv_bytes };
+    memcpy(req, &h, sizeof(h));
+
+    printf("target: node %u port %u, msg_id 0x%04x, %zu TLV byte(s)\n",
+           node, port, tlv_bytes);
 
     int sock = socket(AF_QIPCRTR, SOCK_DGRAM, 0);
     if (sock < 0) {
@@ -90,7 +163,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Bind with port 0 so the kernel assigns us one; our node comes back from
+    /* Bind with port 0 so the kernel assigns one; our node comes from
      * getsockname. This is the sequence the qrtr userspace tools use. */
     struct sockaddr_qrtr me;
     socklen_t melen = sizeof(me);
@@ -112,23 +185,17 @@ int main(int argc, char **argv)
     struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    uint8_t req[sizeof(struct qmi_hdr)];
-    struct qmi_hdr h = { .type = 0x00, .txn = 1, .msg_id = msg_id, .len = 0 };
-    memcpy(req, &h, sizeof(h));
-
     struct sockaddr_qrtr dst;
     memset(&dst, 0, sizeof(dst));
     dst.sq_family = AF_QIPCRTR;
     dst.sq_node = node;
     dst.sq_port = port;
 
-    printf("sending %zu bytes: ", sizeof(req));
-    for (size_t i = 0; i < sizeof(req); i++) printf("%02x ", req[i]);
+    printf("sending %zu bytes: ", off);
+    for (size_t i = 0; i < off && i < 64; i++) printf("%02x ", req[i]);
     printf("\n");
 
-    ssize_t sent = sendto(sock, req, sizeof(req), 0,
-                          (struct sockaddr *)&dst, sizeof(dst));
-    if (sent < 0) {
+    if (sendto(sock, req, off, 0, (struct sockaddr *)&dst, sizeof(dst)) < 0) {
         printf("sendto: %s\n", strerror(errno));
         return 1;
     }
@@ -159,32 +226,34 @@ int main(int argc, char **argv)
     printf("QMI header: type=0x%02x (%s) txn=%u msg_id=0x%04x len=%u\n",
            r.type, kind, r.txn, r.msg_id, r.len);
 
-    size_t off = sizeof(r);
+    int rc = 0;
+    size_t p = sizeof(r);
     int tlvs = 0;
-    while (off + 3 <= (size_t)n) {
-        uint8_t tid = buf[off];
+    while (p + 3 <= (size_t)n) {
+        uint8_t tid = buf[p];
         uint16_t tlen;
-        memcpy(&tlen, buf + off + 1, 2);
-        off += 3;
-        if (off + tlen > (size_t)n) {
+        memcpy(&tlen, buf + p + 1, 2);
+        p += 3;
+        if (p + tlen > (size_t)n) {
             printf("  TLV 0x%02x claims %u bytes but only %zu remain - truncated\n",
-                   tid, tlen, (size_t)n - off);
+                   tid, tlen, (size_t)n - p);
             break;
         }
         tlvs++;
         if (tid == 0x02 && tlen >= 4) {
             uint16_t result, error;
-            memcpy(&result, buf + off, 2);
-            memcpy(&error, buf + off + 2, 2);
+            memcpy(&result, buf + p, 2);
+            memcpy(&error, buf + p + 2, 2);
             printf("  TLV 0x02 result: %s (result=%u error=%u)\n",
                    result == 0 ? "SUCCESS" : "FAILURE", result, error);
+            if (result != 0) rc = 4;
         } else {
             printf("  TLV 0x%02x, %u bytes:\n", tid, tlen);
-            hexdump(buf + off, tlen, "      ");
+            hexdump(buf + p, tlen, "      ");
         }
-        off += tlen;
+        p += tlen;
     }
     printf("%d TLV(s)\n", tlvs);
     close(sock);
-    return 0;
+    return rc;
 }
