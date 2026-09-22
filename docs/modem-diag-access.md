@@ -259,3 +259,58 @@ printing "No neighbour cells are present here… that is a measurement" for a si
 all, and a read that decoded nothing about the current RAT does not count as availability. Decoding
 the NR neighbour TLVs is the obvious next step; until then the app says so rather than implying a
 measurement.
+
+## NR neighbours: where they are not, and where they must be
+
+Established 2026-09-22, after the LTE neighbour work landed.
+
+### QMI NAS does not carry them
+
+On 5G NR SA, `GET_CELL_LOCATION_INFO` (0x0043) returns four TLVs and no cell list of any kind:
+
+```
+TLV 0x02  result SUCCESS
+TLV 0x2e  4 bytes   NR ARFCN
+TLV 0x2f  22 bytes  NR serving cell (NCI, PCI, TAC, signal)
+TLV 0x32  6 bytes   "310260"
+```
+
+Two other read-only NAS messages were checked and carry no cell arrays either: `GET_SYS_INFO`
+(0x004D) returns 23 small fixed-size system-info TLVs, and `GET_SIG_INFO` (0x004F) returns serving
+signal only. So there are no "NR neighbour TLVs" waiting to be decoded — the service does not
+expose them on this modem, and no amount of parser work changes that.
+
+### DIAG command/response does work
+
+Service 4097 `MODEM:CMD` at node 0 port 34 answers. Framing over QRTR is
+`7E 01 <len:u16le> <payload> 7E`, and the modem accepted a bare command and an HDLC-framed one
+identically:
+
+```
+req 00  ->  "Mar 18 2025" "03:17:46" "Jul 25 2024" "11:00:00" "lahaina"
+req 7c  ->  "MPSS.HI.4.3.c4-00234-LC_ALL_PACK-1.27136.146"
+```
+
+`lahaina` is Qualcomm's codename for the SM8350, so this is unambiguously the right processor —
+the check the MHI mistake earlier in this document did not get.
+
+### But log configuration is refused on that port
+
+`DIAG_LOG_CONFIG_F` (0x73) with the retrieve-ranges operation comes back as
+`13 73 00 00 00 01 00 00 00`: error code `0x13` followed by a verbatim echo of the request. A
+control confirms the shape — an invalid command `fe` returns `13 fe`, while successful responses
+echo the command code instead (`00…`, `7c…`). So 0x13 is bad-command and log masks cannot be set
+here.
+
+Port 38, `MODEM:DCI_CMD`, does not answer raw commands at all.
+
+### What that means
+
+Log packets are the only route to NR neighbour measurements, and reaching them needs the **DCI**
+(Diag Client Interface) path: a registration handshake on port 38, then log-mask configuration,
+then a stream of log packets to decode. That is a protocol, not a command, and it is the next
+substantial piece of work — materially bigger than the QMI client, which was one request and a
+parser.
+
+Until it exists the app is correct to report that it cannot see NR neighbours, and
+`QmiCellParser.Result.lteInfoPresent` is what keeps that honest.
