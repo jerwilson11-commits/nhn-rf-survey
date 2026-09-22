@@ -227,11 +227,144 @@ class Sib1ParserTest {
         assertTrue(r.conflicts.isEmpty())
     }
 
+    // ---- two-pattern configurations ---------------------------------------
+    //
+    // The shape this parser most needs to get right, and the one it used to refuse outright. A
+    // mid-band TDD carrier commonly runs two patterns back to back -- on n41, 2.5 ms of DDDSU
+    // followed by 2.5 ms of DDSUU, repeating every 5 ms. Read as a single pattern, each of the
+    // five slot identifiers appears twice with different values, which the conflict rule
+    // correctly refuses to guess at. The result was a parse that filled in nothing at all, on
+    // exactly the carriers whose slot pattern is least guessable from the outside.
+
+    /** pattern1 DDDSU then pattern2 DDSUU: the classic 5 ms n41 arrangement. */
+    private val n41TwoPattern = """
+        systemInformationBlockType1
+          servingCellConfigCommon
+            freqBandIndicatorNR 41
+            scs-SpecificCarrierList
+              subcarrierSpacing kHz30
+              carrierBandwidth 273
+            tdd-UL-DL-ConfigurationCommon
+              referenceSubcarrierSpacing kHz30
+              pattern1
+                dl-UL-TransmissionPeriodicity ms2p5
+                nrofDownlinkSlots 3
+                nrofDownlinkSymbols 10
+                nrofUplinkSlots 1
+                nrofUplinkSymbols 2
+              pattern2
+                dl-UL-TransmissionPeriodicity ms2p5
+                nrofDownlinkSlots 2
+                nrofDownlinkSymbols 4
+                nrofUplinkSlots 2
+                nrofUplinkSymbols 4
+    """.trimIndent()
+
     @Test
-    fun `pattern2 is flagged rather than quietly ignored`() {
-        val text = n41Tdd + "\n      pattern2\n        dl-UL-TransmissionPeriodicity ms2p5"
-        val r = Sib1Parser.parse(text)
-        assertTrue(r.notes.any { it.contains("pattern2 is present") })
+    fun `both patterns are read and rendered as one cycle`() {
+        val r = Sib1Parser.parse(n41TwoPattern)
+
+        assertTrue(r.hasPattern2)
+        assertEquals("DDDSUDDSUU", r.derivedPattern)
+    }
+
+    @Test
+    fun `the same identifier in two patterns is not a disagreement`() {
+        // The regression this change exists for. Before the patterns were scoped, these five
+        // names each appeared twice with different values, so every one was reported as a
+        // conflict and none was filled in.
+        val r = Sib1Parser.parse(n41TwoPattern)
+
+        assertEquals("Two patterns is not a disagreement: " + r.conflicts, 0, r.conflicts.size)
+        assertEquals(3, r.dlSlots)
+        assertEquals(1, r.ulSlots)
+        assertEquals(2, r.p2DlSlots)
+        assertEquals(2, r.p2UlSlots)
+        assertEquals(4, r.p2DlSymbols)
+        assertEquals(4, r.p2UlSymbols)
+    }
+
+    @Test
+    fun `the period reported is the one the slot string actually repeats on`() {
+        // A ten-slot string beside "2.5 ms" describes half a cycle in a field that reads as the
+        // whole of it. Both are kept, and which is which is not left for the reader to infer.
+        val r = Sib1Parser.parse(n41TwoPattern)
+
+        assertEquals("2.5", r.tddPeriodicityMs)
+        assertEquals("2.5", r.pattern2PeriodicityMs)
+        assertEquals("5", r.effectivePeriodicityMs)
+    }
+
+    /** 2.5 ms + 5 ms = 7.5 ms, which 20 ms is not a multiple of. Both halves derive cleanly. */
+    private val impossibleCombinedPeriod = """
+        tdd-UL-DL-ConfigurationCommon
+          referenceSubcarrierSpacing kHz30
+          pattern1
+            dl-UL-TransmissionPeriodicity ms2p5
+            nrofDownlinkSlots 3
+            nrofDownlinkSymbols 10
+            nrofUplinkSlots 1
+            nrofUplinkSymbols 2
+          pattern2
+            dl-UL-TransmissionPeriodicity ms5
+            nrofDownlinkSlots 6
+            nrofDownlinkSymbols 4
+            nrofUplinkSlots 3
+            nrofUplinkSymbols 4
+    """.trimIndent()
+
+    /** pattern2 present but with no uplink slot count, so it cannot be turned into slots. */
+    private val incompletePattern2 = """
+        tdd-UL-DL-ConfigurationCommon
+          referenceSubcarrierSpacing kHz30
+          pattern1
+            dl-UL-TransmissionPeriodicity ms2p5
+            nrofDownlinkSlots 3
+            nrofDownlinkSymbols 10
+            nrofUplinkSlots 1
+            nrofUplinkSymbols 2
+          pattern2
+            dl-UL-TransmissionPeriodicity ms2p5
+            nrofDownlinkSymbols 4
+            nrofUplinkSymbols 4
+    """.trimIndent()
+
+    @Test
+    fun `a combined period that cannot divide 20 ms is called out`() {
+        // TS 38.213 s11.1 requires pattern1 + pattern2 to divide 20 ms. 2.5 + 5 = 7.5 does not,
+        // so this is a misread paste rather than an unusual deployment, and saying so is more use
+        // than rendering fifteen slots as though they had been measured.
+        val r = Sib1Parser.parse(impossibleCombinedPeriod)
+
+        assertEquals("7.5", r.effectivePeriodicityMs)
+        assertTrue(
+            "Expected a note about 20 ms, got " + r.notes,
+            r.notes.any { it.contains("divide 20 ms") },
+        )
+    }
+
+    @Test
+    fun `pattern2 that cannot be derived yields no slot string at all`() {
+        // Rendering pattern1 alone would be the worst outcome available: a string that looks
+        // complete, covers half the cycle, and carries no sign that anything was dropped.
+        val r = Sib1Parser.parse(incompletePattern2)
+
+        assertTrue(r.hasPattern2)
+        assertNull(r.derivedPattern)
+        assertTrue(
+            "Expected the dropped pattern to be explained, got " + r.notes,
+            r.notes.any { it.contains("pattern2 is present but could not be derived") },
+        )
+    }
+
+    @Test
+    fun `a single-pattern carrier is unaffected by the two-pattern handling`() {
+        val r = Sib1Parser.parse(n41Tdd)
+
+        assertFalse(r.hasPattern2)
+        assertNull(r.pattern2PeriodicityMs)
+        assertEquals("DDDSU", r.derivedPattern)
+        assertEquals("2.5", r.effectivePeriodicityMs)
     }
 
     @Test

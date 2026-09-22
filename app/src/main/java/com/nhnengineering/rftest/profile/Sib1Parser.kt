@@ -67,6 +67,23 @@ object Sib1Parser {
         val dlSymbols: Int? = null,
         val ulSlots: Int? = null,
         val ulSymbols: Int? = null,
+
+        /** True when the configuration carries a second pattern. */
+        val hasPattern2: Boolean = false,
+        val pattern2PeriodicityMs: String? = null,
+        val p2DlSlots: Int? = null,
+        val p2DlSymbols: Int? = null,
+        val p2UlSlots: Int? = null,
+        val p2UlSymbols: Int? = null,
+        /**
+         * The period the slot string actually repeats on.
+         *
+         * pattern1 + pattern2 where there are two, pattern1 alone where there is one. Kept
+         * separate from [tddPeriodicityMs] because storing a two-pattern slot string next to
+         * pattern1's periodicity describes part of a cycle and reads as the whole of it.
+         */
+        val effectivePeriodicityMs: String? = null,
+
         /** Rendered from the slot counts when they can be reconciled with the period. */
         val derivedPattern: String? = null,
         val ssbPeriodicityMs: Int? = null,
@@ -142,34 +159,78 @@ object Sib1Parser {
 
         // --- TDD ----------------------------------------------------------------------------
         val isTdd = text.contains("tdd-UL-DL-ConfigurationCommon", ignoreCase = true)
-        val periodMs = sole(
-            "dl-UL-TransmissionPeriodicity",
-            allTokens(text, "dl-UL-TransmissionPeriodicity").mapNotNull(::msToNumber),
-        )
-        if (periodMs != null) found += Field.TDD_PERIODICITY
+        // A two-pattern configuration repeats every pattern1 + pattern2, and the same identifiers
+        // appear once per pattern. Scanning the whole message for them would find
+        // nrofDownlinkSlots twice with different values, call it a conflict and fill in nothing --
+        // on precisely the deployments where the slot pattern is least guessable. So each pattern
+        // is read from its own slice of the text.
+        val (scope1, scope2) = patternScopes(text)
 
-        val dlSlots = sole("nrofDownlinkSlots", allInts(text, "nrofDownlinkSlots"))
-        val dlSymbols = sole("nrofDownlinkSymbols", allInts(text, "nrofDownlinkSymbols"))
-        val ulSlots = sole("nrofUplinkSlots", allInts(text, "nrofUplinkSlots"))
-        val ulSymbols = sole("nrofUplinkSymbols", allInts(text, "nrofUplinkSymbols"))
+        fun readPattern(scope: String, suffix: String) = RawPattern(
+            periodMs = sole(
+                "dl-UL-TransmissionPeriodicity$suffix",
+                allTokens(scope, "dl-UL-TransmissionPeriodicity").mapNotNull(::msToNumber),
+            ),
+            dlSlots = sole("nrofDownlinkSlots$suffix", allInts(scope, "nrofDownlinkSlots")),
+            dlSymbols = sole("nrofDownlinkSymbols$suffix", allInts(scope, "nrofDownlinkSymbols")),
+            ulSlots = sole("nrofUplinkSlots$suffix", allInts(scope, "nrofUplinkSlots")),
+            ulSymbols = sole("nrofUplinkSymbols$suffix", allInts(scope, "nrofUplinkSymbols")),
+        )
+
+        val p1 = readPattern(scope1, "")
+        val p2 = scope2?.let { readPattern(it, " (pattern2)") }
+
+        val periodMs = p1.periodMs
+        val dlSlots = p1.dlSlots
+        val dlSymbols = p1.dlSymbols
+        val ulSlots = p1.ulSlots
+        val ulSymbols = p1.ulSymbols
+        if (periodMs != null) found += Field.TDD_PERIODICITY
         if (dlSlots != null) found += Field.DL_SLOTS
         if (dlSymbols != null) found += Field.DL_SYMBOLS
         if (ulSlots != null) found += Field.UL_SLOTS
         if (ulSymbols != null) found += Field.UL_SYMBOLS
 
-        if (text.contains("pattern2", ignoreCase = true)) {
-            notes += "pattern2 is present. Only pattern1 was read -- a two-pattern configuration " +
-                "cannot be written down as one slot string, and the second pattern needs " +
-                "recording by hand."
+        val effScs = refScsKhz ?: scsKhz
+        val slots1 = derivePattern(p1, effScs, "pattern1", notes)
+        val slots2 = p2?.let { derivePattern(it, effScs, "pattern2", notes) }
+
+        val combinedPeriod = if (p2 == null) {
+            periodMs
+        } else {
+            val a = periodMs
+            val b = p2.periodMs
+            if (a != null && b != null) a + b else null
         }
 
-        val pattern = derivePattern(
-            periodMs = periodMs,
-            scsKhz = refScsKhz ?: scsKhz,
-            dlSlots = dlSlots, dlSymbols = dlSymbols,
-            ulSlots = ulSlots, ulSymbols = ulSymbols,
-            notes = notes,
-        )
+        if (p2 != null && combinedPeriod != null) {
+            // TS 38.213 s11.1: the two periodicities together have to divide 20 ms. A combination
+            // that does not is not a deployment this tool has never seen -- it is a misread paste.
+            val repeats = 20.0 / combinedPeriod
+            if (Math.abs(repeats - Math.round(repeats)) > 1e-6) {
+                notes += "pattern1 and pattern2 come to ${trimNumber(combinedPeriod)} ms together, " +
+                    "which does not divide 20 ms. No real configuration does that, so check the " +
+                    "paste rather than trusting either pattern."
+            }
+        }
+
+        val pattern: String?
+        if (slots1 != null && slots2 != null) {
+            pattern = slots1 + slots2
+            val a = periodMs
+            val b = p2?.periodMs
+            if (a != null && b != null) {
+                notes += "Two patterns: ${trimNumber(a)} ms then ${trimNumber(b)} ms, repeating " +
+                    "every ${trimNumber(a + b)} ms. The slot string covers the whole cycle."
+            }
+        } else if (p2 != null) {
+            pattern = null
+            notes += "pattern2 is present but could not be derived, so no slot string was built. " +
+                "Recording pattern1 on its own would describe one part of the cycle in a field " +
+                "that reads as the whole of it."
+        } else {
+            pattern = slots1
+        }
 
         // --- SSB ----------------------------------------------------------------------------
         val ssbPeriod = sole(
@@ -204,6 +265,11 @@ object Sib1Parser {
             tddPeriodicityMs = periodMs?.let(::trimNumber),
             dlSlots = dlSlots, dlSymbols = dlSymbols,
             ulSlots = ulSlots, ulSymbols = ulSymbols,
+            hasPattern2 = p2 != null,
+            pattern2PeriodicityMs = p2?.periodMs?.let(::trimNumber),
+            p2DlSlots = p2?.dlSlots, p2DlSymbols = p2?.dlSymbols,
+            p2UlSlots = p2?.ulSlots, p2UlSymbols = p2?.ulSymbols,
+            effectivePeriodicityMs = combinedPeriod?.let(::trimNumber),
             derivedPattern = pattern,
             ssbPeriodicityMs = ssbPeriod,
             ssbPositionsInBurst = ssbPositions,
@@ -213,43 +279,76 @@ object Sib1Parser {
         )
     }
 
+    /** One TDD-UL-DL-Pattern as scanned out of the text, before it is reconciled. */
+    private data class RawPattern(
+        val periodMs: Double?,
+        val dlSlots: Int?, val dlSymbols: Int?,
+        val ulSlots: Int?, val ulSymbols: Int?,
+    )
+
     /**
-     * Renders the classic slot string from the counts.
+     * Splits the configuration into one slice of text per TDD pattern.
      *
-     * NR lays a period out as full DL slots, then one special slot carrying DL and UL symbols, then
-     * full UL slots, with anything unassigned left flexible in between. So the string is derivable
-     * -- but only if the counts actually fit the period, and if they do not that is worth saying
-     * rather than rendering a pattern that looks authoritative and is wrong.
+     * `TDD-UL-DL-ConfigCommon` holds `pattern1` and an optional `pattern2`, each a
+     * `TDD-UL-DL-Pattern` with the same five field names. The names carry no index, so the only
+     * thing separating one pattern's `nrofDownlinkSlots` from the other's is where it sits
+     * relative to the `pattern2` marker.
+     *
+     * Returns the whole text as a single scope whenever there is no second pattern to separate,
+     * which keeps single-pattern parsing exactly as it was -- including for a pasted fragment
+     * that never mentions `pattern1` at all.
+     */
+    private fun patternScopes(text: String): Pair<String, String?> {
+        val second = Regex("""\bpattern2\b""", RegexOption.IGNORE_CASE).find(text)
+            ?: return text to null
+        val first = Regex("""\bpattern1\b""", RegexOption.IGNORE_CASE).find(text)
+        val start1 = first?.range?.first ?: 0
+        val start2 = second.range.first
+        // pattern2 before pattern1 is not a shape 38.331 produces; rather than guess at what the
+        // paste means, fall back to reading it as one pattern.
+        if (start2 <= start1) return text to null
+        return text.substring(start1, start2) to text.substring(start2)
+    }
+
+    /**
+     * Renders the classic slot string for one pattern.
+     *
+     * NR lays a period out as full DL slots, then one special slot carrying DL and UL symbols,
+     * then full UL slots, with anything unassigned left flexible in between. So the string is
+     * derivable -- but only if the counts actually fit the period, and if they do not that is
+     * worth saying rather than rendering a pattern that looks authoritative and is wrong.
      */
     private fun derivePattern(
-        periodMs: Double?,
+        p: RawPattern,
         scsKhz: Int?,
-        dlSlots: Int?, dlSymbols: Int?,
-        ulSlots: Int?, ulSymbols: Int?,
+        label: String,
         notes: MutableList<String>,
     ): String? {
-        if (periodMs == null || scsKhz == null || dlSlots == null || ulSlots == null) return null
+        val periodMs = p.periodMs ?: return null
+        val dlSlots = p.dlSlots ?: return null
+        val ulSlots = p.ulSlots ?: return null
+        if (scsKhz == null) return null
 
         val slotsExact = periodMs * (scsKhz / 15.0)
         val slotsPerPeriod = Math.round(slotsExact).toInt()
         if (Math.abs(slotsExact - slotsPerPeriod) > 1e-6 || slotsPerPeriod <= 0) {
-            notes += "A ${trimNumber(periodMs)} ms period at $scsKhz kHz does not come to a whole " +
-                "number of slots, so no pattern was derived."
+            notes += "$label: a ${trimNumber(periodMs)} ms period at $scsKhz kHz does not come " +
+                "to a whole number of slots, so no pattern was derived."
             return null
         }
 
-        val hasSpecial = (dlSymbols ?: 0) > 0 || (ulSymbols ?: 0) > 0
+        val hasSpecial = (p.dlSymbols ?: 0) > 0 || (p.ulSymbols ?: 0) > 0
         val used = dlSlots + ulSlots + if (hasSpecial) 1 else 0
         if (used > slotsPerPeriod) {
-            notes += "The slot counts add up to $used slots but a ${trimNumber(periodMs)} ms period " +
-                "at $scsKhz kHz holds $slotsPerPeriod. No pattern was derived -- check the paste " +
-                "rather than trusting these numbers."
+            notes += "$label: the slot counts add up to $used slots but a " +
+                "${trimNumber(periodMs)} ms period at $scsKhz kHz holds $slotsPerPeriod. No " +
+                "pattern was derived -- check the paste rather than trusting these numbers."
             return null
         }
 
         val flexible = slotsPerPeriod - used
         if (flexible > 0) {
-            notes += "$flexible slot${if (flexible == 1) "" else "s"} in the period " +
+            notes += "$label: $flexible slot${if (flexible == 1) "" else "s"} in the period " +
                 "${if (flexible == 1) "is" else "are"} flexible, shown as F."
         }
         return "D".repeat(dlSlots) +

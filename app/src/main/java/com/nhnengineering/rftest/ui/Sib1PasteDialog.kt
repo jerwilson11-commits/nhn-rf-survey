@@ -165,10 +165,34 @@ internal fun sib1FoundLines(r: Sib1Parser.Result): List<Pair<String, String>> = 
     r.pci?.let { add("PCI" to it.toString()) }
     r.scsKhz?.let { add("Subcarrier spacing" to "$it kHz") }
     r.carrierBandwidthRb?.let { add("Carrier bandwidth" to "$it RB") }
-    r.tddPeriodicityMs?.let { add("TDD periodicity" to "$it ms") }
-    r.derivedPattern?.let { add("Slot pattern (derived)" to it) }
-    r.dlSlots?.let { add("DL slots / symbols" to "$it / " + (r.dlSymbols?.toString() ?: "—")) }
-    r.ulSlots?.let { add("UL slots / symbols" to "$it / " + (r.ulSymbols?.toString() ?: "—")) }
+    if (r.hasPattern2) {
+        // Labelled per pattern once there are two, because "TDD periodicity 2.5 ms" beside a slot
+        // string covering 5 ms is the kind of row an engineer checks off as correct.
+        r.tddPeriodicityMs?.let { add("Pattern 1 periodicity" to "$it ms") }
+        r.pattern2PeriodicityMs?.let { add("Pattern 2 periodicity" to "$it ms") }
+        r.effectivePeriodicityMs?.let { add("Repeats every" to "$it ms") }
+    } else {
+        r.tddPeriodicityMs?.let { add("TDD periodicity" to "$it ms") }
+    }
+    r.derivedPattern?.let {
+        add((if (r.hasPattern2) "Slot pattern (derived, both patterns)" else
+            "Slot pattern (derived)") to it)
+    }
+    val p1Label = if (r.hasPattern2) " (p1)" else ""
+    r.dlSlots?.let {
+        add("DL slots / symbols$p1Label" to "$it / " + (r.dlSymbols?.toString() ?: "—"))
+    }
+    r.ulSlots?.let {
+        add("UL slots / symbols$p1Label" to "$it / " + (r.ulSymbols?.toString() ?: "—"))
+    }
+    if (r.hasPattern2) {
+        r.p2DlSlots?.let {
+            add("DL slots / symbols (p2)" to "$it / " + (r.p2DlSymbols?.toString() ?: "—"))
+        }
+        r.p2UlSlots?.let {
+            add("UL slots / symbols (p2)" to "$it / " + (r.p2UlSymbols?.toString() ?: "—"))
+        }
+    }
     r.ssbPeriodicityMs?.let { add("SSB periodicity" to "$it ms") }
     r.ssbPositionsInBurst?.let { add("SSB positions in burst" to it) }
 }
@@ -192,7 +216,10 @@ internal fun TddProfile.withSib1(r: Sib1Parser.Result, now: Long): TddProfile {
         mcc = r.mcc ?: mcc,
         mnc = r.mnc ?: mnc,
         tddPattern = r.derivedPattern ?: tddPattern,
-        tddPeriodicityMs = r.tddPeriodicityMs ?: tddPeriodicityMs,
+        // The period the stored slot string actually repeats on. With two patterns that is
+        // pattern1 + pattern2; storing pattern1's alone would put a figure describing part of the
+        // cycle next to a string describing all of it.
+        tddPeriodicityMs = r.effectivePeriodicityMs ?: r.tddPeriodicityMs ?: tddPeriodicityMs,
         dlSlots = r.dlSlots ?: dlSlots,
         dlSymbols = r.dlSymbols ?: dlSymbols,
         ulSlots = r.ulSlots ?: ulSlots,
