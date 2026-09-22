@@ -55,24 +55,30 @@ object NrMl1Parser {
     private const val OFF_SERVING_PCI = 38
 
     /**
-     * The bottom of the SS-RSRP reporting range, in the modem's 128ths of a dB.
+     * Below this, a level is treated as "listed but not measured" rather than as a reading.
      *
-     * 3GPP TS 38.133 reports SS-RSRP over -156 dBm to -31 dBm, so -156 is not a level, it is the
-     * floor: "at or below anything this scale can express". The modem lists cells it has detected
-     * but has no usable measurement for at exactly this value.
+     * The modem lists cells it is aware of whether or not it currently has a usable measurement
+     * for them, and the placeholder it uses is **not a single constant**. Two rounds of evidence:
      *
-     * Observed on 2026-09-22: a session recorded a neighbour at -156 dBm on every sample.
-     * Published as a measurement that is nonsense -- below the thermal noise floor -- and worse
-     * than nonsense in a report, because a cell that cannot be measured would be counted as a
-     * neighbour and would move an overlap figure.
+     *  - A stationary capture showed a neighbour at raw -19964, which is -155.969 dB: four counts
+     *    off an exact -156 x 128, so an equality test against the reporting floor missed it.
+     *  - The walk of 2026-09-22 (424 samples, 944 neighbour observations, 1.9 km, seven
+     *    handovers) split cleanly in two. Levels from -115 dB upward form the expected
+     *    distribution, peaking around -100. Levels from -126 down form a second population of
+     *    189 observations, with a near-empty trough between them. Consecutive observations of one
+     *    PCI jump by up to 62 dB across that gap -- on PCI 929, in 26% of transitions. RSRP does
+     *    not move 60 dB in a second; a cell flipping between a real level and a placeholder does.
      *
-     * The comparison is on the rounded dB rather than the raw value, because the raw value is
-     * not a single constant. A capture of 46 multi-cell packets put every real reading between
-     * -87 and -104 dB and the unmeasured one at raw -19964, which is -155.969 -- four counts off
-     * an exact -156 x 128. An equality test on the raw floor missed it; rounding to the
-     * reporting floor catches it and anything else that lands there.
+     * -125 dBm sits in that empirical trough and is also roughly where SSB detection stops being
+     * meaningful at the UE, so it is defensible on both counts.
+     *
+     * It is a cut chosen from observed behaviour, not a documented sentinel, and that is worth
+     * knowing: the honest failure mode is discarding a genuine but very weak neighbour. That is
+     * the safer direction -- a cell at this level is never within 6 dB of the strongest and so
+     * can never create overlap, while leaving it in inflates every neighbour count and puts
+     * -143 dBm in front of a client as though someone had measured it.
      */
-    private const val RSRP_FLOOR_DBM = -156
+    private const val RSRP_MIN_CREDIBLE_DBM = -125
 
     /**
      * Signal values arrive in 128ths of a dB. The app's models carry whole dB, so [rsrpDbm]
@@ -164,7 +170,7 @@ object NrMl1Parser {
             // Detected but not measurable. Kept out of the cell lists entirely rather than
             // carried with a floor value, because everything downstream treats a cell in the
             // list as one that was measured.
-            if (cell.rsrpDbm <= RSRP_FLOOR_DBM) {
+            if (cell.rsrpDbm <= RSRP_MIN_CREDIBLE_DBM) {
                 unmeasured++
                 continue
             }
