@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.nhnengineering.rftest.model.CellularSample
+import com.nhnengineering.rftest.model.CellSource
 import com.nhnengineering.rftest.model.Rat
 import com.nhnengineering.rftest.model.RsrpBucket
 import com.nhnengineering.rftest.model.SimState
@@ -178,16 +179,44 @@ fun CellularCard(sample: CellularSample?) {
                 },
             )
 
-            if (!sample.neighboursEverSeen && sample.rat != Rat.NO_SERVICE) {
-                Text(
-                    "This handset has not reported a neighbour cell since the app started. That " +
-                        "is not the same as there being none: some handsets never pass NR " +
-                        "neighbours to an application, and on those the modem still measures " +
-                        "them and hands over normally. Overlap and dominance cannot be assessed " +
-                        "from this handset.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            KeyValue(
+                "Neighbour source",
+                if (sample.modemNeighboursAvailable) "modem + Android" else "Android only",
+            )
+
+            // Three different situations that all render as a short list, and only one of them is
+            // a measurement. Which one it is decides whether a report may say anything about
+            // overlap, so the card says it outright rather than leaving it to be inferred.
+            if (sample.rat != Rat.NO_SERVICE) {
+                when {
+                    sample.modemNeighboursAvailable && !sample.neighboursEverSeen -> Text(
+                        "The modem itself was read and reported no neighbour cells. Unlike an " +
+                            "empty list from Android, that is a measurement of this location.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    !sample.neighboursEverSeen -> Text(
+                        "This handset has not reported a neighbour cell since the app started. " +
+                            "That is not the same as there being none: some handsets never pass " +
+                            "NR neighbours to an application, and on those the modem still " +
+                            "measures them and hands over normally. Overlap and dominance " +
+                            "cannot be assessed from this handset." +
+                            (sample.modemUnavailableReason?.let { "\n\nReading them from the " +
+                                "modem directly is unavailable here: $it" } ?: ""),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    !sample.modemNeighboursAvailable && sample.modemUnavailableReason != null ->
+                        Text(
+                            "Neighbours below are Android's. Reading the modem directly, which " +
+                                "reports cells Android does not, is unavailable here: " +
+                                "${sample.modemUnavailableReason}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                }
             }
 
             if (sample.neighbors.isNotEmpty()) {
@@ -199,6 +228,10 @@ fun CellularCard(sample: CellularSample?) {
                                 buildString {
                                     append("${n.rat} PCI ${n.pci ?: "?"} ${n.band ?: ""} ")
                                     append("ch ${n.channel ?: "?"}")
+                                    // Marked per row rather than only in the summary: a list can
+                                    // hold cells from both surfaces at once, and which is which
+                                    // changes how much the reading is worth.
+                                    if (n.source == CellSource.MODEM) append("  modem")
                                     // Only shown once it is old enough to matter, so the common
                                     // case stays uncluttered but a retained entry is never
                                     // mistaken for a fresh measurement.

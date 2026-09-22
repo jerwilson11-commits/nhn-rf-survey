@@ -887,6 +887,15 @@ object PdfReportGenerator {
                     "them on this site needs a handset that reports neighbours, or a diagnostic " +
                     "tool reading the modem directly.",
             )
+            SessionStats.NeighbourVisibility.MEASURED_NONE -> Pair(
+                "No neighbour cells are present here",
+                "Neighbours were read from the modem directly on " +
+                    "${nbr.modemReadSamples} of ${nbr.cellularSamples} cellular samples, and " +
+                    "none reported a second cell. Unlike an empty list from the handset's " +
+                    "platform interfaces, that is a measurement: this location is served by one " +
+                    "cell with no others above the detection floor. Sector overlap of zero " +
+                    "below is therefore a finding rather than an absence of data.",
+            )
             SessionStats.NeighbourVisibility.TOO_FEW_SAMPLES -> Pair(
                 "Too few samples to judge neighbour visibility",
                 "No neighbour cell appeared in ${nbr.cellularSamples} cellular samples, which is " +

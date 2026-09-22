@@ -20,6 +20,7 @@ import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.nhnengineering.rftest.model.CarrierRole
+import com.nhnengineering.rftest.model.CellSource
 import com.nhnengineering.rftest.model.CellularSample
 import com.nhnengineering.rftest.model.ComponentCarrier
 import com.nhnengineering.rftest.model.LteCell
@@ -28,6 +29,8 @@ import com.nhnengineering.rftest.model.NrCell
 import com.nhnengineering.rftest.model.NrState
 import com.nhnengineering.rftest.model.Rat
 import com.nhnengineering.rftest.model.SimState
+import com.nhnengineering.rftest.modem.ModemNeighbourSource
+import com.nhnengineering.rftest.modem.QmiCellParser
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 
@@ -113,6 +116,14 @@ class CellularCollector(context: Context) {
 
     /** Keyed by rat|pci|channel, which identifies a cell uniquely enough within one locality. */
     private val observedNeighbors = ConcurrentHashMap<String, Pair<NeighborCell, Long>>()
+
+    /**
+     * Neighbours read from the modem itself, where the handset is rooted.
+     *
+     * Absent on an ordinary device, which is the normal case and not a fault. Where it is present
+     * it is the only surface on this handset that reports neighbours at all.
+     */
+    private val modemNeighbours = ModemNeighbourSource(appContext)
 
     private var started = false
     private var callback: TelephonyCallback? = null
@@ -270,6 +281,7 @@ class CellularCollector(context: Context) {
         callbackCells = emptyList()
         listenerCells = emptyList()
         neighbourEverSeen = false
+        modemNeighbours.stop()
     }
 
     // -----------------------------------------------------------------------
@@ -316,9 +328,19 @@ class CellularCollector(context: Context) {
         val nrState = nrStateOf()
         val rat = ratOf(lte, nr, sim)
 
+        // Kicked off here and read from cache: the read forks su, so it must not sit in the
+        // sampling path. Whatever the last one produced carries its own age.
+        modemNeighbours.refreshIfDue()
+        val modemSnapshot = modemNeighbours.snapshot()
+
         val seenNow = buildList {
             lteCells.filter { it !== servingLte }.forEach { add(neighborFromLte(it)) }
             nrCells.filter { it !== servingNr }.forEach { add(neighborFromNr(it)) }
+            // Appended last on purpose. mergeNeighbors keys on rat|pci|channel and keeps the last
+            // writer, so where both surfaces saw the same cell the modem's reading wins -- it is
+            // the better measurement, and it is the list the modem is actually working from
+            // rather than what the platform chose to pass up.
+            modemSnapshot?.cells?.forEach { add(neighborFromModem(it)) }
         }
         val neighbors = mergeNeighbors(seenNow)
         if (neighbors.isNotEmpty()) neighbourEverSeen = true
@@ -340,6 +362,16 @@ class CellularCollector(context: Context) {
             permissionLimited = !hasPhoneState,
             carriers = latestCarriers,
             channelConfigAvailable = channelConfigActive,
+            modemNeighboursAvailable = modemSnapshot?.answered == true,
+            // A successful read of a technology this build cannot decode is not availability.
+            // Saying so here is what stops it being reported downstream as "no neighbours here".
+            modemUnavailableReason = modemNeighbours.unavailableReason
+                ?: if (modemSnapshot?.undecodedTechnology == true) {
+                    "The modem answered, but this build decodes LTE neighbour cells only and " +
+                        "the radio is on 5G NR."
+                } else {
+                    null
+                },
         )
     }
 
@@ -664,6 +696,22 @@ class CellularCollector(context: Context) {
             .map { (cell, at) -> cell.copy(ageMs = now - at) }
             .sortedByDescending { it.rsrpDbm ?: Int.MIN_VALUE }
     }
+
+    /**
+     * A neighbour the modem reported, over QRTR.
+     *
+     * The modem gives tenths of a dB where CellInfo gives whole ones; [QmiCellParser.Cell] keeps
+     * the tenths and rounds here, so nothing downstream has to know the difference.
+     */
+    private fun neighborFromModem(c: QmiCellParser.Cell) = NeighborCell(
+        rat = "LTE",
+        pci = c.pci,
+        channel = c.earfcn,
+        band = BandMapping.lteBandFor(c.earfcn)?.band?.let { "B$it" },
+        rsrpDbm = c.rsrpDbm,
+        rsrqDb = c.rsrqDb,
+        source = CellSource.MODEM,
+    )
 
     private fun neighborFromLte(info: CellInfoLte): NeighborCell {
         val id = info.cellIdentity

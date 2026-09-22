@@ -371,6 +371,17 @@ object SessionStats {
          */
         NEVER_REPORTED,
 
+        /**
+         * The modem itself was read and reported no neighbours, across enough samples to mean it.
+         *
+         * The opposite conclusion to [NEVER_REPORTED] from an identical-looking count of zero.
+         * There the instrument could not see; here it looked and there was nothing, which is a
+         * finding about the site and may be reported as one.
+         *
+         * Only reachable where neighbours were read from the modem over QRTR, which needs root.
+         */
+        MEASURED_NONE,
+
         /** Too few cellular samples to distinguish an absence from a limitation. */
         TOO_FEW_SAMPLES,
 
@@ -383,6 +394,13 @@ object SessionStats {
         val cellularSamples: Int,
         val samplesWithNeighbour: Int,
         val distinctNeighbours: Int,
+        /**
+         * How many cellular samples had their neighbours read from the modem.
+         *
+         * Zero on any handset without root, and on every session recorded before that column
+         * existed. It is what separates a measured absence from an unmeasurable one.
+         */
+        val modemReadSamples: Int = 0,
     )
 
     /**
@@ -400,12 +418,18 @@ object SessionStats {
         val distinct = cellular
             .flatMap { p -> p.cells.filterNot { it.serving }.mapNotNull { it.pci?.to(it.channel) } }
             .distinct().size
+        // Samples where the modem itself was asked. A zero neighbour count means something
+        // entirely different depending on this, so it is counted before anything is concluded.
+        val modemRead = cellular.count { it.modemNeighbours == true }
         val visibility = when {
             withNeighbour > 0 -> NeighbourVisibility.REPORTED
             cellular.size < NEIGHBOUR_EVIDENCE_SAMPLES -> NeighbourVisibility.TOO_FEW_SAMPLES
+            // The strong claim needs the same weight of evidence as the other one: enough
+            // samples overall, and enough of them actually read from the modem.
+            modemRead >= NEIGHBOUR_EVIDENCE_SAMPLES -> NeighbourVisibility.MEASURED_NONE
             else -> NeighbourVisibility.NEVER_REPORTED
         }
-        return NeighbourReport(visibility, cellular.size, withNeighbour, distinct)
+        return NeighbourReport(visibility, cellular.size, withNeighbour, distinct, modemRead)
     }
 
     // ---- Throughput by band and technology --------------------------------

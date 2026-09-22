@@ -106,6 +106,15 @@ data class TrackPoint(
      * sessions and for cellular sessions recorded before neighbour logging existed.
      */
     val cells: List<ObservedCell> = emptyList(),
+    /**
+     * Whether [cells] was read from the modem for this sample, rather than from Android.
+     *
+     * Null for sessions recorded before this column existed, which is why it is a nullable
+     * Boolean and not a Boolean: "we do not know which instrument this came from" is a third
+     * state and collapsing it into false would let an old session be reported as though the
+     * modem had been asked and had answered nothing.
+     */
+    val modemNeighbours: Boolean? = null,
     /** Neighbouring APs at this sample, strongest first. */
     val aps: List<ObservedAp> = emptyList(),
     /**
@@ -224,6 +233,7 @@ object SessionReader {
             val iNrNci = idx("nr_nci")
             val iNrArfcn = idx("nr_arfcn"); val iEarfcn = idx("lte_earfcn")
             val iCells = idx("cell_neighbors_json")
+            val iCellSrc = idx("cell_neighbor_source")
             val iFloor = idx("floor")
             val iOp = idx("operator"); val iMcc = idx("mcc"); val iMnc = idx("mnc")
             val iFp = idx("floorplan_id"); val iFpX = idx("floorplan_x")
@@ -319,6 +329,7 @@ object SessionReader {
                     servingNci = s(iNrNci)?.toLongOrNull(),
                     aps = parseWifiNeighbors(s(iWifiNeighbors)),
                     cells = cells,
+                    modemNeighbours = s(iCellSrc)?.let { it.equals("modem", ignoreCase = true) },
                     downloadMbps = s(iDl)?.toDoubleOrNull(),
                     uploadMbps = s(iUl)?.toDoubleOrNull(),
                     throughputError = s(iTpErr),

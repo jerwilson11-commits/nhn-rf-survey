@@ -229,3 +229,33 @@ and unnecessary given those references.
 QRTR access needs **root**, not the privileged install. These features are therefore permanently
 outside a Play Store build, and per the decision of 2026-09-22 they are capability-gated inside the
 one app, appearing only where the channel is reachable.
+
+## In the app
+
+Wired in behind the root gate on 2026-09-22.
+
+- `tools/diag/qmihelper.c` — transport only: one QMI request over QRTR, reply printed as
+  `OK <hex>` or `ERR <reason>`. Built with `tools/diag/build_qmi_probe.sh` and checked in as
+  `app/src/main/assets/qmihelper-arm64-v8a` (8.6 KB, arm64 only). It is a prebuilt in the repo
+  rather than a Gradle native build because the app deploys as a *system* app, where APK native
+  libraries are not extracted the way `nativeLibraryDir` assumes. Source and build script sit
+  beside it so it is reproducible.
+- `modem/QmiCellParser.kt` — all decoding, in Kotlin, unit-tested against the captures above.
+- `modem/ModemNeighbourSource.kt` — unpacks the helper into the app's files dir, runs it through
+  `su` on a private thread at a throttled cadence, and caches the result. Magisk shows a Superuser
+  prompt on the first run.
+- Neighbours carry `CellSource.MODEM`, the session CSV gains `cell_neighbor_source`, and
+  `SessionStats` gained `MEASURED_NONE` so a report can distinguish a measured absence of
+  neighbours from an unmeasurable one.
+
+### The trap this nearly walked into
+
+On 5G NR SA the modem answers `GET_CELL_LOCATION_INFO` with SUCCESS and NR serving-cell TLVs that
+this build does not decode. The first on-device session recorded `cell_neighbor_source=modem` with
+zero neighbours on all 36 samples — which `SessionStats` would have promoted to `MEASURED_NONE`,
+printing "No neighbour cells are present here… that is a measurement" for a site nobody measured.
+
+`QmiCellParser.Result.lteInfoPresent` now records whether the response carried LTE cell TLVs at
+all, and a read that decoded nothing about the current RAT does not count as availability. Decoding
+the NR neighbour TLVs is the obvious next step; until then the app says so rather than implying a
+measurement.

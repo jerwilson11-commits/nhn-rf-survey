@@ -106,6 +106,26 @@ data class NrCell(
     val operator: String?,
 )
 
+/**
+ * Where a neighbour was observed.
+ *
+ * Not decoration. A survey that mixes the two without saying so cannot explain why the same
+ * ground produced different neighbour counts on two passes, and cannot defend either number.
+ */
+enum class CellSource(val label: String) {
+    /** Android's CellInfo surfaces. On some handsets these report no neighbours at all. */
+    ANDROID("Android"),
+
+    /**
+     * Read from the modem over QRTR, which needs root.
+     *
+     * The modem is measuring neighbours whether or not the platform passes them up. Where this
+     * is available it is the better evidence, and where it is absent its absence is a fact about
+     * the instrument rather than about the site.
+     */
+    MODEM("modem"),
+}
+
 /** A neighbour cell, flattened across technologies for logging. */
 data class NeighborCell(
     val rat: String,
@@ -125,6 +145,8 @@ data class NeighborCell(
      * only what was seen in that sample.
      */
     val ageMs: Long = 0,
+    /** Which surface this neighbour came from. See [CellSource]. */
+    val source: CellSource = CellSource.ANDROID,
 )
 
 /** Which role a configured carrier plays. Secondary means carrier aggregation is active. */
@@ -240,6 +262,24 @@ data class CellularSample(
      * on this before it says a word about how many carriers were in use.
      */
     val channelConfigAvailable: Boolean = false,
+
+    /**
+     * Whether neighbours were read from the modem for this sample.
+     *
+     * False is the ordinary case: it needs root. Read it together with [neighbors] and never
+     * alone, for the same reason [channelConfigAvailable] exists -- an empty neighbour list means
+     * "could not look" far more often than it means "nothing there", and reporting the second
+     * when the first is true is the defect that put a confident 0.0% overlap in a client report.
+     */
+    val modemNeighboursAvailable: Boolean = false,
+
+    /**
+     * Why the modem could not be read, when it could not be.
+     *
+     * Phrased for display. "No root" is a deployment fact, not a fault, and saying so plainly is
+     * more use to an engineer than a silently shorter list.
+     */
+    val modemUnavailableReason: String? = null,
 ) {
     /** Primary serving-cell coverage KPI, whichever radio is serving. */
     val servingRsrpDbm: Int? get() = nr?.ssRsrpDbm ?: lte?.rsrpDbm

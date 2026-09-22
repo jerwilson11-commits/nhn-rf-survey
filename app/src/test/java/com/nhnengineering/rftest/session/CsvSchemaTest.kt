@@ -77,8 +77,10 @@ class CsvSchemaTest {
     fun `schema is the expected width`() {
         // 75 until 2026-09-03, when gps_fix_age_ms and cell_bandwidths_khz were added after
         // reading a Network Survey log that carried both and finding we carried neither.
-        assertEquals(91, CSV_COLUMN_COUNT)
-        assertEquals(91, CSV_HEADER.split(",").size)
+        // 91 until 2026-09-22, when cell_neighbor_source was added: a neighbour count of zero
+        // is unreadable after the fact without knowing which instrument produced it.
+        assertEquals(92, CSV_COLUMN_COUNT)
+        assertEquals(92, CSV_HEADER.split(",").size)
     }
 
     @Test

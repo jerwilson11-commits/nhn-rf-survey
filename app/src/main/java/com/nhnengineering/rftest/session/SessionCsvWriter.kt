@@ -129,7 +129,7 @@ private val CELLULAR_COLUMNS = listOf(
     "nr_nci", "nr_gnb_id", "nr_cell_id", "nr_pci", "nr_tac", "nr_arfcn", "nr_band",
     "nr_ss_rsrp", "nr_ss_rsrq", "nr_ss_sinr", "nr_csi_rsrp", "nr_csi_rsrq", "nr_csi_sinr",
     "cell_bandwidths_khz",
-    "cell_neighbor_count", "cell_neighbors_json",
+    "cell_neighbor_count", "cell_neighbors_json", "cell_neighbor_source",
 )
 
 private val WIFI_COLUMNS = listOf(
@@ -296,6 +296,10 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += c?.cellBandwidthsKhz?.takeIf { it.isNotEmpty() }?.joinToString(";")
     cells += c?.neighbors?.size?.toString()
     cells += c?.neighbors?.let { cellNeighborsToJson(it) }
+    // Which instrument produced the count beside it. Without this a zero is unreadable after the
+    // fact: "the modem reported none here" and "we were never able to ask" are different findings
+    // and only one of them belongs in a report about the site.
+    cells += c?.let { if (it.modemNeighboursAvailable) "modem" else "android" }
 
     cells += w?.ssid
     cells += w?.bssid
