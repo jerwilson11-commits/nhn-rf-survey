@@ -48,9 +48,11 @@ class ModemNeighbourSource(context: Context) {
         private const val ASSET = "qmihelper-arm64-v8a"
         private const val ABI = "arm64-v8a"
 
-        /** QRTR address of the Network Access Service, as `qrtr-lookup` reports it. */
-        const val NAS_NODE = 0
-        const val NAS_PORT = 86
+        /**
+         * Where `qrtr-lookup` lives. The Network Access Service's own address is not a constant
+         * and is resolved through it -- see [QrtrServices].
+         */
+        private const val QRTR_LOOKUP = "/vendor/bin/qrtr-lookup"
 
         /**
          * Minimum gap between modem reads.
@@ -107,6 +109,9 @@ class ModemNeighbourSource(context: Context) {
     @Volatile private var lastAttemptElapsed = 0L
     @Volatile private var availability: Availability? = null
 
+    /** Where the Network Access Service is, this boot. Null until [probe] has asked. */
+    @Volatile private var nas: QrtrServices.Address? = null
+
     /**
      * Whether the modem can be read here, evaluated once and remembered.
      *
@@ -128,6 +133,16 @@ class ModemNeighbourSource(context: Context) {
         }
         val helper = extractHelper()
             ?: return Availability.Unavailable("The modem helper could not be unpacked.")
+
+        // Resolved here rather than assumed. The port changes across reboots, and asking the
+        // wrong one fails silently: the modem answers, so the transport looks fine, and only the
+        // QMI result says the request went to another service.
+        nas = resolveNas()
+            ?: return Availability.Unavailable(
+                "The Network Access Service is not listed on QRTR, so the modem cannot be asked " +
+                    "for neighbours.",
+            )
+        Log.i(TAG, "NAS at node ${nas?.node} port ${nas?.port}")
 
         val out = runHelper(helper)
         return when {
@@ -163,9 +178,21 @@ class ModemNeighbourSource(context: Context) {
         null
     }
 
+    /** Asks QRTR where the Network Access Service is listening right now. */
+    private fun resolveNas(): QrtrServices.Address? = runCatching {
+        val p = ProcessBuilder("su", "-c", QRTR_LOOKUP).redirectErrorStream(true).start()
+        val out = p.inputStream.bufferedReader().use { it.readText() }
+        if (!p.waitFor(HELPER_TIMEOUT_MS, TimeUnit.MILLISECONDS)) p.destroyForcibly()
+        QrtrServices.find(out)
+    }.getOrElse {
+        Log.i(TAG, "could not resolve the NAS address: ${it.message}")
+        null
+    }
+
     /** Runs the helper as root. Returns its first line, or null if root was unavailable. */
     private fun runHelper(helper: File): String? = runCatching {
-        val cmd = "${helper.absolutePath} $NAS_NODE $NAS_PORT " +
+        val addr = nas ?: return null
+        val cmd = "${helper.absolutePath} ${addr.node} ${addr.port} " +
             "%04x".format(QmiCellParser.MSG_GET_CELL_LOCATION_INFO)
         val p = ProcessBuilder("su", "-c", cmd)
             .redirectErrorStream(true)

@@ -707,10 +707,21 @@ class CellularCollector(context: Context) {
      * Returns them strongest first, each stamped with how long ago it was actually seen. A
      * neighbour observed in this report has `ageMs = 0`; one carried over reports its true age, so
      * a stale entry can never be mistaken for a fresh measurement.
+     *
+     * [LteEarfcnTruncation.reconcile] runs first because the identity key below (`rat|pci|
+     * channel`) assumes channel is a stable identity, which is false for one specific case: QMI's
+     * own LTE neighbour message truncates EARFCN to 16 bits, so a Band 66 (or similar) neighbour
+     * reported by the modem and the same physical cell reported by Android's CellInfoLte disagree
+     * on channel and would otherwise be counted as two cells. See that class for why this is safe
+     * to fix and why it cannot be fixed by looking at the channel value alone.
      */
     private fun mergeNeighbors(seenNow: List<NeighborCell>): List<NeighborCell> {
         val now = SystemClock.elapsedRealtime()
-        for (n in seenNow) {
+        val reconciled = LteEarfcnTruncation.reconcile(
+            seenNow,
+            retained = observedNeighbors.values.map { it.first },
+        )
+        for (n in reconciled) {
             observedNeighbors["${n.rat}|${n.pci}|${n.channel}"] = n to now
         }
         observedNeighbors.entries.removeAll { now - it.value.second > NEIGHBOR_RETENTION_MS }
