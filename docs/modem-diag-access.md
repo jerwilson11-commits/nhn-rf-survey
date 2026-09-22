@@ -1,75 +1,105 @@
-# Reaching the modem directly (DIAG) — spike result
+# Reaching the modem directly — spike result
 
-Where the diagnostic channel actually is on the OnePlus 9, established 2026-09-22 on OxygenOS 14,
-rooted, Snapdragon 888 (SM8350).
+Where the modem's diagnostic and control channels actually are on the OnePlus 9. OxygenOS 14,
+rooted, Snapdragon 888 (SM8350). Established 2026-09-22.
 
 ## Why this matters
 
-Three things the app cannot do through Android all resolve to this one channel:
+Three things the app cannot do through Android resolve to modem access:
 
-| Need | Why Android can't | What DIAG gives |
+| Need | Why Android can't | What modem access gives |
 |---|---|---|
-| Neighbour cells | `getAllCellInfo()` returns the serving cell alone on this handset, across all three surfaces | Modem measurement log packets, which list neighbours |
-| Technology lock | `setAllowedNetworkTypesForReason` is accepted then recomputed away by `OplusNetworkUtils` | QMI NAS system-selection control, below the vendor framework layer |
-| Band lock | No API at any privilege level, on any handset | QMI NAS band preference |
+| Neighbour cells | `getAllCellInfo()` returns the serving cell alone on this handset, across all three surfaces | `QMI_NAS_GET_CELL_LOCATION_INFO`, which carries the neighbour lists |
+| Technology lock | `setAllowedNetworkTypesForReason` is accepted, then recomputed away by `OplusNetworkUtils` | `QMI_NAS_SET_SYSTEM_SELECTION_PREFERENCE`, below the vendor framework layer |
+| Band lock | No API at any privilege level, on any handset | The band-preference TLVs of that same message |
 
-So "match NSG on neighbours, band lock and technology lock" is one subsystem, not three.
+## Correction: the MHI pipe is not the modem
 
-## The finding
+An earlier version of this document identified `/dev/mhi_1103_00.01.00_pipe_4` as the modem's DIAG
+channel, on the strength of `/vendor/bin/diag-router` holding it open and bridging it to USB. That
+was wrong, and the experiment below is how it was caught.
 
-There is **no `/dev/diag` and no `diagchar`** on this device — `/proc/devices` lists no diag
-character device. That is not a missing feature; it is a different architecture. On SM8350 the
-modem is attached over PCIe and exposed through **MHI** (Modem Host Interface), so the diagnostic
-channel is an MHI character device:
-
-```
-crw-rw---- system system u:object_r:vendor_mhi_diag_device:s0  240,1  /dev/mhi_1103_00.01.00_pipe_4
-crw------- root   root   u:object_r:vendor_mhi_device:s0       240,0  /dev/mhi_1103_00.01.00_pipe_0
-```
-
-`pipe_4` is DIAG. It was found by listing the open descriptors of `/vendor/bin/diag-router`
-(started from `/vendor/etc/init/vendor.qti.diag.rc`), which holds it as fd 95 and bridges it to USB
-through FunctionFS (`/dev/ffs-diag*`). That bridge is what the `diag,adb` USB composition
-(PID 276C) exposes to a PC — the same data, routed off-device.
-
-### It is not exclusive-open
-
-A second process can open `pipe_4` while `diag-router` still holds it:
+`1103` is a PCI device ID. The device tree resolves it:
 
 ```
-$ su -c 'exec 3< /dev/mhi_1103_00.01.00_pipe_4 && echo OPEN_OK'
-OPEN_OK
+/sys/bus/pci/devices/0000:01:00.0   vendor=0x17cb  device=0x1103
+/sys/bus/mhi/devices/               1103_00.01.00_DIAG, _IPCR, _LOOPBACK
 ```
 
-This is the result that makes an on-device DIAG client viable. We do not have to stop
-`diag-router`, break USB diagnostics, or fight another process for the channel.
+`17cb:1103` is the **WCN6855 Wi-Fi/Bluetooth combo**, attached over PCIe. Its MHI children include
+a DIAG channel, which is what `pipe_4` is. The SM8350's X60 modem is *integrated* and is not on the
+PCIe bus at all, so it was never going to be reachable there.
 
-## What this does and does not settle
+### The experiment that disproved it
 
-Settled:
+Cellular DIAG requests were sent to `pipe_4` and nothing ever came back:
 
-- The channel exists, is reachable on-device, and can be opened concurrently as root.
-- Access requires **root**, not the privileged install. Mode is 0660 `system:system` with SELinux
-  type `vendor_mhi_diag_device`, so an ordinary app — even a privileged one — cannot open it.
+- `DIAG_VERNO_F` (0x00) HDLC-framed as `00 78 f0 7e`, and `DIAG_EXT_BUILD_ID_F` (0x7C) as `7c 93 49 7e`
+- the same two commands unframed, in case HDLC was applied only at the USB boundary
+- with `diag-router` running, and with it `SIGSTOP`ed so it could not consume the reply
+- with `sys.usb.config` left at `mtp,adb`, and switched to `diag,adb` so the bridge was active
+- a passive read with no request at all
 
-Not settled, and each is real work:
+Every combination: **0 bytes**. The writes were accepted by the driver (`0+1 records out, 4 bytes`),
+which is exactly the trap — a write to a live channel belonging to the wrong processor succeeds and
+is silently discarded.
 
-- **Framing.** The kernel `diagchar` driver used to handle HDLC framing and request routing. A raw
-  MHI pipe does not, so the client owns framing, escaping and de-multiplexing itself.
-- **Masks.** The modem emits nothing until told what to emit. `diag_mdlog` exists on the device but
-  needs a mask file we do not have. Log masks have to be built and sent for the specific NR/LTE
-  measurement log codes we want.
-- **Nothing has been read from the pipe yet.** Opening it is not reading it. A bare read blocks,
-  because no request has been sent.
+The CRC-16/X-25 implementation was checked against the standard `"123456789"` → `0x906E` vector
+before use, and the framing independently matches the well-known DIAG version-request frame, so the
+silence was not a framing bug.
+
+## Where the modem actually is: QRTR
+
+The modem speaks **QRTR** (Qualcomm IPC Router), visible as `soc:modem.IPCRTR` on the rpmsg bus.
+There is no `soc:modem.DIAG` channel and no `diagchar` driver on this kernel — which is why no
+character device was ever going to work.
+
+`/vendor/bin/qrtr-ns` runs at boot, and the vendor ships `qrtr-lookup`, which enumerates the
+registered services. As root:
+
+```
+Service Version Instance Node  Port
+   4097     N/A        1    0    34  DIAG service (MODEM:CMD)
+   4097     N/A        3    0    38  DIAG service (MODEM:DCI_CMD)
+      3       1        0    0    86  Network Access Service
+      2       1        0    0    98  Device Management Service
+```
+
+So both paths exist, over QRTR sockets (`AF_QIPCRTR`, family 42):
+
+- **DIAG service 4097** — `MODEM:CMD` and `MODEM:DCI_CMD`. This is how `diag-router` reaches the
+  modem; its dozens of open sockets are QRTR, not character devices.
+- **QMI NAS, service 3** — the Network Access Service.
+
+`qrtr-lookup` returning this at all is proof that a userspace process with root can talk QRTR here.
+
+## Recommended target: QMI NAS, not raw DIAG
+
+QMI NAS is the better first target of the two, for all three needs:
+
+- `QMI_NAS_GET_CELL_LOCATION_INFO` (0x0043) returns serving and neighbour cell lists.
+- `QMI_NAS_SET_SYSTEM_SELECTION_PREFERENCE` (0x0033) carries both RAT preference and band
+  preference TLVs — technology lock *and* band lock in one message.
+
+It is a request/response protocol with typed TLVs, fully documented by **libqmi** (open source), so
+no log masks have to be constructed and no log-packet formats reverse-engineered. Raw DIAG remains
+the richer channel for continuous measurement logging, and is the sensible second step.
+
+## What is still unproven
+
+Nothing has yet been sent over QRTR. The transport is confirmed reachable and the services are
+confirmed registered; the QMI client itself — socket, control point allocation, TLV encoding — is
+not written. Expect that to need a small native component, since `AF_QIPCRTR` is not reachable from
+the Java/Kotlin socket API.
 
 ## Ground rules
 
-Work from the open-source references — QCSuper, SCAT and MobileInsight document the DIAG framing,
-log codes and QMI messages. Do not decompile a competitor's application: it is both a legal problem
+Work from the open-source references: **libqmi** for QMI NAS, and QCSuper / SCAT / MobileInsight
+for DIAG framing and log codes. Do not decompile a competitor's application — both a legal problem
 and unnecessary given those references.
 
 ## Product consequence
 
-These features are root-only and permanently outside a Play Store build. Per the decision of
-2026-09-22 they are capability-gated inside the one app, the same way the privileged install is —
-they appear when the channel is reachable and are silently absent when it is not.
+QRTR access needs **root**, not the privileged install. These features are therefore permanently
+outside a Play Store build, and per the decision of 2026-09-22 they are capability-gated inside the
+one app, appearing only where the channel is reachable.
