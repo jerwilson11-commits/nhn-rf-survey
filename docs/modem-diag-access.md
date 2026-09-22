@@ -85,12 +85,58 @@ It is a request/response protocol with typed TLVs, fully documented by **libqmi*
 no log masks have to be constructed and no log-packet formats reverse-engineered. Raw DIAG remains
 the richer channel for continuous measurement logging, and is the sensible second step.
 
-## What is still unproven
+## Confirmed working: QMI NAS over QRTR
 
-Nothing has yet been sent over QRTR. The transport is confirmed reachable and the services are
-confirmed registered; the QMI client itself — socket, control point allocation, TLV encoding — is
-not written. Expect that to need a small native component, since `AF_QIPCRTR` is not reachable from
-the Java/Kotlin socket API.
+`tools/diag/qmi_probe.c` sends one QMI request over an `AF_QIPCRTR` socket and dumps the response.
+Built with `tools/diag/build_qmi_probe.sh`, run as root. Against NAS at node 0 port 86 with
+`QMI_NAS_GET_CELL_LOCATION_INFO` (0x0043):
+
+```
+bound as node 1 port 18110
+sending 7 bytes: 00 01 00 43 00 00 00
+received 55 bytes from node 0 port 86
+QMI header: type=0x02 (response) txn=1 msg_id=0x0043 len=48
+  TLV 0x02 result: SUCCESS (result=0 error=0)
+  TLV 0x2e: da 0b 06 00
+  TLV 0x2f: 13 00 62 81 f9 00 17 c0 ec 88 01 00 00 00 a1 03 92 ff a4 fc 69 00
+  TLV 0x32: 33 31 30 32 36 30            ("310260")
+```
+
+Over QRTR there is no QMUX header and no QMI_CTL client-id allocation: the socket's port is the
+client, so a request is just the 7-byte QMI header plus TLVs.
+
+### Verified against an independent source
+
+The decode was checked against `dumpsys telephony.registry` read at the same moment, rather than
+taken on plausibility:
+
+| Field | Where in the response | QMI | Android |
+|---|---|---|---|
+| NR ARFCN | TLV 0x2e, u32 LE | 396250 | 396250 |
+| NCI | TLV 0x2f bytes 6..13, u64 LE | 6592184343 | 6592184343 |
+| TAC | TLV 0x2f bytes 3..5, u24 **BE** | 8517888 | 8517888 |
+| PCI | TLV 0x2f bytes 14..15, u16 LE | 929 | 929 |
+| PLMN | TLV 0x32, ASCII | 310260 | T-Mobile 310-260 |
+
+Note TAC is big-endian where the surrounding fields are little-endian.
+
+The three s16 values at bytes 16..21 read −110, −860 and 105 at 0.1-unit scale, consistent with
+RSRQ −11.0 dB, RSRP −86.0 dBm and SNR 10.5 dB. The last of those changed between two consecutive
+runs (105 then 100), which is what a live measurement does. These three are the least certain part
+of the decode and should be confirmed against libqmi's field order before anything reports them.
+
+### What this does not yet give
+
+**No neighbour TLVs were present in this response.** The handset was camped on NR SA with a single
+serving cell, and only serving-cell TLVs came back. Whether neighbours appear in this message under
+other conditions — on LTE, or on NR with measurable neighbours — is the next thing to establish,
+and it is the open question for the neighbour feature. The classic LTE neighbour TLVs (0x13
+intra-frequency, 0x14 inter-frequency) are simply absent here because the radio is not on LTE.
+
+Band and technology lock are also untried: they need `QMI_NAS_SET_SYSTEM_SELECTION_PREFERENCE`
+(0x0033) with encoded request TLVs, where this probe so far only sends empty requests. That is a
+write to modem state and deserves the same care as the technology lock already in the app —
+applied, then verified by observation, never assumed from a SUCCESS result.
 
 ## Ground rules
 
