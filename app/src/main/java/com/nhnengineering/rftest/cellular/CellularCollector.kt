@@ -30,6 +30,8 @@ import com.nhnengineering.rftest.model.NrState
 import com.nhnengineering.rftest.model.Rat
 import com.nhnengineering.rftest.model.SimState
 import com.nhnengineering.rftest.modem.ModemNeighbourSource
+import com.nhnengineering.rftest.modem.ModemNrStream
+import com.nhnengineering.rftest.modem.NrMl1Parser
 import com.nhnengineering.rftest.modem.QmiCellParser
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
@@ -124,6 +126,16 @@ class CellularCollector(context: Context) {
      * it is the only surface on this handset that reports neighbours at all.
      */
     private val modemNeighbours = ModemNeighbourSource(appContext)
+
+    /**
+     * 5G NR neighbours, streamed from the modem's measurement log.
+     *
+     * Separate from [modemNeighbours] because the two are different shapes of thing: LTE
+     * neighbours answer a QMI request, NR neighbours only exist in a log the modem pushes. On NR
+     * SA this is the only surface that reports a neighbour at all -- Android reports none and
+     * QMI carries no cell list.
+     */
+    private val modemNr = ModemNrStream(appContext)
 
     private var started = false
     private var callback: TelephonyCallback? = null
@@ -257,6 +269,10 @@ class CellularCollector(context: Context) {
         // signature|privileged, so this is refused on an ordinary install and granted on a
         // handset where the app sits in /system/priv-app. Refusal is the normal case and is
         // logged at info, not warn -- it is a deployment fact, not a fault.
+        // Subscribing costs a su spawn and a modem log mask, so it starts with collection and
+        // stops with it rather than living for the lifetime of the object.
+        modemNr.start()
+
         try {
             val pcb = PreciseCallback()
             preciseCallback = pcb
@@ -282,6 +298,7 @@ class CellularCollector(context: Context) {
         listenerCells = emptyList()
         neighbourEverSeen = false
         modemNeighbours.stop()
+        modemNr.stop()
     }
 
     // -----------------------------------------------------------------------
@@ -332,6 +349,7 @@ class CellularCollector(context: Context) {
         // sampling path. Whatever the last one produced carries its own age.
         modemNeighbours.refreshIfDue()
         val modemSnapshot = modemNeighbours.snapshot()
+        val nrSnapshot = modemNr.snapshot()
 
         val seenNow = buildList {
             lteCells.filter { it !== servingLte }.forEach { add(neighborFromLte(it)) }
@@ -341,6 +359,7 @@ class CellularCollector(context: Context) {
             // the better measurement, and it is the list the modem is actually working from
             // rather than what the platform chose to pass up.
             modemSnapshot?.cells?.forEach { add(neighborFromModem(it)) }
+            nrSnapshot?.result?.neighbours?.forEach { add(neighborFromModemNr(it)) }
         }
         val neighbors = mergeNeighbors(seenNow)
         if (neighbors.isNotEmpty()) neighbourEverSeen = true
@@ -362,13 +381,16 @@ class CellularCollector(context: Context) {
             permissionLimited = !hasPhoneState,
             carriers = latestCarriers,
             channelConfigAvailable = channelConfigActive,
-            modemNeighboursAvailable = modemSnapshot?.answered == true,
+            // Either surface counts: LTE neighbours answer a QMI request, NR ones arrive in
+            // the modem's log, and on any given sample the radio is on one or the other.
+            modemNeighboursAvailable = modemSnapshot?.answered == true || nrSnapshot != null,
             // A successful read of a technology this build cannot decode is not availability.
             // Saying so here is what stops it being reported downstream as "no neighbours here".
             modemUnavailableReason = modemNeighbours.unavailableReason
-                ?: if (modemSnapshot?.undecodedTechnology == true) {
-                    "The modem answered, but this build decodes LTE neighbour cells only and " +
-                        "the radio is on 5G NR."
+                ?: if (modemSnapshot?.undecodedTechnology == true && nrSnapshot == null) {
+                    modemNr.unavailableReason
+                        ?: "The modem answered for LTE, and no 5G NR measurement log has " +
+                        "arrived yet."
                 } else {
                     null
                 },
@@ -708,6 +730,22 @@ class CellularCollector(context: Context) {
         pci = c.pci,
         channel = c.earfcn,
         band = BandMapping.lteBandFor(c.earfcn)?.band?.let { "B$it" },
+        rsrpDbm = c.rsrpDbm,
+        rsrqDb = c.rsrqDb,
+        source = CellSource.MODEM,
+    )
+
+    /**
+     * A 5G NR neighbour from the modem's measurement log.
+     *
+     * The band comes from the ARFCN rather than being reported directly, and the modem's 128ths
+     * of a dB are rounded by [NrMl1Parser.Cell] on the way out.
+     */
+    private fun neighborFromModemNr(c: NrMl1Parser.Cell) = NeighborCell(
+        rat = "5G NR",
+        pci = c.pci,
+        channel = c.arfcn,
+        band = BandMapping.nrBandLabel(c.arfcn),
         rsrpDbm = c.rsrpDbm,
         rsrqDb = c.rsrqDb,
         source = CellSource.MODEM,

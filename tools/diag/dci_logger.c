@@ -60,6 +60,20 @@ typedef int (*fn_release_client)(int *);
 
 static unsigned long received = 0;
 
+/*
+ * Log masks are global modem state. If this exits without clearing them the
+ * modem keeps logging for a client that is gone, so every exit path has to go
+ * through the cleanup at the end of main -- which means no _exit from a signal
+ * handler, just a flag the loop checks.
+ */
+static volatile sig_atomic_t stop_flag = 0;
+
+static void on_term(int sig)
+{
+    (void)sig;
+    stop_flag = 1;
+}
+
 static void on_log(unsigned char *ptr, int len)
 {
     if (!ptr || len <= 0) return;
@@ -67,7 +81,11 @@ static void on_log(unsigned char *ptr, int len)
     fputs("LOG ", stdout);
     for (int i = 0; i < len; i++) printf("%02x", ptr[i]);
     putchar('\n');
-    fflush(stdout);
+    if (fflush(stdout) != 0) {
+        /* The reader closed the pipe. Stop rather than keep the masks set for
+         * an audience that is no longer there. */
+        stop_flag = 1;
+    }
 }
 
 static void on_event(unsigned char *ptr, int len)
@@ -117,6 +135,17 @@ int main(int argc, char **argv)
     sigemptyset(&sa.sa_mask);
     sigaction(signal_type, &sa, NULL);
 
+    /* Without this a closed pipe kills the process outright and the masks stay
+     * set; with it the write fails, the flag is set and cleanup runs. */
+    sigaction(SIGPIPE, &sa, NULL);
+
+    struct sigaction term;
+    memset(&term, 0, sizeof(term));
+    term.sa_handler = on_term;
+    sigemptyset(&term.sa_mask);
+    sigaction(SIGTERM, &term, NULL);
+    sigaction(SIGINT, &term, NULL);
+
     if (!lsm_init(NULL)) {
         printf("ERR Diag_LSM_Init failed\n");
         return 2;
@@ -150,7 +179,12 @@ int main(int argc, char **argv)
     printf("READY %d code(s)\n", n_codes);
     fflush(stdout);
 
-    sleep(seconds > 0 ? (unsigned)seconds : 10u);
+    /* Polled rather than slept so a stop is noticed promptly. Zero or negative
+     * means run until stopped, which is how the app uses it. */
+    for (long tick = 0; !stop_flag; tick++) {
+        if (seconds > 0 && tick >= (long)seconds * 10) break;
+        usleep(100000);
+    }
 
     /* Masks are global modem state: leaving them set would keep the modem
      * logging for nobody after this exits. */
