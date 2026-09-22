@@ -134,13 +134,20 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     // Keyed on `recording`, so the handover between local collectors and the service happens
     // automatically in both directions.
     DisposableEffect(recording) {
-        if (!recording) {
+        // Captured, not read again inside onDispose. The dispose runs *after* `recording` has
+        // changed, so re-reading it there asks the wrong question: on the handover into
+        // recording the guard saw true and skipped the stop, leaving these collectors running
+        // alongside the service's for the whole session. Harmless while everything was polling;
+        // not harmless once a collector owns a modem log subscription, where the service's copy
+        // then could not stage its helper because this one still had it open.
+        val startedHere = !recording
+        if (startedHere) {
             collector.start()
             locations.start()
             cellular.start()
         }
         onDispose {
-            if (!recording) {
+            if (startedHere) {
                 collector.stop()
                 locations.stop()
                 cellular.stop()

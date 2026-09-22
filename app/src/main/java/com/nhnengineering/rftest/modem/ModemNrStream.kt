@@ -48,8 +48,14 @@ class ModemNrStream(context: Context) {
          *
          * The identical binary run from /data/local/tmp loads it fine, so that directory is
          * reached through a more permissive namespace. Staging it there is the whole fix.
+         *
+         * The size is part of the name for two reasons: a new build never runs behind an old
+         * staged copy, and the copy can be skipped when a good one is already there -- which
+         * matters because copying over a *running* binary fails with "Text file busy", and a
+         * second collector starting while the first still streams is an ordinary thing.
          */
-        private const val STAGED_PATH = "/data/local/tmp/nhn_dcilogger"
+        private fun stagedPath(helper: java.io.File) =
+            "/data/local/tmp/nhn_dcilogger_${helper.length()}"
 
         /** NR ML1 Measurement Database Update. */
         private const val LOG_CODE_NR_ML1 = "b97f"
@@ -129,18 +135,25 @@ class ModemNrStream(context: Context) {
     }
 
     private fun runWindow(helper: File) {
-        // Staged on every window rather than once, so a tmp wipe or an app update heals
-        // itself without needing to track whether the copy is still there and still current.
-        val command = "cp ${helper.absolutePath} $STAGED_PATH" +
-            " && chmod 755 $STAGED_PATH" +
-            " && $STAGED_PATH $WINDOW_SECONDS $LOG_CODE_NR_ML1"
+        // Separated by ';' not '&&' on purpose. The copy fails with "Text file busy" whenever
+        // another instance is already running this exact binary, and that is a reason to skip
+        // the copy, not to skip the run: a busy file means a good copy is already in place. A
+        // wiped tmp still heals, because then the copy simply succeeds.
+        val staged = stagedPath(helper)
+        val command = "cp -f ${helper.absolutePath} $staged 2>/dev/null" +
+            " ; chmod 755 $staged 2>/dev/null" +
+            " ; $staged $WINDOW_SECONDS $LOG_CODE_NR_ML1"
+        Log.i(TAG, "window starting: $command")
         val p = ProcessBuilder("su", "-c", command)
             .redirectErrorStream(true).start()
         process = p
+        var lines = 0
+        var stored = 0
         try {
             p.inputStream.bufferedReader().use { reader ->
                 while (running.get()) {
                     val line = reader.readLine() ?: break
+                    lines++
                     when {
                         line.startsWith("LOG ") -> {
                             val parsed = NrMl1Parser.parseLogLine(line)
@@ -148,6 +161,11 @@ class ModemNrStream(context: Context) {
                                 latest = parsed
                                 latestAtElapsed = SystemClock.elapsedRealtime()
                                 lastError = null
+                                stored++
+                                if (stored == 1) {
+                                    Log.i(TAG, "stored first packet: serving=${parsed.servingPci} " +
+                                        "neighbours=${parsed.neighbours.map { it.pci }}")
+                                }
                             } else if (parsed != null) {
                                 // A packet that failed its own integrity check. Worth knowing,
                                 // but not worth replacing a good reading with.
@@ -160,6 +178,7 @@ class ModemNrStream(context: Context) {
                 }
             }
         } finally {
+            Log.i(TAG, "window ended: $lines line(s), $stored stored, lastError=$lastError")
             runCatching { p.destroy() }
             process = null
         }

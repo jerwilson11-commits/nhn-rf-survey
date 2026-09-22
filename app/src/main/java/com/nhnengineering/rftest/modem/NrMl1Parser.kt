@@ -55,6 +55,26 @@ object NrMl1Parser {
     private const val OFF_SERVING_PCI = 38
 
     /**
+     * The bottom of the SS-RSRP reporting range, in the modem's 128ths of a dB.
+     *
+     * 3GPP TS 38.133 reports SS-RSRP over -156 dBm to -31 dBm, so -156 is not a level, it is the
+     * floor: "at or below anything this scale can express". The modem lists cells it has detected
+     * but has no usable measurement for at exactly this value.
+     *
+     * Observed on 2026-09-22: a session recorded a neighbour at -156 dBm on every sample.
+     * Published as a measurement that is nonsense -- below the thermal noise floor -- and worse
+     * than nonsense in a report, because a cell that cannot be measured would be counted as a
+     * neighbour and would move an overlap figure.
+     *
+     * The comparison is on the rounded dB rather than the raw value, because the raw value is
+     * not a single constant. A capture of 46 multi-cell packets put every real reading between
+     * -87 and -104 dB and the unmeasured one at raw -19964, which is -155.969 -- four counts off
+     * an exact -156 x 128. An equality test on the raw floor missed it; rounding to the
+     * reporting floor catches it and anything else that lands there.
+     */
+    private const val RSRP_FLOOR_DBM = -156
+
+    /**
      * Signal values arrive in 128ths of a dB. The app's models carry whole dB, so [rsrpDbm]
      * rounds half away from zero; [rsrp128] keeps the original for anything that wants it.
      */
@@ -76,6 +96,13 @@ object NrMl1Parser {
         val servingPci: Int? = null,
         val serving: Cell? = null,
         val neighbours: List<Cell> = emptyList(),
+        /**
+         * Cells the modem listed but had no usable level for.
+         *
+         * Not an error and not a neighbour. Reported so that "one cell in the list" and "one
+         * cell in the list plus two it could see but not measure" are distinguishable.
+         */
+        val unmeasuredCells: Int = 0,
         val notes: List<String> = emptyList(),
     ) {
         val allCells: List<Cell> get() = listOfNotNull(serving) + neighbours
@@ -122,6 +149,7 @@ object NrMl1Parser {
         }
 
         var serving: Cell? = null
+        var unmeasured = 0
         val neighbours = mutableListOf<Cell>()
         for (i in 0 until count) {
             val r = RECORDS_AT + i * RECORD_BYTES
@@ -133,8 +161,18 @@ object NrMl1Parser {
                 rsrq128 = s32(packet, r + 12),
                 serving = false,
             )
+            // Detected but not measurable. Kept out of the cell lists entirely rather than
+            // carried with a floor value, because everything downstream treats a cell in the
+            // list as one that was measured.
+            if (cell.rsrpDbm <= RSRP_FLOOR_DBM) {
+                unmeasured++
+                continue
+            }
             if (cell.pci == servingPci && serving == null) serving = cell.copy(serving = true)
             else neighbours += cell
+        }
+        if (unmeasured > 0) {
+            notes += "$unmeasured cell(s) were listed with no usable level and are not reported."
         }
         if (serving == null && count > 0) {
             notes += "The serving PCI $servingPci was not among the $count measured cell(s)."
@@ -146,6 +184,7 @@ object NrMl1Parser {
             servingPci = servingPci,
             serving = serving,
             neighbours = neighbours,
+            unmeasuredCells = unmeasured,
             notes = notes,
         )
     }

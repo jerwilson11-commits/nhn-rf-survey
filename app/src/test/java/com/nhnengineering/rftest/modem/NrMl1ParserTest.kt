@@ -112,6 +112,67 @@ class NrMl1ParserTest {
         assertEquals(972, b.serving?.beam)
     }
 
+    // ---- the reporting floor is not a level ---------------------------------
+
+    @Test
+    fun `a cell at the RSRP floor is not reported as a neighbour`() {
+        // What a session on 2026-09-22 actually recorded: PCI 531 listed as a neighbour at
+        // -156 dBm on all 35 samples. TS 38.133 reports SS-RSRP over -156..-31 dBm, so -156 is
+        // the bottom of the scale rather than a reading -- below the thermal noise floor, and
+        // arriving in a report it would be a neighbour that moved an overlap figure without
+        // ever having been measured.
+        val b = hex(capture1)
+        val floor = (-156 * 128)
+        for (k in 0 until 4) b[64 + 60 + 8 + k] = ((floor shr (8 * k)) and 0xFF).toByte()
+
+        val r = NrMl1Parser.parse(b)
+
+        assertTrue(r.looksValid)
+        assertEquals(0, r.neighbours.size)
+        assertEquals(1, r.unmeasuredCells)
+        assertTrue(r.notes.any { it.contains("no usable level") })
+    }
+
+    @Test
+    fun `the serving cell is dropped too if it has no usable level`() {
+        val b = hex(capture1)
+        val floor = (-156 * 128)
+        for (k in 0 until 4) b[64 + 8 + k] = ((floor shr (8 * k)) and 0xFF).toByte()
+
+        val r = NrMl1Parser.parse(b)
+
+        assertNull(r.serving)
+        assertEquals(1, r.unmeasuredCells)
+    }
+
+    @Test
+    fun `the real unmeasured value from the capture is caught`() {
+        // -19964 is what the modem actually emitted for a listed-but-unmeasured cell: -155.969,
+        // four counts off an exact -156 x 128. A test against the exact constant passed while
+        // the device still reported -156 dBm, which is why the rule rounds.
+        val b = hex(capture1)
+        for (k in 0 until 4) b[64 + 60 + 8 + k] = ((-19964 shr (8 * k)) and 0xFF).toByte()
+
+        val r = NrMl1Parser.parse(b)
+
+        assertEquals(0, r.neighbours.size)
+        assertEquals(1, r.unmeasuredCells)
+    }
+
+    @Test
+    fun `a level above the floor is still a measurement`() {
+        // -155 dB is unusable in practice but it is a reading, and the parser's job is not to
+        // decide what is worth having.
+        val b = hex(capture1)
+        val above = -155 * 128
+        for (k in 0 until 4) b[64 + 60 + 8 + k] = ((above shr (8 * k)) and 0xFF).toByte()
+
+        val r = NrMl1Parser.parse(b)
+
+        assertEquals(1, r.neighbours.size)
+        assertEquals(0, r.unmeasuredCells)
+    }
+
     // ---- refusing to invent -------------------------------------------------
 
     @Test
