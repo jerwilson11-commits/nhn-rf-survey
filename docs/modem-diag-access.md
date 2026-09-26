@@ -321,6 +321,32 @@ mask is a possibility, not a finding.
 Practical: the cellular interface number changes when the data network is re-created (rmnet_data1,
 then rmnet_data2 after a mode/band write), so a load test must look it up each time.
 
+## The handset's own 5G mode setting (2026-09-26)
+
+Developer options > Networking > "5G network mode" (Automatic / NSA / NSA + SA) is stored in
+`Settings.System user_nr_mode`. Observed by cycling it while polling the QMI masks and the radio:
+
+| Selection | user_nr_mode | Radio |
+|---|---|---|
+| Automatic | 3 | NR standalone |
+| NSA | 1 | LTE (NSA) within about 3 s |
+| NSA + SA | 0 | NR standalone |
+
+Choosing an option did **not** change the QMI mode preference (stayed 0x5F) or any band mask, so
+OnePlus implements it on a path this project has not found. Wi-Fi off/on changed neither the SA mask
+nor the radio, so the `disable_sa_when_wfc = true` preference in the phone app is not what holds
+this handset off standalone.
+
+Earlier the same day the SA mask read `[66]`, then `[]`, without this project writing it, and
+the menu options had no effect while it was empty (the phone stayed NSA in all three). It did not
+recur once the full mask was restored, in any of the observations above, so the writer is
+unidentified. One candidate, not established: OnePlus's "smart 5G" policy
+(`Settings.System oplus.radio.smart5g_sa_cfg`: `sa_pref_prohibit_t0=120`,
+`sa_pref_prohibit_stage_num=5`, `irat_pingpong_restrain=true`) suppresses SA preference in growing
+stages after LTE/NR ping-pong, which repeated mode and mask changes during testing could provoke.
+If the phone sticks on NSA, read the SA mask first (`qmilock ... 0034`, TLV 0x2c): empty means
+something wrote it, not that SA is unavailable.
+
 ## Ground rules
 
 Work from the open-source references: **libqmi** for QMI NAS, and QCSuper / SCAT / MobileInsight
