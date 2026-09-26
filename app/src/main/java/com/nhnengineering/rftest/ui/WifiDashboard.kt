@@ -111,6 +111,7 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val locations = remember { LocationCollector(context) }
     val cellular = remember { CellularCollector(context) }
     val techLock = remember { TechnologyLockController(context) }
+    val bandLockController = remember { BandLockController(context) }
     var localWifi by remember { mutableStateOf<WifiSample?>(null) }
     var localFix by remember { mutableStateOf<GeoPoint?>(null) }
     var localCell by remember { mutableStateOf<CellularSample?>(null) }
@@ -132,7 +133,12 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
         techLockBusy = true
         techLockStatus = null
         scope.launch {
-            if (tech == null) {
+            if (tech?.excludesStandalone == true && bandLockController.lockedNrSa.isNotEmpty()) {
+                // NSA-only empties the very mask an NR band lock has narrowed; two baselines for
+                // one mask would restore each other wrongly, so refuse rather than guess.
+                techLockStatus = "Release the 5G band lock first: NSA-only empties the same " +
+                    "standalone band mask."
+            } else if (tech == null) {
                 val outcome = withContext(Dispatchers.IO) { techLock.release() }
                 techLockStatus = outcome.message
                 if (outcome.applied) RecordingState.ratLock.value = null
@@ -157,7 +163,6 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     }
 
     // Band lock: same availability-check-off-thread pattern as the technology lock above.
-    val bandLockController = remember { BandLockController(context) }
     var bandUi by remember { mutableStateOf(BandLockUi()) }
     LaunchedEffect(Unit) {
         val supported = withContext(Dispatchers.IO) { bandLockController.supported() }
@@ -177,6 +182,14 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val onBandApply: (Set<Int>, Set<Int>) -> Unit = { lte, nr ->
         bandUi = bandUi.copy(busy = true, status = null)
         scope.launch {
+            if (nr.isNotEmpty() && techLock.holdsSaMask) {
+                bandUi = bandUi.copy(
+                    busy = false,
+                    status = "Release NSA-only first: it has emptied the standalone band mask, so " +
+                        "a 5G band lock has nothing to narrow.",
+                )
+                return@launch
+            }
             val requested = withContext(Dispatchers.IO) { bandLockController.lock(lte, nr) }
             bandUi = bandUi.copy(status = requested.message)
             if (requested.applied) {

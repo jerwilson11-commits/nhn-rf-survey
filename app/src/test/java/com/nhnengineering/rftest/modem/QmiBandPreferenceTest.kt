@@ -164,6 +164,18 @@ class QmiBandPreferenceTest {
     }
 
     @Test
+    fun `the NSA-only write is built exactly as driven by hand`() {
+        // 11:5f00 with an all-zero 2f: and the NSA mask as read: accepted 2026-09-26, after which
+        // the carriers under load were LTE primary + NR secondary. Restoring the captured SA mask
+        // brought SA n25 back.
+        val nsa = QmiSelectionPreference.parseGet(capturedGet).bands.nrNsa!!
+        assertEquals(
+            listOf("11:5f00", "2f:" + "00".repeat(64), "30:$nsaBaseline", "17:00"),
+            QmiSelectionPreference.nsaOnlyArgs(0x5F, nsa),
+        )
+    }
+
+    @Test
     fun `an empty NR selection is refused`() {
         assertThrows(IllegalArgumentException::class.java) {
             QmiSelectionPreference.setNrSaBandArgs(0x5F, emptySet(), List(8) { 0L })

@@ -195,13 +195,54 @@ class TechnologyLockTest {
     }
 
     @Test
-    fun `exactly the two technologies verified on this handset are offered`() {
-        // NSA-only needs a second lever -- the NR5G SA Band Preference TLV -- that has not been
-        // tried yet (see the class doc). Until it is verified, offering it as a Technology here
-        // would be a claim this project has specifically not earned.
+    fun `exactly the technologies verified on this handset are offered`() {
+        // Adding to this list is a claim about what the handset was watched doing. SA only and
+        // LTE only were verified 2026-09-22; NSA only 2026-09-26 (empty SA mask + mode 0x5F,
+        // LTE primary + NR secondary carriers observed under load). Anything else stays out
+        // until it has been watched the same way.
         assertEquals(
-            setOf("5G SA only", "LTE only"),
+            setOf("5G SA only", "5G NSA only", "LTE only"),
             TechnologyLock.Technology.entries.map { it.label }.toSet(),
         )
+    }
+
+    @Test
+    fun `NSA only needs the SA band lever, the other two do not`() {
+        assertTrue(TechnologyLock.Technology.NSA_ONLY.excludesStandalone)
+        assertFalse(TechnologyLock.Technology.NR_ONLY.excludesStandalone)
+        assertFalse(TechnologyLock.Technology.LTE_ONLY.excludesStandalone)
+    }
+
+    @Test
+    fun `NSA only keeps both LTE and NR in the mode preference`() {
+        // The anchor is LTE and the data is NR: dropping either bit would not be NSA.
+        assertEquals(nr or lte, TechnologyLock.Technology.NSA_ONLY.modePref)
+        assertFalse(TechnologyLock.Technology.NSA_ONLY.forcesStandalone)
+    }
+
+    @Test
+    fun `NSA only is written as the baseline mode, not a narrowed one`() {
+        // Verified on the handset as mode 0x5F + empty SA mask. Writing 0x50 instead would be an
+        // untested change to 3G/2G as a side effect.
+        assertEquals(0x5F, TechnologyLock.nsaOnlyWriteMode(0x5F))
+        assertEquals(0x5F or 0x40 or 0x10, TechnologyLock.nsaOnlyWriteMode(0x5F))
+    }
+
+    @Test
+    fun `NSA only cannot be applied where the baseline lacks LTE or NR`() {
+        assertEquals(null, TechnologyLock.nsaOnlyWriteMode(0x10))
+        assertEquals(null, TechnologyLock.nsaOnlyWriteMode(0x40))
+        assertEquals(null, TechnologyLock.nsaOnlyWriteMode(0))
+    }
+
+    @Test
+    fun `NSA only holds only with LTE and NR present and the SA mask empty`() {
+        assertTrue(TechnologyLock.nsaOnlyHeld(0x5F, emptySet()))
+        assertTrue(TechnologyLock.nsaOnlyHeld(0x50, emptySet()))
+        // SA bands still allowed: standalone is still possible.
+        assertFalse(TechnologyLock.nsaOnlyHeld(0x5F, setOf(25)))
+        // Mode narrowed to one technology: not NSA whatever the mask says.
+        assertFalse(TechnologyLock.nsaOnlyHeld(0x10, emptySet()))
+        assertFalse(TechnologyLock.nsaOnlyHeld(0x40, emptySet()))
     }
 }

@@ -35,10 +35,9 @@ package com.nhnengineering.rftest.cellular
  * The one indirect lever worth knowing: NSA is not a technology of its own, it is NR anchored on
  * LTE. Removing LTE from the mask therefore removes NSA as a possibility, so a handset that keeps
  * NR service under [Technology.NR_ONLY] is necessarily on standalone NR. See [forcesStandalone].
- * Forcing the opposite -- NSA specifically, never SA -- needs a second lever this class does not
- * yet carry: the separate NR5G SA Band Preference TLV, zeroed so standalone NR has no band left
- * to camp on. That is a real mechanism found in the QMI service definition, but as of 2026-09-22
- * it is untried, so it is not offered as a [Technology] here.
+ * Forcing the opposite -- NSA specifically, never SA -- needs a second lever: the NR5G SA Band
+ * Preference TLV, emptied so standalone NR has no band left to camp on. Verified on 2026-09-26
+ * and offered as [Technology.NSA_ONLY]; [TechnologyLockController] writes it and restores it.
  *
  * ## Why it cannot add capability
  *
@@ -103,10 +102,27 @@ object TechnologyLock {
             RAT_LTE,
             "5G will not be used.",
         ),
+
+        /**
+         * Both bits stay in the mode preference -- LTE is the anchor, NR the data -- and
+         * standalone is removed by emptying the NR5G SA band mask, which is what
+         * [excludesStandalone] tells the controller to do. Verified 2026-09-26: the phone left SA
+         * n25 for an LTE anchor, and under load the carriers were LTE primary + NR secondary.
+         * Idle it looks like plain LTE, since the NR leg exists only while data flows.
+         */
+        NSA_ONLY(
+            "5G NSA only",
+            RAT_LTE or RAT_NR,
+            "Removes standalone NR. 5G data is used only alongside an LTE anchor, and only while " +
+                "traffic is flowing; idle, the phone looks like plain LTE.",
+        ),
         ;
 
         /** True where holding this technology necessarily means standalone NR. */
         val forcesStandalone: Boolean get() = forcesStandalone(modePref)
+
+        /** True where the mode preference alone is not enough and the SA band mask must be emptied. */
+        val excludesStandalone: Boolean get() = this == NSA_ONLY
     }
 
     /**
@@ -175,6 +191,28 @@ object TechnologyLock {
      */
     fun lockHeld(requested: Int, observed: Int): Boolean =
         observed != 0 && observed and requested.inv() == 0
+
+    /**
+     * The mode preference to write for [Technology.NSA_ONLY]: the baseline, unchanged.
+     *
+     * That is exactly what was verified (mode 0x5F with an emptied SA mask); narrowing it to
+     * LTE+NR alone would be an untested side effect on 3G/2G. Null where the baseline lacks LTE or
+     * NR, since NSA cannot exist there and writing it would only add bits the handset was not
+     * allowed.
+     */
+    fun nsaOnlyWriteMode(baseline: Int): Int? {
+        val need = Technology.NSA_ONLY.modePref
+        return if (baseline and need == need) baseline else null
+    }
+
+    /**
+     * Whether NSA-only is actually in force: LTE and NR both permitted, and no SA band left.
+     * The mode alone cannot show it -- with the SA mask intact the same mode allows standalone.
+     */
+    fun nsaOnlyHeld(mode: Int, saBands: Set<Int>): Boolean {
+        val need = Technology.NSA_ONLY.modePref
+        return mode and need == need && saBands.isEmpty()
+    }
 
     /**
      * The one-word difference between an operator's self-report and this app's own claim.

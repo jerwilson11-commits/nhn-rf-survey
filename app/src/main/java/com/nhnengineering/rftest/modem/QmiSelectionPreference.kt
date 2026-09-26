@@ -205,6 +205,14 @@ object QmiSelectionPreference {
         return restoreNrSaArgs(currentModePref, maskOf(saBands, NR_BAND_WORDS), nsaWords)
     }
 
+    /**
+     * Argument list for NSA-only: [modePref] (LTE + NR) with the SA mask emptied and the NSA mask
+     * written back as read. Hand-verified 2026-09-26; unlike an empty LTE base mask, an empty SA
+     * mask is accepted.
+     */
+    fun nsaOnlyArgs(modePref: Int, nsaWords: List<Long>): List<String> =
+        restoreNrSaArgs(modePref, List(NR_BAND_WORDS) { 0L }, nsaWords)
+
     /** Writes the SA mask exactly as given, with the mode preference and NSA mask it needs. */
     fun restoreNrSaArgs(currentModePref: Int, saWords: List<Long>, nsaWords: List<Long>): List<String> {
         require(saWords.size == NR_BAND_WORDS && nsaWords.size == NR_BAND_WORDS) {

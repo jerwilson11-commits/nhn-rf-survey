@@ -199,10 +199,9 @@ fun BandLockEntry(
  *
  * Unlike [BandLockEntry] beside it, this genuinely performs and verifies the lock over a direct
  * modem interface, rather than only recording what the operator says was done in Settings. See
- * `TechnologyLockController` for the mechanism and `TechnologyLock` for why the four names an
- * engineer might expect (5G SA only / 5G NSA only / LTE only / Automatic) are, for now, three:
- * NSA-only needs a second, still-unverified QMI write and is deliberately withheld until it has
- * been watched working.
+ * `TechnologyLockController` for the mechanism. The four names an engineer expects -- 5G SA only /
+ * 5G NSA only / LTE only / Automatic -- are all real; NSA-only is the one that also empties the SA
+ * band mask, verified by hand on 2026-09-26.
  *
  * Root-only, like every other modem-level feature in this app, so [unavailableReason] hides the
  * whole control on a handset that is privileged-installed but not rooted rather than showing a
@@ -256,34 +255,38 @@ fun TechnologyLockControl(
 
         val options = listOf(
             "5G SA only" to com.nhnengineering.rftest.cellular.TechnologyLock.Technology.NR_ONLY,
+            "5G NSA only" to com.nhnengineering.rftest.cellular.TechnologyLock.Technology.NSA_ONLY,
             "LTE only" to com.nhnengineering.rftest.cellular.TechnologyLock.Technology.LTE_ONLY,
             "Automatic" to null,
         )
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            options.forEach { (label, tech) ->
-                // activeLabel carries the verified string TechnologyLockController records
-                // (label plus a suffix marking it confirmed, not the bare button text), so the
-                // match has to go through the same helper that produced it.
-                val isCurrent = if (tech == null) {
-                    activeLabel == null
-                } else {
-                    activeLabel == com.nhnengineering.rftest.cellular.TechnologyLock.verifiedLabel(tech)
-                }
-                if (isCurrent) {
-                    FilledTonalButton(
-                        onClick = {},
-                        enabled = false,
-                        modifier = Modifier.weight(1f),
-                    ) { Text(label) }
-                } else {
-                    OutlinedButton(
-                        onClick = { onSelect(tech) },
-                        enabled = !busy,
-                        modifier = Modifier.weight(1f),
-                    ) { Text(label) }
+        // Two per row: four across leaves "5G NSA only" too narrow to read on a phone.
+        options.chunked(2).forEach { pair ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                pair.forEach { (label, tech) ->
+                    // activeLabel carries the verified string TechnologyLockController records
+                    // (label plus a suffix marking it confirmed, not the bare button text), so the
+                    // match has to go through the same helper that produced it.
+                    val isCurrent = if (tech == null) {
+                        activeLabel == null
+                    } else {
+                        activeLabel == com.nhnengineering.rftest.cellular.TechnologyLock.verifiedLabel(tech)
+                    }
+                    if (isCurrent) {
+                        FilledTonalButton(
+                            onClick = {},
+                            enabled = false,
+                            modifier = Modifier.weight(1f),
+                        ) { Text(label) }
+                    } else {
+                        OutlinedButton(
+                            onClick = { onSelect(tech) },
+                            enabled = !busy,
+                            modifier = Modifier.weight(1f),
+                        ) { Text(label) }
+                    }
                 }
             }
         }

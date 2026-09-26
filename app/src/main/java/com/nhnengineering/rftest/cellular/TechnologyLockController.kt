@@ -33,6 +33,10 @@ class TechnologyLockController(context: Context) {
         const val PREFS = "technology_lock"
         const val KEY_BASELINE = "baseline_mode_pref"
         const val KEY_TECHNOLOGY = "technology"
+        // NR band masks as they were before NSA-only emptied the SA one. Present only while
+        // NSA-only is (or may still be) in force.
+        const val KEY_SA = "baseline_nr_sa"
+        const val KEY_NSA = "baseline_nr_nsa"
     }
 
     private val client = QmiNasClient(context)
@@ -44,6 +48,16 @@ class TechnologyLockController(context: Context) {
         set(v) = prefs.edit().apply {
             if (v == null) remove(KEY_BASELINE) else putInt(KEY_BASELINE, v)
         }.apply()
+
+    private fun putWords(key: String, v: List<Long>?) = prefs.edit().apply {
+        if (v == null) remove(key) else putString(key, v.joinToString(","))
+    }.apply()
+
+    private fun getWords(key: String): List<Long>? =
+        prefs.getString(key, null)?.split(',')?.mapNotNull { it.toLongOrNull() }?.takeIf { it.size == 8 }
+
+    /** True while NSA-only has emptied the SA band mask and not yet given it back. */
+    val holdsSaMask: Boolean get() = getWords(KEY_SA) != null
 
     private var savedTechnology: String?
         get() = prefs.getString(KEY_TECHNOLOGY, null)
@@ -105,18 +119,65 @@ class TechnologyLockController(context: Context) {
      * restores to what the handset had before any of this started rather than to the first lock.
      */
     fun lock(technology: TechnologyLock.Technology): Outcome {
-        if (savedBaseline == null) {
-            val baseline = currentMask()
-                ?: return Outcome(
-                    false,
-                    "Could not read the current setting, so it could not be safely restored " +
-                        "later. Nothing was changed.",
-                )
-            savedBaseline = baseline
+        val snap = when (val r = client.read()) {
+            is QmiNasClient.Snapshot.Failed -> return Outcome(
+                false,
+                "Could not read the current setting, so it could not be safely restored " +
+                    "later. Nothing was changed.",
+            )
+            is QmiNasClient.Snapshot.Ok -> r.result
+        }
+        val currentMode = snap.modePref!!
+
+        // A failure before anything was written leaves the modem untouched, so state saved a
+        // moment ago would be a phantom "restore pending". Once something is held it must stay.
+        val heldBefore = savedTechnology != null
+        fun fail(message: String): Outcome {
+            if (!heldBefore) {
+                savedBaseline = null
+                putWords(KEY_SA, null)
+                putWords(KEY_NSA, null)
+            }
+            return Outcome(false, message)
         }
 
-        client.write(QmiSelectionPreference.setModePrefArgs(technology.modePref))?.let {
-            return Outcome(false, it)
+        if (savedBaseline == null) savedBaseline = currentMode
+        val baseline = savedBaseline!!
+
+        if (technology.excludesStandalone) {
+            val writeMode = TechnologyLock.nsaOnlyWriteMode(baseline)
+                ?: return fail(
+                    "This handset does not allow both LTE and 5G at baseline, so NSA cannot " +
+                        "exist here. Nothing was changed.",
+                )
+            val sa = getWords(KEY_SA) ?: snap.bands.nrSa
+            val nsa = getWords(KEY_NSA) ?: snap.bands.nrNsa
+            if (sa == null || nsa == null) {
+                return fail(
+                    "The modem did not report its 5G band masks, so NSA-only could not be safely " +
+                        "undone. Nothing was changed.",
+                )
+            }
+            // Saved before the write: the masks are only recoverable from here if it goes wrong.
+            putWords(KEY_SA, sa)
+            putWords(KEY_NSA, nsa)
+            client.write(QmiSelectionPreference.nsaOnlyArgs(writeMode, nsa))?.let { return fail(it) }
+        } else {
+            // Leaving NSA-only: the SA mask has to come back *before* the mode narrows, or
+            // "5G SA only" would find no SA band to camp on. Written under the mode already in
+            // force, the combination that was verified.
+            val sa = getWords(KEY_SA)
+            val nsa = getWords(KEY_NSA)
+            if (sa != null && nsa != null) {
+                client.write(QmiSelectionPreference.restoreNrSaArgs(currentMode, sa, nsa))?.let {
+                    return Outcome(false, "Could not give back the standalone bands: $it")
+                }
+                putWords(KEY_SA, null)
+                putWords(KEY_NSA, null)
+            }
+            client.write(QmiSelectionPreference.setModePrefArgs(technology.modePref))?.let {
+                return fail(it)
+            }
         }
 
         savedTechnology = technology.name
@@ -143,6 +204,7 @@ class TechnologyLockController(context: Context) {
     fun verify(): Outcome {
         val technology = activeTechnology
             ?: return Outcome(true, "Nothing is being held.", currentMask())
+        if (technology.excludesStandalone) return verifyNsaOnly(technology)
         val observed = currentMask()
             ?: return Outcome(false, "Could not read the current allowance to confirm the lock.")
 
@@ -166,6 +228,41 @@ class TechnologyLockController(context: Context) {
     }
 
     /**
+     * NSA-only is two settings, so both are read back: the mode alone cannot tell it from the
+     * baseline, since the same mode allows standalone while the SA mask is intact.
+     *
+     * This confirms what the modem is allowed to do. It cannot show an NR carrier, because in
+     * NSA that leg exists only while data flows -- idle, the phone looks like plain LTE. The
+     * session's own record of technologies is where the behaviour shows.
+     */
+    private fun verifyNsaOnly(technology: TechnologyLock.Technology): Outcome {
+        val snap = when (val r = client.read()) {
+            is QmiNasClient.Snapshot.Failed -> return Outcome(false, "Could not read the modem to confirm the lock.")
+            is QmiNasClient.Snapshot.Ok -> r.result
+        }
+        val mode = snap.modePref!!
+        val sa = snap.bands.nrSa?.let { QmiSelectionPreference.bandsOf(it) }
+            ?: return Outcome(false, "The modem did not report its standalone band mask, so the lock could not be confirmed.")
+        return if (TechnologyLock.nsaOnlyHeld(mode, sa)) {
+            Outcome(
+                applied = true,
+                message = "Holding ${technology.label}. Standalone is excluded (no SA band allowed); " +
+                    "5G data appears only while traffic is flowing.",
+                effectiveMask = mode,
+            )
+        } else {
+            Log.w(TAG, "NSA-only did not hold: mode 0x%04x, SA bands $sa".format(mode))
+            Outcome(
+                applied = false,
+                message = "This handset did not keep NSA-only. Mode is " +
+                    "${TechnologyLock.describeMask(mode)} with ${sa.size} standalone bands still allowed. " +
+                    "Measurements will not be constrained to NSA.",
+                effectiveMask = mode,
+            )
+        }
+    }
+
+    /**
      * Restores the allowance captured before the first lock.
      *
      * Succeeds and clears its own state when there was nothing to restore, so a caller can use
@@ -174,7 +271,16 @@ class TechnologyLockController(context: Context) {
     fun release(): Outcome {
         val baseline = savedBaseline
             ?: return Outcome(true, "Nothing was being held.")
-        client.write(QmiSelectionPreference.setModePrefArgs(baseline))?.let {
+        // With NSA-only held the SA mask goes back too, together with the baseline mode in the one
+        // write the modem accepts for NR masks.
+        val sa = getWords(KEY_SA)
+        val nsa = getWords(KEY_NSA)
+        val args = if (sa != null && nsa != null) {
+            QmiSelectionPreference.restoreNrSaArgs(baseline, sa, nsa)
+        } else {
+            QmiSelectionPreference.setModePrefArgs(baseline)
+        }
+        client.write(args)?.let {
             return Outcome(
                 false,
                 "Could not release the lock: $it It clears itself on Airplane Mode or a restart.",
@@ -183,6 +289,8 @@ class TechnologyLockController(context: Context) {
 
         savedBaseline = null
         savedTechnology = null
+        putWords(KEY_SA, null)
+        putWords(KEY_NSA, null)
         // Reports what was written, not a read taken straight afterwards: observed on 2026-09-26
         // that a GET issued immediately after a SET still returned the old value, which put
         // "Back to LTE" on screen after a restore to 0x5F.

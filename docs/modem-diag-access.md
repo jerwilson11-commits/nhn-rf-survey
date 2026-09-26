@@ -227,6 +227,19 @@ camped on B66 during a walk).
 | `2f:` (n41 only) alone | Error 17 (MissingArgument). |
 | `2f:` + `30:` (NSA as read) + `17:00`, no `11:` | Error 17 (MissingArgument). |
 | `11:5f00` + `2f:` (n41 only) + `30:` (NSA as read) + `17:00` | **Accepted.** SA mask read back as n41 only; the phone left SA n25 for LTE (n41 is not reachable at the test desk). Restoring the SA mask brought NR back. |
+| `11:5f00` + `2f:` **all zero** + `30:` (NSA as read) + `17:00` | **Accepted** (unlike the all-zero LTE mask). SA mask read back empty. The phone left SA n25 for LTE B2. Under a 25 MB download the carrier list was LTE PrimaryServing + NR SecondaryServing (EN-DC = NSA); the NR carrier vanished when traffic stopped. Restoring the SA mask brought SA n25 back. |
+
+**5G NSA only (hand-verified 2026-09-26):** mode `0x5F` with an empty SA mask leaves NR reachable
+only through an LTE anchor. In idle it looks like plain LTE with a 5G indicator; the NR leg exists
+only while data flows, so verification must be made under traffic (physical channel configs) or by
+reading the SA mask back, not from an idle snapshot.
+
+In the app as "5G NSA only" (`TechnologyLock.Technology.NSA_ONLY`), written as the baseline mode
+with the SA mask emptied. Exercised through the UI on 2026-09-26: masks read back as expected;
+under a 25 MB download the carriers were LTE primary + NR secondary; switching straight to "5G SA
+only" gave the SA mask back before narrowing the mode and the phone returned to SA n25; Automatic
+restored mode, SA and NSA masks exactly. NSA-only and an NR band lock both need the SA mask, so the
+UI refuses to hold both at once rather than let two baselines restore each other wrongly.
 
 So NR SA band lock needs Mode Preference (0x11) in the same request. It must be the value already
 in force, or the write changes technology as a side effect.
