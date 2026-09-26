@@ -10,6 +10,7 @@ import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.os.Build
+import com.nhnengineering.rftest.cellular.BandLock
 import com.nhnengineering.rftest.cellular.TechnologyLock
 import com.nhnengineering.rftest.session.FloorplanStore
 import com.nhnengineering.rftest.session.SessionSummary
@@ -1374,12 +1375,23 @@ object PdfReportGenerator {
                 else ->
                     findings.joinToString(" ") { "${it.headline}: ${it.detail}" }
             }
+            // Same rule as the technology lock below: only when every recorded value carries the
+            // verified marker may the report say this app applied it.
+            val bandsAppliedHere = summary.bandLocks.all { BandLock.isVerifiedLabel(it) }
+            val bandProvenance = if (bandsAppliedHere) {
+                "Applied by this app over a direct modem interface, and the modem's own band " +
+                    "masks were read back to confirm it. That shows what the modem was allowed to " +
+                    "use; the check against the bands actually seen follows. Only the standalone " +
+                    "NR mask is restricted -- an NSA connection is not band-limited by it, and no " +
+                    "specific channel (EARFCN/ARFCN) can be selected this way. "
+            } else {
+                "This was set outside this app, in the handset's own RF toolkit or a diagnostic " +
+                    "tool, and is recorded here as the operator declared it -- nothing in this " +
+                    "session's record confirms one is in force. "
+            }
             add(
-                "Band lock declared" to
-                    "${summary.bandLocks.joinToString(", ")}. This was set outside this app, in " +
-                        "the handset's own RF toolkit or a diagnostic tool, and is recorded here " +
-                        "as the operator declared it -- nothing in this instrument performs a band " +
-                        "lock or can confirm one is in force. " +
+                (if (bandsAppliedHere) "Band lock applied" else "Band lock declared") to
+                    "${summary.bandLocks.joinToString(", ")}. $bandProvenance" +
                         "A locked walk prevents the handset doing what a subscriber's phone would " +
                         "do, so compliance, dominance and overlap describe the locked band rather " +
                         "than the service a user would receive. " + verdict

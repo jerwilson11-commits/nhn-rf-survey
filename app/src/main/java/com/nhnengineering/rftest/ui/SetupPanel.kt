@@ -50,6 +50,7 @@ fun SetupPanel(
     onFloor: (String?) -> Unit,
     bandLock: String?,
     onBandLock: (String?) -> Unit,
+    bandLockUi: BandLockUi,
     ratLock: String?,
     techLockChecking: Boolean,
     techLockUnavailableReason: String?,
@@ -120,11 +121,21 @@ fun SetupPanel(
 
             Text("Labels", style = MaterialTheme.typography.titleSmall)
             LabelEntry(onArea = onArea, onFloor = onFloor)
-            BandLockEntry(
-                current = bandLock,
-                onBandLock = onBandLock,
-                ratLock = ratLock,
-            )
+            // The real control where the modem can be driven; the operator's declaration field
+            // where it cannot (no root), which is the only honest thing that handset can offer.
+            when {
+                bandLockUi.checking -> Text(
+                    "Band lock: checking availability…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                bandLockUi.unavailableReason != null -> BandLockEntry(
+                    current = bandLock,
+                    onBandLock = onBandLock,
+                    ratLock = ratLock,
+                )
+                else -> BandLockControl(bandLockUi, activeLabel = bandLock)
+            }
             TechnologyLockControl(
                 checking = techLockChecking,
                 unavailableReason = techLockUnavailableReason,

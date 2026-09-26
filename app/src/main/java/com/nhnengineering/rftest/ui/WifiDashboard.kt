@@ -34,6 +34,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.nhnengineering.rftest.cellular.BandLock
+import com.nhnengineering.rftest.cellular.BandLockController
 import com.nhnengineering.rftest.cellular.CellularCollector
 import com.nhnengineering.rftest.cellular.TechnologyLock
 import com.nhnengineering.rftest.cellular.TechnologyLockController
@@ -151,6 +153,50 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 // exactly as it was rather than being overwritten with a guess either way.
             }
             techLockBusy = false
+        }
+    }
+
+    // Band lock: same availability-check-off-thread pattern as the technology lock above.
+    val bandLockController = remember { BandLockController(context) }
+    var bandUi by remember { mutableStateOf(BandLockUi()) }
+    LaunchedEffect(Unit) {
+        val supported = withContext(Dispatchers.IO) { bandLockController.supported() }
+        bandUi = supported.fold(
+            onSuccess = {
+                bandUi.copy(
+                    checking = false,
+                    unavailableReason = null,
+                    supportedLte = it.lte,
+                    supportedNrSa = it.nrSa,
+                    pendingRestore = bandLockController.pendingRestore,
+                )
+            },
+            onFailure = { bandUi.copy(checking = false, unavailableReason = it.message ?: "Unavailable.") },
+        )
+    }
+    val onBandApply: (Set<Int>, Set<Int>) -> Unit = { lte, nr ->
+        bandUi = bandUi.copy(busy = true, status = null)
+        scope.launch {
+            val requested = withContext(Dispatchers.IO) { bandLockController.lock(lte, nr) }
+            bandUi = bandUi.copy(status = requested.message)
+            if (requested.applied) {
+                // Same reason as the technology lock: accepted is not held. Read it back.
+                delay(4_000)
+                val verified = withContext(Dispatchers.IO) { bandLockController.verify() }
+                bandUi = bandUi.copy(status = verified.message)
+                RecordingState.bandLock.value =
+                    if (verified.applied) BandLock.verifiedLabel(lte, nr) else null
+            }
+            bandUi = bandUi.copy(busy = false, pendingRestore = bandLockController.pendingRestore)
+        }
+    }
+    val onBandRelease: () -> Unit = {
+        bandUi = bandUi.copy(busy = true, status = null)
+        scope.launch {
+            val outcome = withContext(Dispatchers.IO) { bandLockController.release() }
+            bandUi = bandUi.copy(status = outcome.message)
+            if (outcome.applied) RecordingState.bandLock.value = null
+            bandUi = bandUi.copy(busy = false, pendingRestore = bandLockController.pendingRestore)
         }
     }
 
@@ -361,6 +407,7 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 onFloor = { RecordingState.floor.value = it },
                 bandLock = bandLock,
                 onBandLock = { RecordingState.bandLock.value = it },
+                bandLockUi = bandUi.copy(onApply = onBandApply, onRelease = onBandRelease),
                 ratLock = ratLock,
                 techLockChecking = techLockChecking,
                 techLockUnavailableReason = techLockUnavailableReason,

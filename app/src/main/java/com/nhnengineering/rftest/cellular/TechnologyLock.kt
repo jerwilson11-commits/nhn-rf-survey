@@ -28,9 +28,9 @@ package com.nhnengineering.rftest.cellular
  *
  * ## What it can and cannot do
  *
- * This selects a *technology*, never a band. Android exposes no band selection at any privilege
- * level -- that lives in modem NV and is reachable only through vendor diagnostic channels. So
- * [Technology.NR_ONLY] forces NR rather than LTE; it cannot force n41 rather than n25.
+ * This selects a *technology*, never a band: [Technology.NR_ONLY] forces NR rather than LTE; it
+ * cannot force n41 rather than n25. Bands are a separate lever in the same QMI message -- see
+ * [BandLock] and [BandLockController].
  *
  * The one indirect lever worth knowing: NSA is not a technology of its own, it is NR anchored on
  * LTE. Removing LTE from the mask therefore removes NSA as a possibility, so a handset that keeps

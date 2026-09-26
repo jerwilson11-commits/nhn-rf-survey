@@ -2,6 +2,8 @@ package com.nhnengineering.rftest.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -143,15 +146,11 @@ fun RecordButton(recording: Boolean, onStart: () -> Unit, onStop: () -> Unit) {
 /**
  * Records that the handset has been band-locked elsewhere.
  *
- * Deliberately worded as a declaration. This app does not lock a band and cannot verify one --
- * that lives in modem NV and is reachable only through vendor diagnostic channels -- so the
- * control asks what the operator did, and the report says so in those terms and cross-checks it
- * against the bands the walk actually saw.
- *
- * Technology is different: as of 2026-09-22 the app genuinely can lock and verify that, over a
- * direct modem interface, so it has its own real control, [TechnologyLockControl], rather than a
- * second declaration field beside this one. `ratLock` is still shown here because it is still
- * worth reading alongside the band, whichever mechanism produced it.
+ * Shown only where the modem cannot be driven (no root), where a declaration is the only honest
+ * thing left: the control asks what the operator did, and the report says so in those terms and
+ * cross-checks it against the bands the walk actually saw. On a rooted handset [BandLockControl]
+ * replaces it and applies the lock itself; technology likewise has [TechnologyLockControl].
+ * `ratLock` is still shown here because it is worth reading alongside the band.
  *
  * It sits in setup rather than the walk controls because it is set once, standing still, alongside
  * the site name.
@@ -299,6 +298,113 @@ fun TechnologyLockControl(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+}
+
+/** Everything [BandLockControl] needs from the screen that owns the controller. */
+data class BandLockUi(
+    val checking: Boolean = true,
+    /** Non-null when the modem cannot be driven, in which case the declaration field is shown. */
+    val unavailableReason: String? = null,
+    val supportedLte: Set<Int> = emptySet(),
+    val supportedNrSa: Set<Int> = emptySet(),
+    val busy: Boolean = false,
+    val status: String? = null,
+    val pendingRestore: Boolean = false,
+    val onApply: (lte: Set<Int>, nrSa: Set<Int>) -> Unit = { _, _ -> },
+    val onRelease: () -> Unit = {},
+)
+
+/**
+ * Restricts the modem to chosen bands via [com.nhnengineering.rftest.cellular.BandLockController].
+ *
+ * Bands the modem does not list are not offered. What cannot be done is said here rather than
+ * discovered later: no specific channel, no LTE band above 64, and the NR choice governs
+ * standalone only (see [com.nhnengineering.rftest.cellular.BandLock]).
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun BandLockControl(ui: BandLockUi, activeLabel: String?) {
+    val heldLte = remember(activeLabel) { bandsIn(activeLabel, 'B') }
+    val heldNr = remember(activeLabel) { bandsIn(activeLabel, 'n') }
+    var lte by remember(activeLabel) { mutableStateOf(heldLte) }
+    var nr by remember(activeLabel) { mutableStateOf(heldNr) }
+    // A free-text declaration in the same field is not a lock this app is holding.
+    val held = activeLabel != null && com.nhnengineering.rftest.cellular.BandLock.isVerifiedLabel(activeLabel)
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Band lock", style = MaterialTheme.typography.titleSmall)
+
+        if (ui.pendingRestore && !held) {
+            Text(
+                "A band restriction from an earlier session may still be in force. Tap Release, " +
+                    "toggle Airplane Mode, or restart the phone.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
+        if (ui.supportedLte.isNotEmpty()) {
+            Text("LTE", style = MaterialTheme.typography.labelMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ui.supportedLte.sorted().forEach { b ->
+                    FilterChip(
+                        selected = b in lte,
+                        onClick = { lte = if (b in lte) lte - b else lte + b },
+                        enabled = !ui.busy,
+                        label = { Text("B$b") },
+                    )
+                }
+            }
+        }
+        if (ui.supportedNrSa.isNotEmpty()) {
+            Text("5G standalone", style = MaterialTheme.typography.labelMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ui.supportedNrSa.sorted().forEach { b ->
+                    FilterChip(
+                        selected = b in nr,
+                        onClick = { nr = if (b in nr) nr - b else nr + b },
+                        enabled = !ui.busy,
+                        label = { Text("n$b") },
+                    )
+                }
+            }
+        }
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Button(
+                onClick = { ui.onApply(lte, nr) },
+                enabled = !ui.busy && (lte.isNotEmpty() || nr.isNotEmpty()),
+                modifier = Modifier.weight(1f),
+            ) { Text(if (held) "Change lock" else "Apply lock") }
+            OutlinedButton(
+                onClick = ui.onRelease,
+                enabled = !ui.busy && (held || ui.pendingRestore),
+                modifier = Modifier.weight(1f),
+            ) { Text("Release") }
+        }
+
+        ui.status?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        if (held) {
+            Text("Recording as: $activeLabel", style = MaterialTheme.typography.bodySmall)
+        }
+        Text(
+            "Picks bands, not a channel: a specific EARFCN or ARFCN cannot be selected this way. " +
+                "Leaving one side empty leaves it unrestricted. A band this site does not carry " +
+                "can leave the phone with no service until released. Clears itself on Airplane " +
+                "Mode or a restart.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** Band numbers in a verified label ("B4, n41 (locked ...)") for one technology prefix. */
+private fun bandsIn(label: String?, prefix: Char): Set<Int> {
+    if (label == null || !com.nhnengineering.rftest.cellular.BandLock.isVerifiedLabel(label)) return emptySet()
+    return com.nhnengineering.rftest.cellular.BandLock.tokens(label)
+        .filter { it.firstOrNull() == prefix }
+        .mapNotNull { it.drop(1).toIntOrNull() }
+        .toSet()
 }
 
 @Composable

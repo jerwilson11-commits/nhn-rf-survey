@@ -11,7 +11,7 @@ Three things the app cannot do through Android resolve to modem access:
 |---|---|---|
 | Neighbour cells | `getAllCellInfo()` returns the serving cell alone on this handset, across all three surfaces | `QMI_NAS_GET_CELL_LOCATION_INFO`, which carries the neighbour lists |
 | Technology lock | `setAllowedNetworkTypesForReason` is accepted, then recomputed away by `OplusNetworkUtils` | `QMI_NAS_SET_SYSTEM_SELECTION_PREFERENCE`, below the vendor framework layer |
-| Band lock | No API at any privilege level, on any handset | The band-preference TLVs of that same message |
+| Band lock | No API at any privilege level, on any handset | The band-preference TLVs of that same message; proven, see below |
 
 ## Correction: the MHI pipe is not the modem
 
@@ -201,22 +201,51 @@ cell's 1300 maps to Band 3, which this operator does not use in the US. Either t
 something other than a plain EARFCN or the mapping needs care, so nothing should report a *band*
 derived from it until that is resolved. The neighbour EARFCNs are not in doubt.
 
-## Band lock: the mechanism is located, not yet exercised
+## Band lock: proven on the OnePlus 9 (2026-09-26)
 
-The `GET_SYSTEM_SELECTION_PREFERENCE` (0x0034) response carries band preference masks, which is
-what band lock would write:
+The `GET_SYSTEM_SELECTION_PREFERENCE` (0x0034) response carries the band masks, and
+`SET_SYSTEM_SELECTION_PREFERENCE` (0x0033) writes them:
 
-- **TLV 0x15**, 8 bytes — LTE band preference (64-bit mask).
-- **TLV 0x23**, 32 bytes — extended LTE band preference.
-- **TLV 0x2c / 0x2d**, 64 bytes each — NR5G band preference (512-bit masks, bit N = band n(N+1)).
+- **TLV 0x15**, 8 bytes: LTE band preference (bands 1-64). Written with TLV 0x15 in a SET.
+- **TLV 0x23** (get) / **0x24** (set), 32 bytes: extended LTE band preference.
+- **TLV 0x2c** (get) / **0x2f** (set), 64 bytes: NR5G SA band preference. Eight u64 words, bit N of
+  word K is band 64K+N+1 (n66 and n71 are bits 1 and 6 of word 1).
+- **TLV 0x2d** (get) / **0x30** (set), 64 bytes: NR5G NSA band preference.
 
-Decoding TLV 0x2c on this handset gives n1, n2, n3, n5, n7, n20, n25, n28, **n41**, n48, n66, n71,
-n77, n78. So the modem's own band preference already permits n41; whatever keeps this handset on
-n25 is not this mask.
+Decoded baseline on this handset: SA n1 n2 n3 n5 n7 n20 n25 n28 **n41** n48 n66 n71 n77 n78; LTE
+B1-5,7,8,12,13,17-20,25,26,28,30,32,38-41,46,48 (no B66/B71 in the base mask, although the radio has
+camped on B66 during a walk).
 
-Writing these has not been attempted. It is the same message and the same safety rule applies:
-change duration `00`, record the baseline first, restore afterwards, and verify by observation
-rather than trusting a SUCCESS result.
+### What was tried, and what the modem said
+
+| Write | Result |
+|---|---|
+| `15:` = Band 4 only (`0800000000000000`) + `17:00` | **Accepted.** Serving cell moved from EARFCN 1000 (B2, PCI 288) to EARFCN 2350 (B4, PCI 114) and stayed. Restoring `15:df180fabe0a10000` moved it back. |
+| `15:` = 0 with `24:` band 66 only | Error 48 (InvalidArgument): the base LTE mask cannot be all zero. |
+| `24:` zeros beside a non-zero `15:` | Error 48. |
+| `24:` with any bit in word 1 (B66) | Error 48. Bands above 64 cannot be selected this way. |
+| `2f:` (n41 only) alone | Error 17 (MissingArgument). |
+| `2f:` + `30:` (NSA as read) + `17:00`, no `11:` | Error 17 (MissingArgument). |
+| `11:5f00` + `2f:` (n41 only) + `30:` (NSA as read) + `17:00` | **Accepted.** SA mask read back as n41 only; the phone left SA n25 for LTE (n41 is not reachable at the test desk). Restoring the SA mask brought NR back. |
+
+So NR SA band lock needs Mode Preference (0x11) in the same request. It must be the value already
+in force, or the write changes technology as a side effect.
+
+### Not possible over this interface
+
+A specific EARFCN or ARFCN. QMI NAS carries band masks, not channel lists. Channel-level control
+would be a separate DIAG/NV investigation, not yet started.
+
+### App implementation
+
+`QmiSelectionPreference` (mask codec and write builders), `QmiNasClient` (shared root transport),
+`BandLock` (validation and the recorded label), `BandLockController` (baseline capture, write,
+read-back, restore). Restores write back the bit patterns that were read. Every write uses change
+duration `00`. The controller's read-back confirms what the modem is allowed to use; the report
+separately checks the bands the session actually saw against the label.
+
+Observed 2026-09-26: a GET issued immediately after a SET can still return the old value, so
+release messages report what was written, not an instant read-back.
 
 ## Ground rules
 
