@@ -403,6 +403,58 @@ delete that file and reboot. The vendor's own backoff still applies: after one f
 the carrier config switches VoNR off by itself, so a call failure does not need manual cleanup to
 stop being a problem. If calls start failing on 5G standalone, run `clear` first.
 
+## Why the status bar says VoLTE, and why SA n41 is not seen (2026-09-26)
+
+**Status bar.** OnePlus's SystemUI (`/system_ext/priv-app/SystemUI/SystemUI.apk`, OOS 14) contains
+`stat_signal_volte*` and `stat_signal_vowifi*` drawables and no VoNR drawable; the string "vonr" appears
+nowhere in its code. The phone therefore cannot display VoNR: it draws VoLTE for IMS voice generally,
+including on 5G standalone. The label is not evidence for or against VoNR. The evidence is behaviour:
+the test call kept the same NR channel throughout.
+
+**SA n41.** With the SA mask limited to n41 (mode 0x5F, NSA mask full) the phone stayed on LTE
+(EARFCN 650) for 75 s, idle. The modem's NR measurement log (0xB97F) meanwhile showed n41 cells at
+ARFCN 501390 (2506.95 MHz): PCI 206 at a median -91.7 dBm, RSRQ -10.4 dB; PCI 216 at -99.9 dBm; PCI 673
+at -114 dBm. Signal is therefore not why standalone n41 is not chosen: PCI 206 is as strong as the
+standalone cells the phone does camp on. The same PCI 206 is the NR leg in NSA (LTE B2 anchor). The
+header of those packets marks PCI 206 as the NR "serving" cell even while the phone is on LTE.
+
+Not established: whether the n41 cell offers SA access at all (SIB1 access flags), which is the
+deciding fact. Captured NR RRC OTA (0xB821, 3 packets) and LTE RRC OTA (0xB0C0, 34 packets) during the
+attempt, but the payloads are raw ASN.1 and were not decoded. Decoding SIB1 of PCI 206 (cell access
+and SA/NSA indications) is the next step; a wider survey at other locations is the other.
+
+Log format note: in 0xB97F the u16 at offset 36 has a flag in its high byte; the cell count is the low
+byte only (e.g. 515 = 0x0203 is 3 cells), which is what makes `length - 64 == count * 60` hold.
+
+## SA n41 on PCI 206: what is and is not established (2026-09-26)
+
+New fact from the owner: an iPhone at the same desk is camped on **standalone n41, PCI 206, 100 MHz**.
+So the network does offer SA on that cell (ARFCN 501390); the OnePlus is the one not taking it.
+
+Established (measured):
+
+- With mode 0x5F and the SA mask limited to n41, the phone stayed on LTE for 75 s (idle).
+- With mode NR-only (0x40) and SA limited to n41, the phone was OUT_OF_SERVICE for the full 200 s and
+  never camped. (An 80 s run earlier was too short: the phone was still on its n66 cell for the first
+  ~50 s, so it proved nothing.)
+- The cell is strong, PCI 206 about -90 dBm, RSRQ -10 dB, so level is not the reason.
+- During the 200 s run the modem did receive broadcast messages from PCI 206 (NR RRC OTA 0xB821: a
+  pdu-1 message of 27 bytes and a pdu-2 message of 156 bytes, both with PCI 206 / ARFCN 501390) and then
+  made no connection attempt: no connected-mode messages from PCI 206 followed, while the n66 cell
+  (PCI 929) produced several during its connected period.
+- Packet header (0xB821 payload): PCI is u16 at offset 7, NR-ARFCN u32 at offset 9, PDU type at
+  offset 16, and the ASN.1 begins at offset 24 (offset 20..23 carries length + 1).
+
+Not established, and explicitly withdrawn: any decoded MIB or SIB1 content. `pycrate` (RRCNR) decodes
+those bytes, but the result was checked against ground truth and failed: it reports the working n66
+cell as `cellBarred: barred` and swaps the n66/n41 subcarrier spacings. The bit alignment of the logged
+MIB/SIB1 is therefore unresolved, and a MIB decode cannot be validated by re-encoding because any 24
+bits are a valid MIB. Do not quote cellBarred, SCS or SIB1 fields from this capture.
+
+Next step that would settle it: calibrate the decoder on a cell known to work (capture the MIB and
+SIB1 of the n66 cell PCI 929 while the phone re-selects it, find the alignment that decodes cleanly
+and consistently), then apply it to PCI 206.
+
 ## Ground rules
 
 Work from the open-source references: **libqmi** for QMI NAS, and QCSuper / SCAT / MobileInsight
