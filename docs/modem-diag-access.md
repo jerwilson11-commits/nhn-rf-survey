@@ -260,6 +260,67 @@ separately checks the bands the session actually saw against the label.
 Observed 2026-09-26: a GET issued immediately after a SET can still return the old value, so
 release messages report what was written, not an instant read-back.
 
+## Which carrier profile is the modem running? (PDC, 2026-09-26)
+
+The PDC service (QMI service 36) reports the modem's selected software configuration. It answers
+in two steps: a request returns only a result code, and the data arrives as a later *indication*
+to a client that registered for indications on the same socket. `qmilock` cannot do that (one
+request, one reply, and the app depends on that), so `tools/diag/qmiseq.c` is a research tool that
+sends several requests on one socket and keeps listening.
+
+    qmiseq 0 <pdc-port> 4000 20 10:01 -- 22 01:01000000 10:01000000
+
+Message ids and TLVs are from libqmi's `qmi-service-pdc.json`: Register 0x20 (TLV 0x10 enable
+reporting), Get Selected Config 0x22, List Configs 0x24, Get Config Info 0x28. Config type 1
+returned a config; type 0 returned error 16, so 1 is the software type here (the enum values are
+not in the JSON; this was found by trying both).
+
+Result on the OnePlus 9 (LE2115, OOS 14, T-Mobile SIM 310/260):
+
+- Active software config: **Commercial-TMO**, version 0x0a010511, 20-byte id `cea020c8...ba4a`,
+  chosen from 25 stored profiles.
+- Android's framework carrier config is also T-Mobile's: `additional_nr_advanced_bands_int_array =
+  [41]`, the 5G+ icon for mmWave, NSA and SA both available.
+- `ro.oplus.image.my_carrier.type` is `empty`: OnePlus's own carrier-overlay layer is unbranded.
+  What a T-Mobile (LE2117) image puts in that layer is not known and was not extracted.
+
+So the modem and the framework are already T-Mobile-configured on a global LE2115. The "international
+config" explanation for the phone staying on B2/n25 does not hold at the modem level.
+
+## NSA n41 at the test desk (2026-09-26)
+
+Question: can the phone reach n41, and does restricting the NSA mask (TLV 0x30) control it?
+Method: NSA-only (mode 0x5F, empty SA mask), a 40-60 MB download over the cellular interface, and
+`dci_logger` on log 0xB97F. The NR leg's channel was identified from the packets: ARFCN x 5 kHz
+below 3 GHz, and n41 (2496-2690 MHz) is ARFCN 499200-537999. The framework cannot say: the
+secondary carrier's channel and bandwidth come back unknown.
+
+| NSA mask (SA empty in all three) | NR leg under load |
+|---|---|
+| n41 only | ARFCN 501390 (2506.95 MHz, **n41**) in 49 of 49 packets |
+| full baseline (control) | ARFCN 501390 in 51 of 51 packets; ARFCN 393422 (n25) once |
+| n25 only | **no NR leg**: 0 packets, LTE-only carriers, data still flowed |
+
+Reading it:
+
+- **n41 is reachable at this desk, in NSA.** The network adds an n41 NR leg to the LTE anchor (B2).
+  The control shows it does so without any band lock, so the n41-only result on its own proved
+  nothing about the mask.
+- **The mask does control the NR leg**: excluding n41 removed it. Whether the network would have
+  added n25 had it been allowed is not shown; n25 was only ever seen once, as a measurement.
+- **Why the phone looked stuck on n25:** in baseline (Automatic) it camps on *standalone* n25.
+  That is a preference for SA, not an inability to reach n41. "5G NSA only" in the app already gives
+  the n41 leg; no band mask is needed.
+- The NR leg exists only while data flows. Idle, it is plain LTE.
+
+Unexplained: once, before a write, the SA mask read `[66]` instead of the full list restored
+minutes earlier by the app's release. Nothing this project wrote in between should have changed it.
+It read the full list again after being rewritten and held for 90 s. A vendor layer rewriting the
+mask is a possibility, not a finding.
+
+Practical: the cellular interface number changes when the data network is re-created (rmnet_data1,
+then rmnet_data2 after a mode/band write), so a load test must look it up each time.
+
 ## Ground rules
 
 Work from the open-source references: **libqmi** for QMI NAS, and QCSuper / SCAT / MobileInsight
