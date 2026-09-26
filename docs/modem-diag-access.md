@@ -347,6 +347,62 @@ stages after LTE/NR ping-pong, which repeated mode and mask changes during testi
 If the phone sticks on NSA, read the SA mask first (`qmilock ... 0034`, TLV 0x2c): empty means
 something wrote it, not that SA is unavailable.
 
+## Voice over 5G standalone (VoNR) on this handset (2026-09-26)
+
+State observed on the OnePlus 9 (LE2115, OOS 14) camped on SA NR with a T-Mobile SIM:
+
+- IMS is registered (`isImsRegistered = true`) with `getImsRegistrationTechnology = 0`, which is
+  LTE (0 = LTE, 1 = IWLAN, 2 = cross-SIM, 3 = NR). So voice registers on LTE even while data is on
+  NR standalone. The status bar shows VoLTE, consistent with that.
+- The IMS PDN (`T-Mobile IMS` APN, `rmnet_data3`) is up with network type NR, so a 5G data path for
+  IMS exists. Registration is what is on LTE.
+- VoNR is off in three places: `persist.radio.is_vonr_enabled_0 = false`, and in OnePlus's own
+  T-Mobile carrier config (`oplus_carrier_name = us-tmobile`, loaded from the default carrier app)
+  `vonr_enabled_bool = false` with `vonr_setting_visibility_bool = false`, so there is no user toggle.
+  The same block enables VoLTE and Wi-Fi calling, and sets `carrier_oplus_auto_nr_mode = 3`
+  (matches `user_nr_mode` 3 = Automatic).
+- A vendor `OplusVonrDetector` reacts to service-state changes. The carrier config also carries
+  `carrier_vonr_backoff = true` and `carrier_vonr_call_fail_threshold = 1`, i.e. VoNR is dropped
+  after one failed call when it is on.
+
+### Trial: enabling VoNR with a non-persistent override
+
+`cmd phone cc` is refused on this build even as root (carrier-config override commands need a
+debuggable build), so `tools/diag/VonrCfg.java` calls `ICarrierConfigLoader.overrideConfig` over
+Binder as root (MODIFY_PHONE_STATE is satisfied by uid 0). It requests a non-persistent override,
+so a reboot clears it. Build: javac against android.jar, then d8; run with
+`CLASSPATH=vonrcfg.dex app_process /system/bin VonrCfg <subId> show|set|clear`. An earlier version
+that bootstrapped a system Context via `ActivityThread.systemMain()` was killed by the system;
+going straight to the service avoids that.
+
+- Setting `persist.radio.is_vonr_enabled_0` by hand did nothing (registration stayed LTE), and the
+  system writes that property itself. It is a result, not the lever.
+- Overriding `vonr_enabled_bool = true` (and the setting visibility) was picked up immediately:
+  `OplusVoNrSwitchBase onUpdateVoNrStateDone enabled=true isSuccess=true`,
+  `NAS-VonrBackoffIssue vonrSupportByCfg = true`, and the system then set the property to `true`.
+- Idle IMS registration technology still read 0 (LTE) afterwards, so that reading is not a VoNR
+  indicator here.
+- One ~20 s voice call on SA NR: connected, clean audio per the user, ended user-terminated with
+  no error, `needsBackoff = false`, and the serving NR channel (ARFCN 427230) never changed during
+  the call. No fallback to LTE was seen, which is what VoNR (as opposed to EPS fallback) looks like.
+
+Limits: one call, one cell, one day. The carrier config drops VoNR after a single failed call
+(`carrier_vonr_call_fail_threshold = 1`), so the vendor logic would switch it off again on its own
+if a call fails.
+
+### Made persistent (owner's decision, 2026-09-26)
+
+After the test call the owner asked for VoNR to stay on across reboots, so `VonrCfg ... setp`
+requests a persistent override. It is stored as
+`/data/user_de/0/com.android.phone/files/carrierconfig-com.android.carrierconfig-override-<iccid>-310260-1.xml`
+and contains only `vonr_enabled_bool = true` and `vonr_setting_visibility_bool = true`. It is
+tied to the SIM (the file name carries the ICCID and PLMN).
+
+To undo it: `VonrCfg <subId> clear` (removes both the persistent and non-persistent overrides), or
+delete that file and reboot. The vendor's own backoff still applies: after one failed VoNR call
+the carrier config switches VoNR off by itself, so a call failure does not need manual cleanup to
+stop being a problem. If calls start failing on 5G standalone, run `clear` first.
+
 ## Ground rules
 
 Work from the open-source references: **libqmi** for QMI NAS, and QCSuper / SCAT / MobileInsight
