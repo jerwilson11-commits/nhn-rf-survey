@@ -472,6 +472,60 @@ capability rule in the T-Mobile modem profile, or handling of the cell's TDD/Rel
 None of these has been tested. Deciding between them needs the modem's NAS/RRC state after SIB1 or the
 carrier profile's SA band rules, not more physical-layer capture.
 
+## The T-Mobile carrier profile does not restrict SA bands (2026-09-27)
+
+Pulled the active profile directly: `/vendor/firmware_mnt/image/modem_pr/mcfg/configs/mcfg_sw/generic/NA/TMO/Commercial/mcfg_sw.mbn`,
+93200 bytes, matching the size QMI PDC reported for `Commercial-TMO`. It is a QC MBN container (ELF
+wrapper, hash segment + one `PT_LOAD` payload at file offset 0x3000); the payload starts `MCFG` (version
+4.1) and its body is mostly a location/PLMN-conditioned band-policy script (readable ASCII/XML) plus a
+long list of `/nv/item_files/...` paths.
+
+The whole profile defines exactly **two** RF band lists (`america_tmo_bands`, restricted LTE bands for
+some condition, and `global_others_bands`, used at least for India-MCC locations). In **both**, without
+exception:
+
+```
+<nr5g_sa_bands base="hardware" />
+<nr5g_nsa_bands base="hardware" />
+```
+
+`nr5g_sa_bands`/`nr5g_nsa_bands` appear nowhere else in the file (grep confirms exactly these 4 lines,
+2 pairs). Neither band list restricts NR5G SA or NSA bands at all -- both always defer to the modem's own
+hardware capability, which QMI DMS `Get Band Capabilities` (0x0045) already showed includes n41
+(see above). So **the carrier profile is not the cause** of the SA n41 rejection; it never even has the
+option to exclude a band from SA, only LTE bands are ever restricted in this file. This was checked by
+reading the actual bytes, not inferred from behaviour.
+
+Not examined: the ~250 `/nv/item_files/modem/...` items themselves (things like
+`nr5g_full_voice_support`, `disable_nr5g_meas`, `nr5g_plmn_blocking_timer` exist in the list but their
+values were not extracted -- the container's item-value encoding is undocumented and a byte-pattern
+search for "band 41" produced only noise, small integers that coincidentally equal 41/66/25 with no
+reliable record boundary). Reading them properly needs Qualcomm's own NV browser (QPST, downloaded but
+not installed) or a documented item schema, neither in hand.
+
+## Why the phone now camps on n66 rather than n25 (2026-09-27)
+
+The owner noted the phone used to camp on SA n25 and now camps on SA n66, and asked whether the
+band/technology-lock testing caused it.
+
+Checked directly: forcing the SA mask to n25-only, n25 is still there, strong, and unbarred -- PCI 929 at
+about -85 dBm / -10.6 dB RSRQ, over 45 s -- and **PCI 929 is the same physical cell reported on both n25
+and n66** (both scans mark PCI 929 "serving" at essentially the same level, -85 to -87 dBm). So n25 has
+not degraded; this is one site broadcasting on two NR layers, both excellent.
+
+That rules out "n25 got worse" and rules out anything left mis-set by this project: every write is
+verified to restore the exact baseline mask and mode, and this session's baseline (`0x2c` = the full
+14-band list, mode `0x5F`) has held stable across dozens of writes today. Between two equally strong
+layers at the same site, which one Automatic mode parks on is a **network reselection priority /
+UE tie-break** question, not a signal or configuration question. Attempting to read n25's own broadcast
+`cellReselectionPriority` for a direct comparison (n66's, decoded earlier, is 5) did not resolve in the
+capture window taken -- the SIB2 message captured for n25 did not carry that optional field, so the
+comparison is inconclusive rather than negative. Best explanation available: ordinary network-side
+reselection behaviour (T-Mobile's own layer preference, possibly changed on their end, or normal
+hysteresis after the many technology switches these tests caused), not a bug in this project's code and
+not fixable from the UE side.
+
+
 ## Ground rules
 
 Work from the open-source references: **libqmi** for QMI NAS, and QCSuper / SCAT / MobileInsight
