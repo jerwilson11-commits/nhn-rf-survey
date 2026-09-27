@@ -136,6 +136,116 @@ class Sib1ParserTest {
         assertTrue(r.conflicts.isEmpty())
     }
 
+    /**
+     * The n41 cell actually captured on the OnePlus at the T-Mobile test desk on 2026-09-27 (PCI
+     * 206, ARFCN 501390), decoded off the air with pycrate and checked against a second handset
+     * camped on the same cell. 100 MHz at 30 kHz, two TDD patterns: this is the fixture the
+     * `-v1530` handling below exists for -- pattern1's period is only correct once that field is
+     * read, and getting it wrong here would have reported 0.5 ms for a cell actually using 3.
+     */
+    private val realN41TddTmobile = """
+        NR5G RRC OTA Packet -- NR RRC Release 15.10.0, PCI 206, Frequency 501390, BCCH_DL_SCH
+        systemInformationBlockType1 : {
+          cellAccessRelatedInfo {
+            plmn-IdentityInfoList {
+              {
+                plmn-IdentityList { { mcc { 3, 1, 0 }, mnc { 2, 6, 0 } } },
+                cellReservedForOperatorUse notReserved
+              }
+            }
+          },
+          servingCellConfigCommon {
+            downlinkConfigCommon {
+              frequencyInfoDL {
+                freqBandIndicatorNR 41,
+                scs-SpecificCarrierList { { subcarrierSpacing kHz30, carrierBandwidth 273 } }
+              }
+            },
+            tdd-UL-DL-ConfigurationCommon {
+              referenceSubcarrierSpacing kHz30,
+              pattern1 {
+                dl-UL-TransmissionPeriodicity ms0p5,
+                nrofDownlinkSlots 3,
+                nrofDownlinkSymbols 6,
+                nrofUplinkSlots 2,
+                nrofUplinkSymbols 4,
+                dl-UL-TransmissionPeriodicity-v1530 ms3
+              },
+              pattern2 {
+                dl-UL-TransmissionPeriodicity ms2,
+                nrofDownlinkSlots 4,
+                nrofDownlinkSymbols 0,
+                nrofUplinkSlots 0,
+                nrofUplinkSymbols 0
+              }
+            },
+            ssb-PositionsInBurst {
+              inOneGroup '00100000'B
+            }
+          }
+        }
+    """.trimIndent()
+
+    @Test
+    fun `reads the real n41 T-Mobile capture, 2026-09-27`() {
+        val r = Sib1Parser.parse(realN41TddTmobile)
+
+        assertTrue(r.looksLikeSib1)
+        assertTrue(r.isTdd)
+        assertEquals("n41", r.band)
+        assertEquals(30, r.scsKhz)
+        assertEquals(273, r.carrierBandwidthRb)
+        assertEquals("310", r.mcc)
+        assertEquals("260", r.mnc)
+        assertTrue(r.conflicts.isEmpty())
+
+        // The point of this fixture: pattern1's real period is 3 ms (the v1530 field), not the
+        // 0.5 ms the base field carries as a pre-Rel-15 fallback.
+        assertEquals("3", r.tddPeriodicityMs)
+        assertEquals(3, r.dlSlots)
+        assertEquals(6, r.dlSymbols)
+        assertEquals(2, r.ulSlots)
+        assertEquals(4, r.ulSymbols)
+
+        assertTrue(r.hasPattern2)
+        assertEquals("2", r.pattern2PeriodicityMs)
+        assertEquals(4, r.p2DlSlots)
+        assertEquals(0, r.p2DlSymbols)
+        assertEquals(0, r.p2UlSlots)
+        assertEquals(0, r.p2UlSymbols)
+
+        // 3 ms + 2 ms repeats every 5 ms, which is what the derived slot string actually covers.
+        assertEquals("5", r.effectivePeriodicityMs)
+        assertEquals("DDDSUUDDDD", r.derivedPattern)
+        assertEquals("00100000", r.ssbPositionsInBurst)
+    }
+
+    @Test
+    fun `the Rel-15 extended periodicity overrides the base field's fallback value`() {
+        // Isolated from the full real-capture fixture above: this is the one behaviour that
+        // fixture exists to pin. ms0p5 is what a pre-Rel-15 reader would see; ms3 is what the
+        // cell is actually doing, and only a reader that knows to look for the -v1530 field gets
+        // the right answer.
+        val text = """
+            systemInformationBlockType1
+            subcarrierSpacing kHz30
+            tdd-UL-DL-ConfigurationCommon
+              dl-UL-TransmissionPeriodicity ms0p5
+              dl-UL-TransmissionPeriodicity-v1530 ms3
+              nrofDownlinkSlots 3
+              nrofDownlinkSymbols 6
+              nrofUplinkSlots 2
+              nrofUplinkSymbols 4
+        """.trimIndent()
+
+        assertEquals("3", Sib1Parser.parse(text).tddPeriodicityMs)
+    }
+
+    @Test
+    fun `with no v1530 override the base periodicity is used as before`() {
+        assertEquals("2.5", Sib1Parser.parse(n41Tdd).tddPeriodicityMs)
+    }
+
     @Test
     fun `unassigned slots are rendered flexible and called out`() {
         val text = """

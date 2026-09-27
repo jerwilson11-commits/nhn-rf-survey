@@ -166,16 +166,30 @@ object Sib1Parser {
         // is read from its own slice of the text.
         val (scope1, scope2) = patternScopes(text)
 
-        fun readPattern(scope: String, suffix: String) = RawPattern(
-            periodMs = sole(
+        fun readPattern(scope: String, suffix: String): RawPattern {
+            val base = sole(
                 "dl-UL-TransmissionPeriodicity$suffix",
                 allTokens(scope, "dl-UL-TransmissionPeriodicity").mapNotNull(::msToNumber),
-            ),
-            dlSlots = sole("nrofDownlinkSlots$suffix", allInts(scope, "nrofDownlinkSlots")),
-            dlSymbols = sole("nrofDownlinkSymbols$suffix", allInts(scope, "nrofDownlinkSymbols")),
-            ulSlots = sole("nrofUplinkSlots$suffix", allInts(scope, "nrofUplinkSlots")),
-            ulSymbols = sole("nrofUplinkSymbols$suffix", allInts(scope, "nrofUplinkSymbols")),
-        )
+            )
+            // Rel-15 added three periodicities (ms3, ms4, ms6) the original enum has no room for,
+            // so the network signals them in a second, differently-named field rather than
+            // widening the first. When it is present it is the real value -- the base field next
+            // to it carries a same-message fallback for a reader that does not know the extension
+            // exists, e.g. "ms0p5" beside "dl-UL-TransmissionPeriodicity-v1530 ms3" for a 3 ms
+            // period. Reading the base field alone silently reports a period the cell is not
+            // using; captured on a real T-Mobile n41 cell on 2026-09-27, not a hypothetical.
+            val extended = sole(
+                "dl-UL-TransmissionPeriodicity-v1530$suffix",
+                allTokens(scope, "dl-UL-TransmissionPeriodicity-v1530").mapNotNull(::msToNumber),
+            )
+            return RawPattern(
+                periodMs = extended ?: base,
+                dlSlots = sole("nrofDownlinkSlots$suffix", allInts(scope, "nrofDownlinkSlots")),
+                dlSymbols = sole("nrofDownlinkSymbols$suffix", allInts(scope, "nrofDownlinkSymbols")),
+                ulSlots = sole("nrofUplinkSlots$suffix", allInts(scope, "nrofUplinkSlots")),
+                ulSymbols = sole("nrofUplinkSymbols$suffix", allInts(scope, "nrofUplinkSymbols")),
+            )
+        }
 
         val p1 = readPattern(scope1, "")
         val p2 = scope2?.let { readPattern(it, " (pattern2)") }

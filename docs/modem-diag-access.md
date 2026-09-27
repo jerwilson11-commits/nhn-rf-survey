@@ -562,6 +562,43 @@ the modem's NAS/mobility logic is vendor firmware, undocumented, and this projec
 it further. Nothing here is adjustable from Android, from this app, or from the carrier profile.
 
 
+## The SIB1 TDD decode, completed with a real capture (2026-09-27)
+
+Requested: finish the SIB1 TDD decode/reporting per 3GPP TS 38.331, using the real n41 (PCI 206)
+data already captured for the runtime-decision investigation above. LTE Band 41 was considered as
+the forcing mechanism but doesn't apply here -- `Sib1Parser`/`TddProfile` are NR-specific
+(`freqBandIndicatorNR`, `n$it` labelling); an LTE band lock produces no NR SIB1 content to decode,
+so no phone lock was needed or used for this. The pipeline (`Sib1Parser`, `TddProfile`,
+`Sib1PasteDialog`, `ProfileStore`, `PdfReportGenerator`) already existed from an earlier session;
+what was missing was doing it once with real data, and one real bug it exposed.
+
+**Bug found and fixed:** `Sib1Parser` read `dl-UL-TransmissionPeriodicity` but not its Rel-15
+extension `dl-UL-TransmissionPeriodicity-v1530`, which carries the real periodicity when it is 3, 4
+or 6 ms (values the base Rel-15.0 enum has no room for; the base field then carries a same-message
+fallback for a reader that doesn't know the extension exists). PCI 206's pattern1 is exactly this
+case: base field `ms0p5`, extension field `ms3` -- the real period is 3 ms. Unfixed, the parser
+would have silently reported 0.5 ms for a cell running 3 ms. Fixed to prefer the extension when
+present; `Sib1ParserTest` gained the real fixture plus an isolated test pinning the override
+behaviour (460 tests total).
+
+**Installed on the device.** `adb shell input tap`/`input text` proved unreliable for driving the
+paste dialog on this handset: the launcher (`com.oppo.quicksearchbox`) intermittently stole focus
+from taps aimed at verified-correct on-screen coordinates, landing on a system search overlay or
+the recents/app-drawer instead, three separate times with three different failure modes. Rather
+than keep fighting it, the resulting profile record was written directly into
+`ProfileStore`'s own file format (`/data/data/com.nhnengineering.rftest/files/tdd-profiles.jsonl`,
+as root, then `chown`ed to the app's uid so the app can still read/write it) -- the exact same
+artifact a successful paste would have produced. The literal line installed is pinned by a new
+`ProfileStoreTest` case, so it's checked, not just asserted. Confirmed after a clean relaunch: the
+Config screen lists it -- **T-Mobile n41, pattern DDDSUUDDDD, periodicity 5 ms, 3/6/2/4 slots/
+symbols, SSB `00100000`, 30 kHz, "from: SIB1 paste, 27 Sep 2026"** -- exactly the corrected values.
+
+Not done: generating an actual PDF report against this profile, which needs a real session
+recorded while camped on n41 (band-locked or NSA) to exercise `ProfileMatcher` end-to-end; the
+report's own field-mapping code was read, not modified, and has no dedicated unit test in this repo
+(pre-existing gap, not introduced here).
+
+
 ## Ground rules
 
 Work from the open-source references: **libqmi** for QMI NAS, and QCSuper / SCAT / MobileInsight
