@@ -428,32 +428,49 @@ byte only (e.g. 515 = 0x0203 is 3 cells), which is what makes `length - 64 == co
 
 ## SA n41 on PCI 206: what is and is not established (2026-09-26)
 
-New fact from the owner: an iPhone at the same desk is camped on **standalone n41, PCI 206, 100 MHz**.
-So the network does offer SA on that cell (ARFCN 501390); the OnePlus is the one not taking it.
+New fact from the owner: an iPhone at the same desk is camped on **standalone n41, PCI 206, 100 MHz**,
+so the network offers SA on that cell (ARFCN 501390). The OnePlus does not take it.
 
-Established (measured):
+**Measured behaviour**
 
-- With mode 0x5F and the SA mask limited to n41, the phone stayed on LTE for 75 s (idle).
-- With mode NR-only (0x40) and SA limited to n41, the phone was OUT_OF_SERVICE for the full 200 s and
-  never camped. (An 80 s run earlier was too short: the phone was still on its n66 cell for the first
-  ~50 s, so it proved nothing.)
-- The cell is strong, PCI 206 about -90 dBm, RSRQ -10 dB, so level is not the reason.
-- During the 200 s run the modem did receive broadcast messages from PCI 206 (NR RRC OTA 0xB821: a
-  pdu-1 message of 27 bytes and a pdu-2 message of 156 bytes, both with PCI 206 / ARFCN 501390) and then
-  made no connection attempt: no connected-mode messages from PCI 206 followed, while the n66 cell
-  (PCI 929) produced several during its connected period.
-- Packet header (0xB821 payload): PCI is u16 at offset 7, NR-ARFCN u32 at offset 9, PDU type at
-  offset 16, and the ASN.1 begins at offset 24 (offset 20..23 carries length + 1).
+- Mode 0x5F, SA mask limited to n41: the phone stayed on LTE for 75 s (idle).
+- Mode NR-only (0x40), SA mask limited to n41: OUT_OF_SERVICE for the full 200 s, never camped. (An earlier
+  80 s run was too short, the phone was still on its n66 cell for the first ~50 s.)
+- The cell is strong: PCI 206 about -90 dBm, RSRQ -10 dB. Level is not the reason.
+- The modem did receive the cell's MIB and SIB1 and then made no connection attempt.
 
-Not established, and explicitly withdrawn: any decoded MIB or SIB1 content. `pycrate` (RRCNR) decodes
-those bytes, but the result was checked against ground truth and failed: it reports the working n66
-cell as `cellBarred: barred` and swaps the n66/n41 subcarrier spacings. The bit alignment of the logged
-MIB/SIB1 is therefore unresolved, and a MIB decode cannot be validated by re-encoding because any 24
-bits are a valid MIB. Do not quote cellBarred, SCS or SIB1 fields from this capture.
+**0xB821 (NR RRC OTA) packet layout, validated 2026-09-26.** Payload after the 12-byte log header: PCI u16
+at offset 7, NR-ARFCN u32 at offset 9, PDU type at offset 16 (1 = BCCH-BCH/MIB, 2 = BCCH-DL-SCH/SIB1,
+4 = DL-DCCH), length-related byte at offset 21, and the ASN.1 UPER **starts at payload offset 23**.
+Validation: decoding from offset 23 with pycrate (`RRCNR`, `BCCH_DL_SCH_Message`) on a cell known to work
+(n66, PCI 929) gives band 66 in both DL and UL lists, `cellBarred = notBarred`, 15 kHz spacing, a 79-RB
+carrier, and its DL-DCCH message decodes with band 66 as well. The same decode of PCI 206 gives 30 kHz and a
+**273-RB carrier (a 100 MHz channel, matching the owner's report from the iPhone)**. An earlier attempt
+starting at offset 24 was misaligned and produced false "barred" results; those were withdrawn, and a
+decode that only re-encodes cleanly is NOT validation (any 24 bits are a valid MIB).
 
-Next step that would settle it: calibrate the decoder on a cell known to work (capture the MIB and
-SIB1 of the n66 cell PCI 929 while the phone re-selects it, find the alignment that decodes cleanly
-and consistently), then apply it to PCI 206.
+**What PCI 206 broadcasts (validated decode)**
+
+- MIB: `cellBarred = notBarred`, `intraFreqReselection = allowed`.
+- SIB1: PLMN 310-260 `cellReservedForOperatorUse = notReserved` (the 311-490 entry is `reserved`), the same
+  tracking area (8517888) as the working n66 cell, `q-RxLevMin` -59 (-118 dBm), band n41, 30 kHz, 273 RB,
+  `ims-EmergencySupport = true`, TDD pattern 3 DL slots + 6 DL symbols + 4 UL symbols + 2 UL slots over 3 ms
+  (`dl-UL-TransmissionPeriodicity-v1530 = ms3`, a Rel-15 extension) followed by 4 DL slots over 2 ms. No
+  UAC barring info appears. A field-by-field diff against the working n66 cell shows only the expected
+  FDD-versus-TDD and physical-layer differences, nothing that bars or restricts this PLMN.
+
+**Modem capability (QMI DMS Get Band Capabilities 0x0045, port from qrtr-lookup service 2).** The array TLVs
+carry a 16-bit count then u16 elements. Extended LTE (0x12): 1,2,3,4,5,7,8,12,13,17,18,19,20,25,26,28,30,32,
+38,39,40,41,46,48,**66,71**, which is why B66/B71 work even though the base LTE mask (bands 1-64) omits them.
+NR5G (0x13), one list with no SA/NSA split: 1,2,3,5,7,8,20,25,28,38,40,41,48,66,71,77,78, i.e. n41 is
+listed. The SA *preference* mask (0x2c) is a 14-band subset of that list that includes n41.
+
+**Conclusion so far.** PCI 206's broadcast is open to this phone's PLMN, the signal is strong, the modem lists
+n41 and has it in its SA mask, and NSA on this same cell works. Yet the phone reads its SIB1 and does not
+try to attach. That leaves a UE-side decision after SIB1 (a NAS or system-selection policy, a band or
+capability rule in the T-Mobile modem profile, or handling of the cell's TDD/Rel-15-extension configuration).
+None of these has been tested. Deciding between them needs the modem's NAS/RRC state after SIB1 or the
+carrier profile's SA band rules, not more physical-layer capture.
 
 ## Ground rules
 
