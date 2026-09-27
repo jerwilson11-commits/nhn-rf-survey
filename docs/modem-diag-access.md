@@ -526,6 +526,42 @@ hysteresis after the many technology switches these tests caused), not a bug in 
 not fixable from the UE side.
 
 
+## The runtime decision: the phone registers on n41 SA, then leaves voluntarily (2026-09-27)
+
+DIAG log codes for 5G NAS (5GMM), from SCAT's source (`diagcmd.py`, `diagnrlogparser.py`): incoming plain
+OTA `0xB80A`, outgoing plain OTA `0xB80B`, MM state `0xB80C`, serving-cell info `0xB823` (corrects an
+earlier note that guessed `0xB825`; `0xB825` is actually RRC Configuration Info). Payload layout for
+0xB80A/0xB80B: `u32` version, 3 version-component bytes, then the raw NAS-5GS message from byte 7. Decoded
+with `pycrate_mobile.NAS5G` (`parse_NAS5G`).
+
+With mode NR-only (0x40) and the SA mask limited to n41, captured the **complete** exchange:
+
+1. **5GMM Service Accept** (incoming): PDU session status shows sessions 1 and 2 already active; the
+   reactivation-result field is all zero, i.e. nothing needed reactivating. The network accepted the
+   phone onto this cell with full service, not a partial or degraded accept.
+2. MM state 3 (already registered, carried over from the n66 cell -- same TAC) -> 5 (service-request
+   handling) at the accept.
+3. **5GMM MO Deregistration Request** (outgoing), moments later: normal de-registration, not switch-off,
+   not "re-registration required", 3GPP access, addressed to PLMN 310-260 (T-Mobile) with the AMF's own
+   region/set/pointer and 5G-TMSI -- the phone's own choice, correctly formed, not a garbled retry.
+4. **5GMM MO Deregistration Accept** (incoming).
+5. MM state -> 1 (deregistered), then substate changes again with the PLMN field zeroed -- matching the
+   OUT_OF_SERVICE seen in `dumpsys` for the rest of the window.
+
+So the earlier NR-only run (200 s, no traffic) and this run are the same story: **the network never
+refuses n41 SA.** The one time LTE was also forbidden (mode 0x40), the phone registered successfully and
+then chose, on its own, to leave. In every run where LTE was still available (mode 0x5F), the phone never
+attempted n41 SA registration at all -- it used LTE (or NSA) without trying.
+
+**Conclusion:** camping on SA n41 depends on LTE also being available as a fallback. This is a UE mobility
+-policy decision, not a network, signal, RRC, or carrier-band-list problem -- all of those are now ruled
+out with direct evidence. Two NV item names seen in the T-Mobile profile (`nr5g_full_voice_support`,
+`nr5g_emc_support`) are a plausible link, unconfirmed: a policy requiring an LTE-interworking path for
+voice/emergency continuity before the modem will settle on 5G-standalone-only. The exact trigger inside
+the modem's NAS/mobility logic is vendor firmware, undocumented, and this project has no way to inspect
+it further. Nothing here is adjustable from Android, from this app, or from the carrier profile.
+
+
 ## Ground rules
 
 Work from the open-source references: **libqmi** for QMI NAS, and QCSuper / SCAT / MobileInsight
