@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 1024px;
+    height: 500px;
+    overflow: hidden;
+    font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+    background: #FFF8F1;
+  }
+  .stage {
+    position: relative;
+    width: 1024px;
+    height: 500px;
+    background: linear-gradient(135deg, #FFF8F1 0%, #F5EBDC 100%);
+  }
+  /* Signal-wave motif, right side */
+  .waves {
+    position: absolute;
+    right: -60px;
+    top: -80px;
+    width: 620px;
+    height: 660px;
+  }
+  .wave {
+    position: absolute;
+    border-radius: 50%;
+    border: 3px solid #8A5300;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .w1 { width: 180px; height: 180px; opacity: 0.9; }
+  .w2 { width: 320px; height: 320px; opacity: 0.55; border-width: 3px; }
+  .w3 { width: 460px; height: 460px; opacity: 0.32; border-width: 3px; }
+  .w4 { width: 600px; height: 600px; opacity: 0.16; border-width: 3px; }
+  .dot {
+    position: absolute;
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: #8A5300;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+  }
+
+  /* Signal bars, small accent */
+  .bars {
+    position: absolute;
+    left: 700px;
+    bottom: 70px;
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+  }
+  .bar { width: 16px; background: #6B8F5A; border-radius: 3px; }
+  .b1 { height: 22px; }
+  .b2 { height: 38px; }
+  .b3 { height: 54px; }
+  .b4 { height: 70px; }
+  .b5 { height: 86px; background: #4C7A3D; }
+
+  .content {
+    position: absolute;
+    left: 64px;
+    top: 0;
+    height: 500px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    width: 600px;
+  }
+  .eyebrow {
+    color: #8A5300;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .title {
+    color: #241F14;
+    font-size: 64px;
+    font-weight: 800;
+    line-height: 1.03;
+    letter-spacing: -1px;
+    margin-bottom: 18px;
+  }
+  .subtitle {
+    color: #4A4030;
+    font-size: 27px;
+    font-weight: 500;
+    line-height: 1.35;
+    margin-bottom: 22px;
+  }
+  .tagline {
+    color: #6B5D45;
+    font-size: 19px;
+    font-weight: 400;
+  }
+  .brand {
+    position: absolute;
+    left: 64px;
+    bottom: 30px;
+    color: #8A7A5F;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="waves">
+      <div class="wave w4"></div>
+      <div class="wave w3"></div>
+      <div class="wave w2"></div>
+      <div class="wave w1"></div>
+      <div class="dot"></div>
+    </div>
+    <div class="bars">
+      <div class="bar b1"></div>
+      <div class="bar b2"></div>
+      <div class="bar b3"></div>
+      <div class="bar b4"></div>
+      <div class="bar b5"></div>
+    </div>
+    <div class="content">
+      <div class="eyebrow">WiFi + Cellular</div>
+      <div class="title">Site Survey<br>Pro</div>
+      <div class="subtitle">Real SINR, real channel capacity,<br>real client-ready reports.</div>
+      <div class="tagline">See what every other survey app misses.</div>
+    </div>
+    <div class="brand">NHN ENGINEERING &amp; CONSULTANTS</div>
+  </div>
+</body>
+</html>
