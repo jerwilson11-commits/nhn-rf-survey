@@ -118,11 +118,42 @@ real differentiator — DAS venues need both surveyed anyway.
 - Optional cloud sync, multi-tester campaigns, server-side heatmaps, client dashboards.
 - iOS companion: speedtest, GPS logging, and viewing/reporting of Android-collected data.
 
-### Explicitly out of scope
+### Explicitly out of scope for the Play Store-distributed app's baseline behaviour
 
-- Band lock, forced RAT selection, test-mode entry.
-- Layer-3 message decode, RRC signaling, protocol trace.
-- Anything requiring root.
+- Nothing here may be *required* for the app to install, launch, or produce a usable survey.
+- No feature may assume root, a privileged install, or a specific OEM.
+
+**Corrected 2026-09-28 — the line below this used to say "anything requiring root" was out of
+scope entirely. That was overtaken by events and is wrong; leaving it would mislead anyone reading
+this file to plan a release.** Root-gated *optional* features were built deliberately, starting
+2026-09-26, after Jeremy asked directly for a band/technology-locking answer "as NSG can do with a
+paid license... whether paid or unpaid." They are real, they work, and they are documented in
+`docs/rooted-vs-unrooted-capabilities.md`:
+
+- **Band lock and technology lock**, over QMI (`QmiSelectionPreference`, `BandLockController`,
+  `TechnologyLockController`) — not the framework `setAllowedNetworkTypesForReason` path this file
+  originally evaluated and correctly found blocked; a rooted-only transport underneath it.
+- **VoNR enable/disable** (`VonrCfg`), a carrier-config override via the same root transport.
+- **Real-time SIB1 / RRC decode** (`ModemNrStream`, `NrMl1Parser`, the DCI logger), superseding the
+  original "not distributable, not supportable" verdict on DIAG access — it is not shipped as DIAG
+  parsing in the conventional sense; it is this app's own root-gated feature, gracefully absent
+  without root.
+
+**What did not change:** none of this is required. Every root-gated path has an `unavailableReason`
+that hides the control cleanly on an unrooted device, verified by reading the code, not assumed —
+no eager `su` call anywhere in `MainActivity` or in a controller's constructor. The Play
+Store-distributed baseline (public Android APIs only) is unaffected and is the thing every user
+gets; root, where present, is a bonus layer on top of it. See `docs/rooted-vs-unrooted-capabilities.md`
+for the full capability split, and the "On the Play Store" risk this newly creates (bundled native
+binaries executed as root) in the competitive-analysis doc.
+
+Still genuinely out of scope, unchanged:
+
+- Programmatic test-mode entry (no vendor exposes this at any privilege level found so far).
+- A full Qualcomm DIAG/QCAT-equivalent protocol suite — costed explicitly in the competitive
+  analysis (6–12 months specialist work) and decided against; NSG's own output is instead accepted
+  as a paste-in to this app's profile library.
+- iOS as a measurement platform (no RF KPI API exists there, at any privilege level).
 
 ---
 
