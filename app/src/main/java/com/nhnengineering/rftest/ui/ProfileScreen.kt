@@ -220,17 +220,34 @@ fun ProfileScreen(modifier: Modifier = Modifier) {
 /** The recorded values, always with their provenance. */
 @Composable
 private fun ProfileValues(p: TddProfile) {
-    val fields = listOfNotNull(
-        p.tddPattern?.takeIf { it.isNotBlank() }?.let { "Pattern" to it },
-        p.tddPeriodicityMs?.takeIf { it.isNotBlank() }?.let { "Periodicity" to "$it ms" },
-        p.dlSlots?.let { "DL slots" to "$it" },
-        p.dlSymbols?.let { "DL symbols" to "$it" },
-        p.ulSlots?.let { "UL slots" to "$it" },
-        p.ulSymbols?.let { "UL symbols" to "$it" },
-        p.ssbPeriodicityMs?.let { "SSB periodicity" to "$it ms" },
-        p.ssbPositionsInBurst?.takeIf { it.isNotBlank() }?.let { "SSB in burst" to it },
-        p.scsKhz?.let { "SCS" to "$it kHz" },
-    )
+    // A site with two patterns needs its slot/symbol counts and its periodicity told apart per
+    // pattern -- "Periodicity 5 ms" beside "DL symbols 6" answers neither "how long is pattern 1"
+    // nor "what does the whole cycle repeat on" for a reader who was not there for the decode.
+    val p1Label = if (p.hasPattern2) " (p1)" else ""
+    val fields = buildList {
+        p.tddPattern?.takeIf { it.isNotBlank() }?.let { add("Pattern" to it) }
+        if (p.hasPattern2) {
+            p.pattern1PeriodicityMs?.let { add("Pattern 1 duration" to "$it ms") }
+            p.pattern2PeriodicityMs?.let { add("Pattern 2 duration" to "$it ms") }
+            p.tddPeriodicityMs?.let { add("Repeats every" to "$it ms") }
+        } else {
+            p.tddPeriodicityMs?.takeIf { it.isNotBlank() }?.let { add("TDD periodicity" to "$it ms") }
+        }
+        p.dlSlots?.let { add("DL slots$p1Label" to "$it") }
+        p.dlSymbols?.let { add("DL symbols$p1Label" to "$it") }
+        p.ulSlots?.let { add("UL slots$p1Label" to "$it") }
+        p.ulSymbols?.let { add("UL symbols$p1Label" to "$it") }
+        if (p.hasPattern2) {
+            p.p2DlSlots?.let { add("DL slots (p2)" to "$it") }
+            p.p2DlSymbols?.let { add("DL symbols (p2)" to "$it") }
+            p.p2UlSlots?.let { add("UL slots (p2)" to "$it") }
+            p.p2UlSymbols?.let { add("UL symbols (p2)" to "$it") }
+        }
+        p.ssbPeriodicityMs?.let { add("SSB periodicity" to "$it ms") }
+        p.ssbPosition?.let { add("SSB position" to "$it") }
+        p.ssbPositionsInBurst?.takeIf { it.isNotBlank() }?.let { add("SSB in burst" to it) }
+        p.scsKhz?.let { add("SCS" to "$it kHz") }
+    }
     if (fields.isEmpty()) {
         Text("No values recorded yet.", style = MaterialTheme.typography.bodySmall)
     } else {
@@ -317,15 +334,41 @@ private fun ProfileEditor(
                     }
                 }
                 item { HorizontalDivider() }
-                item { Field("TDD pattern (e.g. DDDSU)", p.tddPattern ?: "") { p = p.copy(tddPattern = it.ifBlank { null }) } }
-                item { Field("TDD periodicity ms", p.tddPeriodicityMs ?: "") { p = p.copy(tddPeriodicityMs = it.ifBlank { null }) } }
+                item {
+                    Field("TDD pattern (e.g. DDDSU, or DDDSUUDDDD for two patterns)", p.tddPattern ?: "") {
+                        p = p.copy(tddPattern = it.ifBlank { null })
+                    }
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Field("Pattern 1 duration ms", p.pattern1PeriodicityMs ?: "") {
+                                p = p.copy(pattern1PeriodicityMs = it.ifBlank { null })
+                            }
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Field("Pattern 2 duration ms (blank if only one)", p.pattern2PeriodicityMs ?: "") {
+                                p = p.copy(pattern2PeriodicityMs = it.ifBlank { null })
+                            }
+                        }
+                    }
+                }
+                item {
+                    Field(
+                        "Repeats every ms (pattern 1 + pattern 2, or same as pattern 1 if only one)",
+                        p.tddPeriodicityMs ?: "",
+                    ) { p = p.copy(tddPeriodicityMs = it.ifBlank { null }) }
+                }
+                item { Text("Pattern 1", style = MaterialTheme.typography.labelMedium) }
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Column(Modifier.weight(1f)) {
                             Field("DL slots", p.dlSlots?.toString() ?: "") { p = p.copy(dlSlots = it.toIntOrNull()) }
                         }
                         Column(Modifier.weight(1f)) {
-                            Field("DL symbols", p.dlSymbols?.toString() ?: "") { p = p.copy(dlSymbols = it.toIntOrNull()) }
+                            Field("Special slot DL symbols", p.dlSymbols?.toString() ?: "") {
+                                p = p.copy(dlSymbols = it.toIntOrNull())
+                            }
                         }
                     }
                 }
@@ -339,8 +382,49 @@ private fun ProfileEditor(
                         }
                     }
                 }
+                item {
+                    Text(
+                        "Pattern 2 (leave blank if this site has only one pattern)",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Field("DL slots", p.p2DlSlots?.toString() ?: "") { p = p.copy(p2DlSlots = it.toIntOrNull()) }
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Field("Special slot DL symbols", p.p2DlSymbols?.toString() ?: "") {
+                                p = p.copy(p2DlSymbols = it.toIntOrNull())
+                            }
+                        }
+                    }
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Field("UL slots", p.p2UlSlots?.toString() ?: "") { p = p.copy(p2UlSlots = it.toIntOrNull()) }
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Field("UL symbols", p.p2UlSymbols?.toString() ?: "") { p = p.copy(p2UlSymbols = it.toIntOrNull()) }
+                        }
+                    }
+                }
                 item { Field("SSB periodicity ms", p.ssbPeriodicityMs?.toString() ?: "") { p = p.copy(ssbPeriodicityMs = it.toIntOrNull()) } }
-                item { Field("SSB position in burst", p.ssbPositionsInBurst ?: "") { p = p.copy(ssbPositionsInBurst = it.ifBlank { null }) } }
+                item {
+                    Field("SSB positions in burst (bitmap, e.g. 00100000)", p.ssbPositionsInBurst ?: "") {
+                        p = p.copy(ssbPositionsInBurst = it.ifBlank { null })
+                    }
+                }
+                p.ssbPosition?.let { pos ->
+                    item {
+                        Text(
+                            "Read as SSB position $pos (the bitmap's one active candidate, 0-based).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 item { Field("Subcarrier spacing kHz", p.scsKhz?.toString() ?: "") { p = p.copy(scsKhz = it.toIntOrNull()) } }
                 item { HorizontalDivider() }
                 item {
@@ -428,7 +512,9 @@ private fun blankProfile(operator: String?, mcc: String?, mnc: String?, band: St
     market = null,
     siteName = null,
     tddPattern = null, tddPeriodicityMs = null,
+    pattern1PeriodicityMs = null, pattern2PeriodicityMs = null,
     dlSlots = null, dlSymbols = null, ulSlots = null, ulSymbols = null,
+    p2DlSlots = null, p2DlSymbols = null, p2UlSlots = null, p2UlSymbols = null,
     ssbPeriodicityMs = null, ssbPositionsInBurst = null, scsKhz = null,
     source = "",
     recordedAtUtcMillis = 0L,

@@ -599,6 +599,35 @@ report's own field-mapping code was read, not modified, and has no dedicated uni
 (pre-existing gap, not introduced here).
 
 
+## TddProfile gained a second pattern and an SSB position (2026-09-28)
+
+Requested after building the JMA Teko field-mapping doc: `TddProfile` could only ever hold ONE
+pattern's slot/symbol counts, and its one periodicity field held the *combined* period (5 ms for
+the n41 capture), not either pattern's own duration (3 ms, 2 ms). `Sib1Parser.Result` had always
+computed the pattern2 numbers -- `withSib1()` just never copied them into the saved profile, so
+they were silently dropped the moment a two-pattern site was saved.
+
+Added `pattern1PeriodicityMs`, `pattern2PeriodicityMs`, `p2DlSlots`, `p2DlSymbols`, `p2UlSlots`,
+`p2UlSymbols` to `TddProfile`, all persisted by `ProfileStore` (old saved lines read these as null,
+not an error -- checked with a dedicated test). `hasPattern2` is the presence check used everywhere
+a two- vs one-pattern site needs to render differently. `tddPeriodicityMs` keeps its existing
+meaning (the whole cycle's repeat period) unchanged, so nothing already saved gets silently
+reinterpreted.
+
+Also added `ssbPositionOf(bitmap)`: the 0-based index of the one active SSB candidate, when the
+bitmap sets exactly one bit -- what a DAS's simplified "SSB position" field is actually asking for,
+as opposed to the raw multi-bit bitmap this app already recorded. Null for a real multi-beam site
+(more than one bit set) or a long-form/hex bitmap, on purpose -- a single index cannot describe
+either honestly.
+
+Config tab, the profile editor, and the PDF report's profile section all show the per-pattern
+breakdown and the SSB position now. Confirmed on-device (n41 T-Mobile profile, reinstalled with the
+new fields): `Pattern DDDSUUDDDD  Pattern 1 duration 3 ms  Pattern 2 duration 2 ms  Repeats every
+5 ms  DL slots (p1) 3  DL symbols (p1) 6  UL slots (p1) 2  UL symbols (p1) 4  DL slots (p2) 4  DL
+symbols (p2) 0  UL slots (p2) 0  UL symbols (p2) 0  SSB position 2  SSB in burst 00100000  SCS
+30 kHz`. 466 tests passing (was 460).
+
+
 ## Ground rules
 
 Work from the open-source references: **libqmi** for QMI NAS, and QCSuper / SCAT / MobileInsight

@@ -70,10 +70,16 @@ class ProfileStore(private val file: File) {
         str("siteName", p.siteName); comma()
         str("tddPattern", p.tddPattern); comma()
         str("tddPeriodicityMs", p.tddPeriodicityMs); comma()
+        str("pattern1PeriodicityMs", p.pattern1PeriodicityMs); comma()
+        str("pattern2PeriodicityMs", p.pattern2PeriodicityMs); comma()
         num("dlSlots", p.dlSlots); comma()
         num("dlSymbols", p.dlSymbols); comma()
         num("ulSlots", p.ulSlots); comma()
         num("ulSymbols", p.ulSymbols); comma()
+        num("p2DlSlots", p.p2DlSlots); comma()
+        num("p2DlSymbols", p.p2DlSymbols); comma()
+        num("p2UlSlots", p.p2UlSlots); comma()
+        num("p2UlSymbols", p.p2UlSymbols); comma()
         num("ssbPeriodicityMs", p.ssbPeriodicityMs); comma()
         str("ssbPositionsInBurst", p.ssbPositionsInBurst); comma()
         num("scsKhz", p.scsKhz); comma()
@@ -156,10 +162,19 @@ class ProfileStore(private val file: File) {
             siteName = map["siteName"],
             tddPattern = map["tddPattern"],
             tddPeriodicityMs = map["tddPeriodicityMs"],
+            // Absent on any line written before these existed -- null is the right read for a
+            // single-pattern profile anyway, and a two-pattern one written that long ago is
+            // already missing pattern2's slots/symbols too, so there is nothing to recover.
+            pattern1PeriodicityMs = map["pattern1PeriodicityMs"],
+            pattern2PeriodicityMs = map["pattern2PeriodicityMs"],
             dlSlots = int("dlSlots"),
             dlSymbols = int("dlSymbols"),
             ulSlots = int("ulSlots"),
             ulSymbols = int("ulSymbols"),
+            p2DlSlots = int("p2DlSlots"),
+            p2DlSymbols = int("p2DlSymbols"),
+            p2UlSlots = int("p2UlSlots"),
+            p2UlSymbols = int("p2UlSymbols"),
             ssbPeriodicityMs = int("ssbPeriodicityMs"),
             ssbPositionsInBurst = map["ssbPositionsInBurst"],
             scsKhz = int("scsKhz"),

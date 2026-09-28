@@ -242,4 +242,53 @@ class ProfileTest {
         assertTrue(shell.isEmpty)
         assertTrue(!profile().isEmpty)
     }
+
+    // ---- second pattern ----------------------------------------------------
+
+    @Test
+    fun `hasPattern2 is false until any pattern2 field is set`() {
+        assertTrue(!profile().hasPattern2)
+        assertTrue(profile().copy(p2DlSlots = 4).hasPattern2)
+        assertTrue(profile().copy(pattern2PeriodicityMs = "2").hasPattern2)
+    }
+
+    @Test
+    fun `a two-pattern profile round-trips its pattern2 fields`() {
+        val store = ProfileStore(tmp.newFile("profiles.jsonl"))
+        val p = profile().copy(
+            tddPattern = "DDDSUUDDDD", tddPeriodicityMs = "5",
+            pattern1PeriodicityMs = "3", pattern2PeriodicityMs = "2",
+            p2DlSlots = 4, p2DlSymbols = 0, p2UlSlots = 0, p2UlSymbols = 0,
+        )
+
+        store.save(listOf(p))
+        val back = store.load().profiles.single()
+
+        assertEquals(p, back)
+        assertTrue(back.hasPattern2)
+    }
+
+    // ---- SSB position --------------------------------------------------------
+
+    @Test
+    fun `ssbPositionOf reads the one set bit`() {
+        assertEquals(2, ssbPositionOf("00100000"))
+        assertEquals(0, ssbPositionOf("10000000"))
+        assertEquals(7, ssbPositionOf("00000001"))
+    }
+
+    @Test
+    fun `ssbPositionOf is null for anything that is not exactly one candidate`() {
+        assertNull(ssbPositionOf(null))
+        assertNull(ssbPositionOf(""))
+        assertNull(ssbPositionOf("00000000"))
+        assertNull(ssbPositionOf("10101010")) // a real multi-beam site has no single position
+        assertNull(ssbPositionOf("0x20")) // long-form bitmap; which half of 64 bits is unknown
+    }
+
+    @Test
+    fun `a profile's ssbPosition follows its stored bitmap`() {
+        assertEquals(2, profile().copy(ssbPositionsInBurst = "00100000").ssbPosition)
+        assertNull(profile().copy(ssbPositionsInBurst = "10101010").ssbPosition)
+    }
 }

@@ -631,19 +631,33 @@ object PdfReportGenerator {
                     c.kv("Scope", "Site-specific override for ${matched.siteName}")
                 }
                 c.gap()
-                val rows = listOfNotNull(
-                    matched.tddPattern?.takeIf { it.isNotBlank() }?.let { "TDD pattern" to it },
-                    matched.tddPeriodicityMs?.takeIf { it.isNotBlank() }
-                        ?.let { "TDD periodicity" to "$it ms" },
-                    matched.dlSlots?.let { "Downlink slots" to it.toString() },
-                    matched.dlSymbols?.let { "Downlink symbols" to it.toString() },
-                    matched.ulSlots?.let { "Uplink slots" to it.toString() },
-                    matched.ulSymbols?.let { "Uplink symbols" to it.toString() },
-                    matched.ssbPeriodicityMs?.let { "SSB periodicity" to "$it ms" },
+                val p1Suffix = if (matched.hasPattern2) " (pattern 1)" else ""
+                val rows = buildList {
+                    matched.tddPattern?.takeIf { it.isNotBlank() }?.let { add("TDD pattern" to it) }
+                    if (matched.hasPattern2) {
+                        matched.pattern1PeriodicityMs?.let { add("Pattern 1 duration" to "$it ms") }
+                        matched.pattern2PeriodicityMs?.let { add("Pattern 2 duration" to "$it ms") }
+                        matched.tddPeriodicityMs?.let { add("Repeats every" to "$it ms") }
+                    } else {
+                        matched.tddPeriodicityMs?.takeIf { it.isNotBlank() }
+                            ?.let { add("TDD periodicity" to "$it ms") }
+                    }
+                    matched.dlSlots?.let { add("Downlink slots$p1Suffix" to it.toString()) }
+                    matched.dlSymbols?.let { add("Downlink symbols$p1Suffix" to it.toString()) }
+                    matched.ulSlots?.let { add("Uplink slots$p1Suffix" to it.toString()) }
+                    matched.ulSymbols?.let { add("Uplink symbols$p1Suffix" to it.toString()) }
+                    if (matched.hasPattern2) {
+                        matched.p2DlSlots?.let { add("Downlink slots (pattern 2)" to it.toString()) }
+                        matched.p2DlSymbols?.let { add("Downlink symbols (pattern 2)" to it.toString()) }
+                        matched.p2UlSlots?.let { add("Uplink slots (pattern 2)" to it.toString()) }
+                        matched.p2UlSymbols?.let { add("Uplink symbols (pattern 2)" to it.toString()) }
+                    }
+                    matched.ssbPeriodicityMs?.let { add("SSB periodicity" to "$it ms") }
+                    matched.ssbPosition?.let { add("SSB position" to it.toString()) }
                     matched.ssbPositionsInBurst?.takeIf { it.isNotBlank() }
-                        ?.let { "SSB position in burst" to it },
-                    matched.scsKhz?.let { "Subcarrier spacing" to "$it kHz" },
-                )
+                        ?.let { add("SSB position in burst" to it) }
+                    matched.scsKhz?.let { add("Subcarrier spacing" to "$it kHz") }
+                }
                 for ((k, v) in rows) c.kv(k, v)
                 matched.note?.takeIf { it.isNotBlank() }?.let { c.gap(4f); c.para("Note: $it") }
 

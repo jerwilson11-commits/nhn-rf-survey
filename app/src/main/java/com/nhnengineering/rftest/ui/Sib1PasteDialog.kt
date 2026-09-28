@@ -194,6 +194,9 @@ internal fun sib1FoundLines(r: Sib1Parser.Result): List<Pair<String, String>> = 
         }
     }
     r.ssbPeriodicityMs?.let { add("SSB periodicity" to "$it ms") }
+    com.nhnengineering.rftest.profile.ssbPositionOf(r.ssbPositionsInBurst)?.let {
+        add("SSB position" to "$it")
+    }
     r.ssbPositionsInBurst?.let { add("SSB positions in burst" to it) }
 }
 
@@ -218,12 +221,19 @@ internal fun TddProfile.withSib1(r: Sib1Parser.Result, now: Long): TddProfile {
         tddPattern = r.derivedPattern ?: tddPattern,
         // The period the stored slot string actually repeats on. With two patterns that is
         // pattern1 + pattern2; storing pattern1's alone would put a figure describing part of the
-        // cycle next to a string describing all of it.
+        // cycle next to a string describing all of it. Each pattern's own duration is kept
+        // separately below, so a two-pattern site can still say "3 ms then 2 ms".
         tddPeriodicityMs = r.effectivePeriodicityMs ?: r.tddPeriodicityMs ?: tddPeriodicityMs,
+        pattern1PeriodicityMs = r.tddPeriodicityMs ?: pattern1PeriodicityMs,
+        pattern2PeriodicityMs = r.pattern2PeriodicityMs ?: pattern2PeriodicityMs,
         dlSlots = r.dlSlots ?: dlSlots,
         dlSymbols = r.dlSymbols ?: dlSymbols,
         ulSlots = r.ulSlots ?: ulSlots,
         ulSymbols = r.ulSymbols ?: ulSymbols,
+        p2DlSlots = r.p2DlSlots ?: p2DlSlots,
+        p2DlSymbols = r.p2DlSymbols ?: p2DlSymbols,
+        p2UlSlots = r.p2UlSlots ?: p2UlSlots,
+        p2UlSymbols = r.p2UlSymbols ?: p2UlSymbols,
         ssbPeriodicityMs = r.ssbPeriodicityMs ?: ssbPeriodicityMs,
         ssbPositionsInBurst = r.ssbPositionsInBurst ?: ssbPositionsInBurst,
         scsKhz = r.scsKhz ?: scsKhz,

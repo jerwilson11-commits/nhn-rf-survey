@@ -57,6 +57,24 @@ enum class Provenance(val label: String) {
     MEASURED("measured from SIB1"),
 }
 
+/**
+ * The one active SSB candidate's 0-based index, when [bitmap] is a short- or medium-length
+ * `ssb-PositionsInBurst` bitmap ('0'/'1' characters) with exactly one bit set.
+ *
+ * A DAS commissioning tool that only offers a single "SSB position" field is asking for this --
+ * which candidate is actually transmitted, not the raw bitmap. Null for anything that number does
+ * not cleanly describe: no bitmap recorded, more than one candidate active (a genuine multi-beam
+ * site, which has no single position to report), or a long-form/hex bitmap ([Sib1Parser] renders
+ * one as `0x...`), since indexing into that would need to know which half of a 64-bit pattern it
+ * came from.
+ */
+fun ssbPositionOf(bitmap: String?): Int? {
+    if (bitmap.isNullOrEmpty() || bitmap.startsWith("0x", ignoreCase = true)) return null
+    if (bitmap.any { it != '0' && it != '1' }) return null
+    if (bitmap.count { it == '1' } != 1) return null
+    return bitmap.indexOf('1')
+}
+
 data class TddProfile(
     val id: String,
     /** RAN vendor — the strongest predictor, since these are vendor defaults. */
@@ -73,11 +91,27 @@ data class TddProfile(
     val siteName: String?,
 
     val tddPattern: String?,
+    /**
+     * What the whole slot string actually repeats on -- pattern1 alone, or pattern1 + pattern2
+     * when there are two. Not either pattern's own duration; see [pattern1PeriodicityMs] and
+     * [pattern2PeriodicityMs] for those. Kept separate on purpose: a two-pattern site with this
+     * field alone would have no way to say "3 ms then 2 ms" versus "5 ms twice".
+     */
     val tddPeriodicityMs: String?,
+    /** Pattern1's own duration. Equal to [tddPeriodicityMs] when there is no pattern2. */
+    val pattern1PeriodicityMs: String? = null,
+    /** Pattern2's own duration, or null when this site has only one pattern. */
+    val pattern2PeriodicityMs: String? = null,
     val dlSlots: Int?,
     val dlSymbols: Int?,
     val ulSlots: Int?,
     val ulSymbols: Int?,
+    /** Pattern2's downlink slots, or null when this site has only one pattern. */
+    val p2DlSlots: Int? = null,
+    /** Pattern2's special-slot downlink symbols. */
+    val p2DlSymbols: Int? = null,
+    val p2UlSlots: Int? = null,
+    val p2UlSymbols: Int? = null,
     val ssbPeriodicityMs: Int?,
     val ssbPositionsInBurst: String?,
     val scsKhz: Int?,
@@ -96,6 +130,14 @@ data class TddProfile(
     val note: String?,
 ) {
     val isSiteOverride: Boolean get() = !siteName.isNullOrBlank()
+
+    /** True when this site broadcasts a second TDD pattern, not just one. */
+    val hasPattern2: Boolean
+        get() = pattern2PeriodicityMs != null || p2DlSlots != null || p2DlSymbols != null ||
+            p2UlSlots != null || p2UlSymbols != null
+
+    /** The one active SSB candidate's 0-based index, or null -- see [ssbPositionOf]. */
+    val ssbPosition: Int? get() = ssbPositionOf(ssbPositionsInBurst)
 
     /** One-line identity for a list. */
     val title: String
