@@ -143,4 +143,104 @@ class BeaconElementsTest {
         assertEquals(1, b.bssLoad!!.stationCount)
         assertEquals(20, b.bssLoad!!.channelUtilisationPct)
     }
+
+    // ---- HT / VHT capability -------------------------------------------------
+
+    /** Builds an HT Capabilities body with just enough bytes for [BeaconElements] to read. */
+    private fun htBody(info0: Int, vararg supportedMcs: Int): ByteArray {
+        val body = ByteArray(7)
+        body[0] = info0.toByte()
+        for (mcs in supportedMcs) {
+            val byteIndex = 3 + mcs / 8
+            body[byteIndex] = (body[byteIndex].toInt() or (1 shl (mcs % 8))).toByte()
+        }
+        return body
+    }
+
+    /** Builds a VHT Capabilities body from a per-spatial-stream MCS map (nss -> raw 2-bit value,
+     *  0=MCS0-7, 1=MCS0-8, 2=MCS0-9, 3=not supported); unlisted streams default to 3. */
+    private fun vhtBody(info0: Int, vararg nssToGroupValue: Pair<Int, Int>): ByteArray {
+        val byNss = (1..8).associateWith { 3 }.toMutableMap()
+        for ((nss, v) in nssToGroupValue) byNss[nss] = v
+        var mcsMap = 0
+        for (nss in 1..8) mcsMap = mcsMap or (byNss.getValue(nss) shl ((nss - 1) * 2))
+        val body = ByteArray(6)
+        body[0] = info0.toByte()
+        body[4] = (mcsMap and 0xFF).toByte()
+        body[5] = ((mcsMap shr 8) and 0xFF).toByte()
+        return body
+    }
+
+    @Test
+    fun `HT MCS7 at 20MHz long GI is 65 Mbps`() {
+        val b = BeaconElements.parse(listOf(45 to htBody(info0 = 0x00, 7)))
+
+        assertEquals(7, b.rates!!.ht!!.maxMcsIndex)
+        assertFalse(b.rates!!.ht!!.channelWidth40)
+        assertEquals(65.0, b.rates!!.ht!!.maxRateMbps!!, 0.001)
+        assertEquals(65.0, b.rates!!.maxPhyRateMbps!!, 0.001)
+    }
+
+    @Test
+    fun `HT picks the highest supported MCS, not the last one seen`() {
+        // MCS15 (2 streams) supported alongside MCS3 and MCS9 -- the highest must win regardless
+        // of bit order, and 40MHz plus short GI must both be picked up from the info field.
+        val body = htBody(info0 = 0x02 or 0x40, 3, 9, 15) // width40 | shortGi40
+        val b = BeaconElements.parse(listOf(45 to body))
+
+        assertEquals(15, b.rates!!.ht!!.maxMcsIndex)
+        assertTrue(b.rates!!.ht!!.channelWidth40)
+        assertTrue(b.rates!!.ht!!.shortGi40)
+        // 2 streams, MCS mod 8 = 7, 40MHz short GI base is 150 -> 300.
+        assertEquals(300.0, b.rates!!.ht!!.maxRateMbps!!, 0.001)
+    }
+
+    @Test
+    fun `an HT element with no MCS bit set is absent rather than MCS0`() {
+        val b = BeaconElements.parse(listOf(ie(1, 0x8C), 45 to htBody(info0 = 0x00)))
+
+        assertNull(b.rates!!.ht)
+    }
+
+    @Test
+    fun `VHT 1 stream MCS9 80MHz short GI is the famous 433 Mbps`() {
+        // The number printed on every "AC1200"-class router box, and the reason this is worth
+        // getting exactly right rather than approximately right.
+        val body = vhtBody(info0 = 0x20, 1 to 2) // shortGi80, nss1 = MCS0-9
+        val b = BeaconElements.parse(listOf(191 to body))
+
+        assertEquals(mapOf(1 to 9), b.rates!!.vht!!.maxMcsByNss)
+        assertFalse(b.rates!!.vht!!.channelWidth160)
+        assertEquals(433.3, b.rates!!.vht!!.maxRateMbps!!, 0.01)
+    }
+
+    @Test
+    fun `VHT skips a standard-defined gap rather than returning nothing for it`() {
+        // 3 streams, MCS0-9 advertised, 160MHz with short GI. MCS9 at 3 streams/160MHz is one of
+        // the combinations the standard itself does not define -- WifiPhyRatesTest pins that gap
+        // directly, but the point of this test is that BeaconElements' search still finds the real
+        // maximum (MCS8) instead of colliding with the gap and reporting nothing.
+        val body = vhtBody(info0 = 0x0C or 0x40, 3 to 2) // width160 (bits2-3=11->160), shortGi160
+        val b = BeaconElements.parse(listOf(191 to body))
+
+        assertEquals(2340.0, b.rates!!.vht!!.maxRateMbps!!, 0.01)
+    }
+
+    @Test
+    fun `VHT supersedes a weaker HT element on the same beacon`() {
+        val ht = 45 to htBody(info0 = 0x02 or 0x40, 7) // 40MHz short GI, MCS7 -> 150
+        val vht = 191 to vhtBody(info0 = 0x20, 1 to 2) // 80MHz short GI, MCS9 -> 433.3
+        val b = BeaconElements.parse(listOf(ht, vht))
+
+        assertEquals(433.3, b.rates!!.maxPhyRateMbps!!, 0.01)
+    }
+
+    @Test
+    fun `no HT or VHT element leaves maxPhyRateMbps null, not zero`() {
+        val b = BeaconElements.parse(listOf(ie(1, 0x8C)))
+
+        assertNull(b.rates!!.ht)
+        assertNull(b.rates!!.vht)
+        assertNull(b.rates!!.maxPhyRateMbps)
+    }
 }

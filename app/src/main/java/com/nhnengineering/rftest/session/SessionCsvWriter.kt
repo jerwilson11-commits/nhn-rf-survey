@@ -141,7 +141,7 @@ private val WIFI_COLUMNS = listOf(
     // From the serving AP's beacon rather than from ScanResult's own fields. Channel utilisation
     // is the one that changes conclusions: a site at -55 dBm everywhere with 80% airtime busy has
     // a capacity problem that no amount of signal measurement will find.
-    "wifi_chan_util_pct", "wifi_sta_count", "wifi_min_basic_mbps", "wifi_dtim",
+    "wifi_chan_util_pct", "wifi_sta_count", "wifi_min_basic_mbps", "wifi_max_phy_mbps", "wifi_dtim",
     "wifi_country", "wifi_11k", "wifi_11v", "wifi_11r",
 )
 
@@ -326,6 +326,7 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += beacon?.bssLoad?.channelUtilisationPct?.toString()
     cells += beacon?.bssLoad?.stationCount?.toString()
     cells += beacon?.rates?.minBasicMbps?.let { String.format(Locale.US, "%.1f", it) }
+    cells += beacon?.rates?.maxPhyRateMbps?.let { String.format(Locale.US, "%.1f", it) }
     cells += beacon?.dtimPeriod?.toString()
     cells += beacon?.countryCode
     cells += beacon?.radioMeasurement?.toString()
