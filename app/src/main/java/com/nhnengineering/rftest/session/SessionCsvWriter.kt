@@ -174,6 +174,11 @@ private val THROUGHPUT_COLUMNS = listOf(
  */
 private val INDOOR_COLUMNS = listOf(
     "floorplan_id", "floorplan_x", "floorplan_y", "waypoint", "floor", "band_lock", "rat_lock",
+    // Track B (public safety coverage, see model/PublicSafetyCoverage.kt): which area class this
+    // sample was classified as, if any. Meaningful only alongside cell_band/cell_nr_band == the
+    // FirstNet Band 14/n14 rows -- everything downstream that reads this column must filter on
+    // band too, never trust the classification alone.
+    "errcs_area_class",
 )
 
 private val TRAILING_COLUMNS = listOf("note")
@@ -361,6 +366,7 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += floor
     cells += bandLock
     cells += ratLock
+    cells += errcsAreaClass?.name
 
     cells += note
 

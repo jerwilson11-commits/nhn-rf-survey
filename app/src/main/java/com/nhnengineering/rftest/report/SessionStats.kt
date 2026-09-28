@@ -1,5 +1,7 @@
 package com.nhnengineering.rftest.report
 
+import com.nhnengineering.rftest.model.ErrcsAreaClass
+import com.nhnengineering.rftest.model.PublicSafetyThresholds
 import com.nhnengineering.rftest.model.RsrpBucket
 import com.nhnengineering.rftest.model.RssiBucket
 import com.nhnengineering.rftest.session.SessionSummary
@@ -1117,5 +1119,69 @@ object SessionStats {
             (summary.durationMs / 1000).toString(),
         ).joinToString(",") { if (it.contains(',')) "\"$it\"" else it }
         return "$header\n$row\n"
+    }
+
+    // -----------------------------------------------------------------------
+    // Public Safety Coverage -- Track B (FirstNet Band 14/n14, auto-measured)
+    // -----------------------------------------------------------------------
+
+    /** Per-area-class result of Track B compliance, mirroring `ErrcsAreaCompliance` (Track A). */
+    data class PublicSafetyAreaResult(
+        val areaClass: ErrcsAreaClass,
+        /** Band 14/n14 samples in this area class that carried an RSRP reading. */
+        val sampleCount: Int,
+        /** Of [sampleCount], how many were classified without ever reporting a level. */
+        val missing: Int,
+        val passingCount: Int,
+        val requiredPct: Int,
+        val actualPct: Double?,
+        val meetsRequirement: Boolean,
+    )
+
+    /**
+     * True when [point]'s serving cell was FirstNet Band 14 (LTE) or n14 (NR).
+     *
+     * [TrackPoint.cellBand] is written as `"B" + <lte band>` for LTE or the raw `nr_band` string
+     * (possibly several NR bands joined with `/`, e.g. `"n41/n14"`) for NR -- see
+     * `SessionReader.servingBand` and `SessionCsvWriter`'s `nr_band` column. A prefix-only check
+     * would also match "B140" or similar, so LTE is an exact match and NR is matched as one
+     * `/`-delimited element, never a bare substring.
+     */
+    fun isFirstNetBand14(point: TrackPoint): Boolean {
+        val b = point.cellBand ?: return false
+        return b == "B14" || b.split("/").any { it == "n14" }
+    }
+
+    /**
+     * Track B public-safety-coverage compliance: FirstNet Band 14/n14 samples only, judged
+     * per-area-class against [thresholds].
+     *
+     * A sample not currently serving on Band 14/n14 is excluded regardless of its signal
+     * strength -- a strong commercial-band reading says nothing about FirstNet coverage, and
+     * counting it here would be the one dangerous bug in this feature. A sample the operator did
+     * not classify (`errcsAreaClass == null`) is likewise excluded rather than guessed into
+     * "general," since an unclassified sample carries no compliance meaning either way.
+     */
+    fun publicSafetyCoverage(
+        points: List<TrackPoint>,
+        thresholds: PublicSafetyThresholds,
+    ): List<PublicSafetyAreaResult> {
+        val band14 = points.filter(::isFirstNetBand14)
+        return ErrcsAreaClass.entries.map { areaClass ->
+            val inClass = band14.filter { it.errcsAreaClass == areaClass }
+            val (withLevel, missing) = inClass.partition { it.rsrpDbm != null }
+            val passing = withLevel.count { it.rsrpDbm!! >= thresholds.minDbmFor(areaClass) }
+            val actualPct = if (withLevel.isEmpty()) null else 100.0 * passing / withLevel.size
+            val requiredPct = thresholds.requiredPctFor(areaClass)
+            PublicSafetyAreaResult(
+                areaClass = areaClass,
+                sampleCount = withLevel.size,
+                missing = missing.size,
+                passingCount = passing,
+                requiredPct = requiredPct,
+                actualPct = actualPct,
+                meetsRequirement = actualPct != null && actualPct >= requiredPct,
+            )
+        }
     }
 }

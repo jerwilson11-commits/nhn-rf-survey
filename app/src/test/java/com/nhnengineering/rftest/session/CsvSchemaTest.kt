@@ -81,9 +81,10 @@ class CsvSchemaTest {
         // is unreadable after the fact without knowing which instrument produced it.
         // 92 until 2026-09-28, when wifi_max_phy_mbps was added for HT/VHT capability, then 93
         // when wifi_est_headroom_mbps and wifi_est_mbps_per_station were added for capacity
-        // modeling the same day.
-        assertEquals(95, CSV_COLUMN_COUNT)
-        assertEquals(95, CSV_HEADER.split(",").size)
+        // modeling the same day, then 96 when errcs_area_class was added for public-safety-
+        // coverage Track B (public-safety-coverage classification, see model/PublicSafetyCoverage.kt).
+        assertEquals(96, CSV_COLUMN_COUNT)
+        assertEquals(96, CSV_HEADER.split(",").size)
     }
 
     @Test

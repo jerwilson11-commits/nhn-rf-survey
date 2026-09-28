@@ -174,6 +174,12 @@ object PdfReportGenerator {
         report: SessionStats.Report,
         out: File,
         profiles: List<com.nhnengineering.rftest.profile.TddProfile> = emptyList(),
+        /** Track A (manual LMR entry) grid points, unfiltered -- matched to this session below
+         *  by [SessionSummary.floorplanIds], the same way [profiles] is matched internally rather
+         *  than pre-filtered by the caller. */
+        errcsGridPoints: List<com.nhnengineering.rftest.model.ErrcsGridPoint> = emptyList(),
+        publicSafetyThresholds: com.nhnengineering.rftest.model.PublicSafetyThresholds =
+            com.nhnengineering.rftest.model.PublicSafetyThresholds(),
     ): File = withContext(Dispatchers.IO) {
         val doc = PdfDocument()
         val c = Ctx(doc)
@@ -406,6 +412,125 @@ object PdfReportGenerator {
             c.gap()
             groupTable(c, areas, report.thresholdDbm)
             c.gap(); c.rule()
+        }
+
+        // ---- Public Safety Coverage -----------------------------------------
+        //
+        // Track A (manual LMR entry) and Track B (FirstNet Band 14/n14, auto-measured) never
+        // merge into one compliance figure -- see model/PublicSafetyCoverage.kt for why. A
+        // session with neither kind of data present renders no section at all, rather than a
+        // table of zeros that would read as "tested and found compliant."
+        run {
+            val trackA = errcsGridPoints.filter { it.floorplanId in summary.floorplanIds }
+            val trackAResults = if (trackA.isNotEmpty()) {
+                com.nhnengineering.rftest.model.errcsCompliance(trackA, publicSafetyThresholds)
+            } else {
+                emptyList()
+            }
+            val trackBResults = SessionStats.publicSafetyCoverage(points, publicSafetyThresholds)
+            val trackBHasData = trackBResults.any { it.sampleCount > 0 || it.missing > 0 }
+            val band14SamplesUnclassified = !trackBHasData &&
+                points.any { SessionStats.isFirstNetBand14(it) }
+
+            if (trackA.isNotEmpty() || trackBHasData || band14SamplesUnclassified) {
+                c.ensure(160f)
+                c.text("Public safety coverage", c.h2)
+                c.para(
+                    "Traditional ERRCS (Land Mobile Radio: VHF, UHF, or 700/800 MHz P25) cannot be " +
+                        "measured by a phone -- it uses a different RF front end and protocol than " +
+                        "this device's cellular or Wi-Fi radios entirely. The two tracks below are " +
+                        "the two ways this app can contribute evidence to a public-safety coverage " +
+                        "question, and they are never combined into one compliance figure.",
+                )
+                c.gap()
+
+                if (trackA.isNotEmpty()) {
+                    c.text("Track A — manually entered LMR readings", c.body)
+                    c.para(
+                        "Each reading was taken on the operator's own tuned signal meter and " +
+                            "typed in by hand; this app did not measure or verify it.",
+                        indent = 10f,
+                    )
+                    c.gap(4f)
+                    c.text(
+                        String.format(
+                            Locale.US, "%-16s %8s %8s %7s %9s",
+                            "Area class", "Points", "Passing", "Pass %", "Required",
+                        ),
+                        c.monoBold,
+                    )
+                    for (r in trackAResults) {
+                        c.text(
+                            String.format(
+                                Locale.US, "%-16s %8d %8d %6s %8s%%",
+                                r.areaClass.label, r.pointCount, r.passingCount,
+                                r.actualPct?.let { String.format(Locale.US, "%.1f", it) } ?: "—",
+                                r.requiredPct.toString(),
+                            ),
+                            c.mono,
+                        )
+                    }
+                    val failingA = trackAResults.filter { it.pointCount > 0 && !it.meetsRequirement }
+                    if (failingA.isNotEmpty()) {
+                        c.para(
+                            "Below requirement: " + failingA.joinToString(", ") { it.areaClass.label },
+                        )
+                    }
+                    c.gap(6f)
+                }
+
+                if (trackBHasData) {
+                    c.text("Track B — FirstNet Band 14/n14 (measured automatically)", c.body)
+                    c.para(
+                        "Filtered to samples this session recorded while the serving cell was " +
+                            "Band 14 (LTE) or n14 (NR) -- FirstNet, under NFPA 1225's broader ERCES " +
+                            "framework. Whether a given building's AHJ accepts this in place of " +
+                            "strict LMR ERRCS testing is jurisdiction-specific and is not assumed " +
+                            "here.",
+                        indent = 10f,
+                    )
+                    c.gap(4f)
+                    c.text(
+                        String.format(
+                            Locale.US, "%-16s %8s %8s %7s %9s",
+                            "Area class", "Samples", "Passing", "Pass %", "Required",
+                        ),
+                        c.monoBold,
+                    )
+                    for (r in trackBResults) {
+                        c.text(
+                            String.format(
+                                Locale.US, "%-16s %8d %8d %6s %8s%%",
+                                r.areaClass.label, r.sampleCount, r.passingCount,
+                                r.actualPct?.let { String.format(Locale.US, "%.1f", it) } ?: "—",
+                                r.requiredPct.toString(),
+                            ),
+                            c.mono,
+                        )
+                    }
+                    val failingB = trackBResults.filter { it.sampleCount > 0 && !it.meetsRequirement }
+                    if (failingB.isNotEmpty()) {
+                        c.para(
+                            "Below requirement: " + failingB.joinToString(", ") { it.areaClass.label },
+                        )
+                    }
+                    if (trackBResults.any { it.missing > 0 }) {
+                        c.para(
+                            "Some classified Band 14/n14 samples carried no RSRP reading and are " +
+                                "excluded from the counts above, not counted as failing.",
+                        )
+                    }
+                } else if (band14SamplesUnclassified) {
+                    c.text("Track B — FirstNet Band 14/n14", c.body)
+                    c.para(
+                        "This session recorded samples on Band 14/n14 (FirstNet), but none were " +
+                            "classified into a general or critical area, so no compliance figure " +
+                            "is shown.",
+                        indent = 10f,
+                    )
+                }
+                c.gap(); c.rule()
+            }
         }
 
         // ---- Dominance / best server --------------------------------------

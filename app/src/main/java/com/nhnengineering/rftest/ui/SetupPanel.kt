@@ -48,6 +48,10 @@ fun SetupPanel(
     lastFile: String?,
     onArea: (String?) -> Unit,
     onFloor: (String?) -> Unit,
+    errcsAreaClass: com.nhnengineering.rftest.model.ErrcsAreaClass?,
+    onErrcsAreaClass: (com.nhnengineering.rftest.model.ErrcsAreaClass?) -> Unit,
+    /** Null = no cellular sample yet; true/false = live, from the current serving cell. */
+    band14Registered: Boolean?,
     bandLock: String?,
     onBandLock: (String?) -> Unit,
     bandLockUi: BandLockUi,
@@ -121,6 +125,11 @@ fun SetupPanel(
 
             Text("Labels", style = MaterialTheme.typography.titleSmall)
             LabelEntry(onArea = onArea, onFloor = onFloor)
+            ErrcsAreaClassControl(
+                current = errcsAreaClass,
+                onChange = onErrcsAreaClass,
+                band14Registered = band14Registered,
+            )
             // The real control where the modem can be driven; the operator's declaration field
             // where it cannot (no root), which is the only honest thing that handset can offer.
             when {

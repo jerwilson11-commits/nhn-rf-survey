@@ -1,5 +1,6 @@
 package com.nhnengineering.rftest.session
 
+import com.nhnengineering.rftest.model.ErrcsAreaClass
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -86,6 +87,12 @@ data class TrackPoint(
     val waypoint: String?,
     /** Floor the operator recorded for this sample, verbatim as the building names it. */
     val floor: String? = null,
+    /**
+     * Public-safety-coverage area classification (Track B), sticky like [floor]. Meaningful only
+     * on a row whose [cellBand] is Band 14/n14 (FirstNet) -- see `model/PublicSafetyCoverage.kt`.
+     * Null means "not classified," not "general," and must not be treated as either area.
+     */
+    val errcsAreaClass: ErrcsAreaClass? = null,
     /** Network identity, read back so a report can match a configuration profile to the session. */
     val networkOperator: String? = null,
     val mcc: String? = null,
@@ -238,6 +245,7 @@ object SessionReader {
             val iOp = idx("operator"); val iMcc = idx("mcc"); val iMnc = idx("mnc")
             val iFp = idx("floorplan_id"); val iFpX = idx("floorplan_x")
             val iFpY = idx("floorplan_y"); val iWp = idx("waypoint")
+            val iErrcsAreaClass = idx("errcs_area_class")
             if (iLat == null || iLon == null) return@withContext null
 
             val points = mutableListOf<TrackPoint>()
@@ -322,6 +330,9 @@ object SessionReader {
                     floorplanY = fpY,
                     waypoint = s(iWp),
                     floor = s(iFloor),
+                    errcsAreaClass = s(iErrcsAreaClass)?.let { v ->
+                        runCatching { ErrcsAreaClass.valueOf(v) }.getOrNull()
+                    },
                     networkOperator = s(iOp),
                     mcc = s(iMcc),
                     mnc = s(iMnc),

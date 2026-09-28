@@ -410,6 +410,64 @@ private fun bandsIn(label: String?, prefix: Char): Set<Int> {
         .toSet()
 }
 
+/**
+ * Track B classification: is the current position a critical or general area for public-safety
+ * coverage purposes, or not being classified at all right now.
+ *
+ * Deliberately three states, not two -- "not classified" must stay reachable and must be the
+ * default, since an unclassified sample must never silently count as "general" in a compliance
+ * figure. Only meaningful for samples on FirstNet Band 14/n14; the report filters on band
+ * regardless of what this says. See `model/PublicSafetyCoverage.kt`.
+ */
+@Composable
+fun ErrcsAreaClassControl(
+    current: com.nhnengineering.rftest.model.ErrcsAreaClass?,
+    onChange: (com.nhnengineering.rftest.model.ErrcsAreaClass?) -> Unit,
+    band14Registered: Boolean? = null,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Public safety area (Band 14 only)", style = MaterialTheme.typography.titleSmall)
+        // Live, not a claim about the whole session -- the serving cell can change bands
+        // mid-walk, and a classified sample only counts toward Track B while this is true.
+        Text(
+            text = when (band14Registered) {
+                true -> "FirstNet Band 14/n14: registered now"
+                false -> "FirstNet Band 14/n14: not registered — samples now won't count toward Track B"
+                null -> "FirstNet Band 14/n14: no cellular reading yet"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (band14Registered == true) {
+                Color(0xFF2E7D32)
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            val options = listOf(
+                "Not classified" to null,
+                "General" to com.nhnengineering.rftest.model.ErrcsAreaClass.GENERAL,
+                "Critical" to com.nhnengineering.rftest.model.ErrcsAreaClass.CRITICAL,
+            )
+            options.forEach { (label, value) ->
+                val selected = current == value
+                if (selected) {
+                    Button(
+                        onClick = { onChange(value) },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        contentPadding = PaddingValues(2.dp),
+                    ) { Text(label, fontSize = 13.sp, maxLines = 1) }
+                } else {
+                    OutlinedButton(
+                        onClick = { onChange(value) },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        contentPadding = PaddingValues(2.dp),
+                    ) { Text(label, fontSize = 13.sp, maxLines = 1) }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun LabelEntry(onArea: (String?) -> Unit, onFloor: (String?) -> Unit) {
     var areaText by remember { mutableStateOf("") }

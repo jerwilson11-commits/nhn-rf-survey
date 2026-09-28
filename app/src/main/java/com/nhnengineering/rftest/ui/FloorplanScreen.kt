@@ -232,8 +232,10 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
  * every tap would be placed slightly wrong — an error that is invisible on screen and corrupts
  * every position in the session.
  */
+/** Package-visible rather than private: [com.nhnengineering.rftest.ui.ErrcsGridScreen] reuses this
+ *  exact canvas for grid-point placement rather than reimplementing pinch/zoom/pan/tap handling. */
 @Composable
-private fun FloorplanCanvas(
+internal fun FloorplanCanvas(
     plan: Floorplan,
     bitmap: ImageBitmap,
     placed: List<Pair<IndoorPosition, Int?>>,

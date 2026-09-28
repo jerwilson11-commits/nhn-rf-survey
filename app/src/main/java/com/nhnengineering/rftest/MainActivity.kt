@@ -37,6 +37,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.core.content.ContextCompat
 import com.nhnengineering.rftest.billing.EntitlementRepository
 import com.nhnengineering.rftest.billing.SubscriptionTier
+import com.nhnengineering.rftest.ui.ErrcsGridScreen
 import com.nhnengineering.rftest.ui.FloorplanScreen
 import com.nhnengineering.rftest.ui.MapScreen
 import com.nhnengineering.rftest.ui.PaywallScreen
@@ -85,6 +86,7 @@ private enum class Tab(val label: String) {
     LIVE("Live"),
     MAP("Map"),
     FLOORPLAN("Plan"),
+    SAFETY("Safety"),
     SESSIONS("Saved"),
     PROFILES("Config"),
 }
@@ -175,6 +177,7 @@ private fun RfTestApp() {
             tab == Tab.LIVE -> WifiDashboard(modifier = Modifier.padding(innerPadding))
             tab == Tab.MAP -> MapScreen(modifier = Modifier.padding(innerPadding))
             tab == Tab.FLOORPLAN -> FloorplanScreen(modifier = Modifier.padding(innerPadding))
+            tab == Tab.SAFETY -> ErrcsGridScreen(modifier = Modifier.padding(innerPadding))
             tab == Tab.PROFILES -> ProfileScreen(modifier = Modifier.padding(innerPadding))
             else -> SessionsScreen(modifier = Modifier.padding(innerPadding))
         }

@@ -159,6 +159,11 @@ fun SessionsScreen(modifier: Modifier = Modifier) {
                         profiles = com.nhnengineering.rftest.profile.ProfileStore(
                             java.io.File(context.filesDir, "tdd-profiles.jsonl"),
                         ).load().profiles,
+                        // Track A public-safety-coverage grid points, unfiltered -- the generator
+                        // matches them to this session's floorplans itself, same as profiles above.
+                        errcsGridPoints = com.nhnengineering.rftest.session.ErrcsGridStore(
+                            java.io.File(context.filesDir, "errcs_grid.jsonl"),
+                        ).load().points,
                     )
                     // The summary CSV rides alongside for anyone who wants the numbers in a
                     // spreadsheet. Apache POI would be a very large dependency to produce

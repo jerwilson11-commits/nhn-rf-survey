@@ -241,6 +241,9 @@ data class MeasurementSample(
      * with by the people who work there.
      */
     val floor: String? = null,
+    /** Public-safety-coverage area classification (Track B), for a sample that is on Band
+     *  14/n14 -- see `PublicSafetyCoverage.kt`. Null means "not classified," never "general." */
+    val errcsAreaClass: ErrcsAreaClass? = null,
     /** Band the operator declared the handset locked to; null for a free-running walk. */
     val bandLock: String? = null,
     /** Radio technology the operator declared the handset restricted to. */

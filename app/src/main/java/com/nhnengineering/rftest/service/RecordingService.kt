@@ -170,6 +170,7 @@ class RecordingService : Service() {
                             indoor = RecordingState.indoorPosition.value,
                             areaLabel = RecordingState.areaLabel.value,
                             floor = RecordingState.floor.value,
+                            errcsAreaClass = RecordingState.errcsAreaClass.value,
                             bandLock = RecordingState.bandLock.value,
                             ratLock = RecordingState.ratLock.value,
                             throughput = throughput,

@@ -2,6 +2,7 @@ package com.nhnengineering.rftest.service
 
 import com.nhnengineering.rftest.model.Breach
 import com.nhnengineering.rftest.model.CellularSample
+import com.nhnengineering.rftest.model.ErrcsAreaClass
 import com.nhnengineering.rftest.model.GeoPoint
 import com.nhnengineering.rftest.model.IndoorPosition
 import com.nhnengineering.rftest.model.ThroughputSample
@@ -68,6 +69,16 @@ object RecordingState {
      * stepping out of the lift, not once per sample.
      */
     val floor = MutableStateFlow<String?>(null)
+
+    /**
+     * Public-safety-coverage area classification (Track B), sticky like [areaLabel] and
+     * deliberately a **separate** field from it -- [areaLabel] is a free-text descriptive name
+     * ("Lobby," "Stairwell B") and carries no compliance meaning, while this is a real
+     * classification that changes which threshold a Band 14 sample is judged against. Null means
+     * "not classified," not "general" -- an unclassified sample must not silently count toward
+     * either compliance figure. See `model/PublicSafetyCoverage.kt`.
+     */
+    val errcsAreaClass = MutableStateFlow<ErrcsAreaClass?>(null)
 
     /**
      * The band the operator has locked the handset to externally, or null for a free-running walk.
@@ -181,6 +192,10 @@ object RecordingState {
         breaches.value = emptyList()
         error.value = null
         placedPositions.value = emptyList()
+        // Cleared, unlike floor: carrying a "critical area" classification into an unrelated new
+        // session risks mislabeling data feeding a public-safety compliance figure, which is a
+        // higher bar than the general convenience floor/areaLabel stickiness exists for.
+        errcsAreaClass.value = null
         areaLabel.value = null
         // Deliberately NOT cleared: a lock set in the modem outlives one recording, and silently
         // forgetting it would mark the next walk as free-running while the handset was still

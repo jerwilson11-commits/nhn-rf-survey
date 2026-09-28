@@ -285,6 +285,16 @@ data class CellularSample(
     val servingRsrpDbm: Int? get() = nr?.ssRsrpDbm ?: lte?.rsrpDbm
 
     val servingBandLabel: String? get() = nr?.bandLabel ?: lte?.bandLabel
+
+    /**
+     * True when the serving cell is FirstNet Band 14 (LTE) or n14 (NR), live.
+     *
+     * Drives the "Band 14 registered" indicator for public-safety-coverage Track B
+     * (`model/PublicSafetyCoverage.kt`) -- that track is only meaningful while the device is
+     * actually on Band 14, and this is the one place both radios' band fields are checked
+     * together for it.
+     */
+    val onFirstNetBand14: Boolean get() = lte?.band == 14 || nr?.bands?.contains("n14") == true
 }
 
 /**

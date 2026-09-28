@@ -97,6 +97,7 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val areaLabel by RecordingState.areaLabel.collectAsState()
     val floor by RecordingState.floor.collectAsState()
     val bandLock by RecordingState.bandLock.collectAsState()
+    val errcsAreaClass by RecordingState.errcsAreaClass.collectAsState()
     // Collected, not read as .value inside composition: the pre-walk card must clear its block the
     // moment a floorplan is chosen, and a raw .value read does not recompose when it changes.
     val indoorPosition by RecordingState.indoorPosition.collectAsState()
@@ -430,6 +431,9 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 lastFile = lastFile,
                 onArea = { RecordingState.areaLabel.value = it },
                 onFloor = { RecordingState.floor.value = it },
+                errcsAreaClass = errcsAreaClass,
+                onErrcsAreaClass = { RecordingState.errcsAreaClass.value = it },
+                band14Registered = serviceCell?.onFirstNetBand14,
                 bandLock = bandLock,
                 onBandLock = { RecordingState.bandLock.value = it },
                 bandLockUi = bandUi.copy(onApply = onBandApply, onRelease = onBandRelease),
