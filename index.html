@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — Site Survey Pro</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 2.5rem 1.25rem 4rem;
+    line-height: 1.55;
+    color: #1c1c1c;
+    background: #fdfcf9;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e8e6e1; background: #16140f; }
+    a { color: #8fc3ff; }
+    table, th, td { border-color: #3a3730 !important; }
+    thead { background: #221f18 !important; }
+  }
+  h1 { font-size: 1.6rem; margin-bottom: 0.2rem; }
+  h2 { font-size: 1.15rem; margin-top: 2.2rem; }
+  .eff { color: #78716c; font-size: 0.95rem; margin-top: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 0.95rem; }
+  th, td { border: 1px solid #ddd; padding: 0.55rem 0.7rem; text-align: left; vertical-align: top; }
+  thead { background: #f2efe8; }
+  code { background: rgba(127,127,127,0.15); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }
+  ul { padding-left: 1.3rem; }
+  li { margin-bottom: 0.5rem; }
+</style>
+</head>
+<body>
+
+<h1>Privacy Policy — Site Survey Pro</h1>
+<p class="eff"><strong>Effective date: September 28, 2026</strong></p>
+
+<p>Site Survey Pro ("the app") is published by NHN Engineering &amp; Consultants ("we," "us"). The
+app is a field-survey tool for measuring and recording Wi-Fi and cellular radio conditions. This
+policy explains what it collects, where that data goes, and what stays on your device.</p>
+
+<h2>The short version</h2>
+<p>Everything the app measures — location, Wi-Fi, cellular signal — is recorded to your device's
+own storage and stays there unless you explicitly export or share it yourself. The app does not
+run ads, does not use analytics or crash-reporting SDKs, does not have user accounts, and does not
+send your survey data to us, to any advertiser, or to any other third party. The only network
+traffic the app generates on its own is a throughput test against a public speed-test endpoint (or
+a server you point it at yourself), and that traffic carries generated test data, never your
+location or survey results.</p>
+
+<h2>What the app collects, and why</h2>
+<table>
+<thead><tr><th>Data</th><th>Why the app needs it</th></tr></thead>
+<tbody>
+<tr><td>Precise location (GPS)</td><td>Every measurement is tagged with where it was taken — that's
+the point of a survey tool. Also required by Android to return real Wi-Fi network names/addresses
+and cell identifiers at all; without it, the OS itself redacts them.</td></tr>
+<tr><td>Wi-Fi scan results (network names, addresses, signal strength, channel load)</td><td>The
+core Wi-Fi survey function.</td></tr>
+<tr><td>Cellular signal and cell identity (signal strength, band, cell ID, 4G/5G state)</td><td>The
+core cellular survey function.</td></tr>
+<tr><td>Phone state (<code>READ_PHONE_STATE</code>)</td><td>Distinguishes 5G non-standalone from
+standalone mode, which matters for what a survey is actually reporting.</td></tr>
+<tr><td>Precise phone state and modem control (<code>READ_PRECISE_PHONE_STATE</code>,
+<code>MODIFY_PHONE_STATE</code>)</td><td>Only usable at all when the app is installed as a
+privileged system app — refused on an ordinary install, which is the normal case for anyone using
+the Play Store version. Where available, it reads additional modem detail (carrier aggregation,
+physical channel configuration) and, on a rooted device with the app's optional advanced features
+enabled, allows locking the radio to a specific band or technology for controlled testing. See
+"Root-gated features" below.</td></tr>
+</tbody>
+</table>
+<p>All of the above is written to a file inside the app's own private storage. It is not uploaded
+anywhere automatically. You decide when and whether to export it (as PDF, CSV, KML, GeoJSON, or
+GeoPackage) and who you share that export with.</p>
+
+<h2>What the app does not do</h2>
+<ul>
+<li><strong>No accounts, no sign-in.</strong> There is nothing to link your data to an identity
+beyond what's on your own device.</li>
+<li><strong>No analytics or crash-reporting SDKs.</strong> Nothing about your usage is reported
+back to us.</li>
+<li><strong>No advertising</strong>, and no ad-related SDKs or identifiers.</li>
+<li><strong>No background collection without a visible indicator.</strong> Survey recording that
+continues with the screen off runs as a foreground service, which Android requires to show a
+persistent notification — it is never silent.</li>
+<li><strong>The app does not request <code>ACCESS_BACKGROUND_LOCATION</code>.</strong> It doesn't
+need to: a foreground service with a declared location type can already continue recording
+location while the app is backgrounded, so the broader always-available background permission is
+never asked for.</li>
+</ul>
+
+<h2>Network traffic the app generates</h2>
+<ul>
+<li><strong>Throughput ("speed") testing</strong>, an explicit, user-initiated feature: the app
+sends and receives generated test data to measure download/upload speed and latency. By default
+this talks to a public speed-test endpoint (speed.cloudflare.com); you can point it instead at a
+server on your own local network. Either way, only synthetic test bytes are exchanged — no
+location, identity, or survey data is included in that traffic.</li>
+<li><strong>The live view server</strong>, used to mirror the app's screen to a laptop during a
+walk test, binds only to the device's loopback address and is reached over a direct USB cable
+connection (<code>adb forward</code>), never over Wi-Fi or any other network. It cannot be reached
+by anything else on a shared network, including other devices at the same venue.</li>
+</ul>
+
+<h2>Root-gated features</h2>
+<p>On a rooted device, the app offers optional advanced features — band and technology locking,
+VoNR control, and detailed radio-layer decoding — gated behind root access and off by default.
+These features control the phone's own modem directly; none of them transmit data anywhere. They
+are absent or clearly disabled on any non-rooted device, which is the normal case for a Play Store
+install.</p>
+
+<h2>Subscriptions and payment</h2>
+<p>The app's Field and Pro plans are subscriptions purchased and managed entirely through Google
+Play's own billing system. We never see your payment method, card number, or billing address —
+Google Play collects and processes that directly. The app itself only ever learns which plan is
+currently active (or that none is), which is checked locally on your device against your Google
+Play purchase; no separate account or payment record is created or held by us.</p>
+
+<h2>Data retention and deletion</h2>
+<p>Survey data lives in the app's private storage until you delete it — either from within the app
+or by uninstalling it, which removes all app data along with it (unless you've separately exported
+a copy). We do not hold a copy of your data anywhere; there is nowhere for us to hold it, since it
+is never sent to us.</p>
+
+<h2>Children's privacy</h2>
+<p>The app is a professional RF field-survey tool, not directed at children, and we do not
+knowingly collect data from children.</p>
+
+<h2>Changes to this policy</h2>
+<p>If this policy changes, the updated version will be posted at the same location with a new
+effective date.</p>
+
+<h2>Contact</h2>
+<p>Questions about this policy: <strong>jerwilson11@gmail.com</strong></p>
+
+</body>
+</html>
