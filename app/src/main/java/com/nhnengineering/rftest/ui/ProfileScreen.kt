@@ -233,15 +233,18 @@ private fun ProfileValues(p: TddProfile) {
         } else {
             p.tddPeriodicityMs?.takeIf { it.isNotBlank() }?.let { add("TDD periodicity" to "$it ms") }
         }
+        // "DL symbols" on its own reads as some overall downlink count. What nrofDownlinkSymbols
+        // and nrofUplinkSymbols actually are is the split of the one special (switching) slot --
+        // "special slot" says that plainly, matching the wording the profile editor already uses.
         p.dlSlots?.let { add("DL slots$p1Label" to "$it") }
-        p.dlSymbols?.let { add("DL symbols$p1Label" to "$it") }
+        p.dlSymbols?.let { add("Special slot DL symbols$p1Label" to "$it") }
         p.ulSlots?.let { add("UL slots$p1Label" to "$it") }
-        p.ulSymbols?.let { add("UL symbols$p1Label" to "$it") }
+        p.ulSymbols?.let { add("Special slot UL symbols$p1Label" to "$it") }
         if (p.hasPattern2) {
             p.p2DlSlots?.let { add("DL slots (p2)" to "$it") }
-            p.p2DlSymbols?.let { add("DL symbols (p2)" to "$it") }
+            p.p2DlSymbols?.let { add("Special slot DL symbols (p2)" to "$it") }
             p.p2UlSlots?.let { add("UL slots (p2)" to "$it") }
-            p.p2UlSymbols?.let { add("UL symbols (p2)" to "$it") }
+            p.p2UlSymbols?.let { add("Special slot UL symbols (p2)" to "$it") }
         }
         p.ssbPeriodicityMs?.let { add("SSB periodicity" to "$it ms") }
         p.ssbPosition?.let { add("SSB position" to "$it") }
@@ -378,7 +381,9 @@ private fun ProfileEditor(
                             Field("UL slots", p.ulSlots?.toString() ?: "") { p = p.copy(ulSlots = it.toIntOrNull()) }
                         }
                         Column(Modifier.weight(1f)) {
-                            Field("UL symbols", p.ulSymbols?.toString() ?: "") { p = p.copy(ulSymbols = it.toIntOrNull()) }
+                            Field("Special slot UL symbols", p.ulSymbols?.toString() ?: "") {
+                                p = p.copy(ulSymbols = it.toIntOrNull())
+                            }
                         }
                     }
                 }
@@ -406,7 +411,9 @@ private fun ProfileEditor(
                             Field("UL slots", p.p2UlSlots?.toString() ?: "") { p = p.copy(p2UlSlots = it.toIntOrNull()) }
                         }
                         Column(Modifier.weight(1f)) {
-                            Field("UL symbols", p.p2UlSymbols?.toString() ?: "") { p = p.copy(p2UlSymbols = it.toIntOrNull()) }
+                            Field("Special slot UL symbols", p.p2UlSymbols?.toString() ?: "") {
+                                p = p.copy(p2UlSymbols = it.toIntOrNull())
+                            }
                         }
                     }
                 }

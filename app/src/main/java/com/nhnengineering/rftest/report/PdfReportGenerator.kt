@@ -643,14 +643,14 @@ object PdfReportGenerator {
                             ?.let { add("TDD periodicity" to "$it ms") }
                     }
                     matched.dlSlots?.let { add("Downlink slots$p1Suffix" to it.toString()) }
-                    matched.dlSymbols?.let { add("Downlink symbols$p1Suffix" to it.toString()) }
+                    matched.dlSymbols?.let { add("Special slot downlink symbols$p1Suffix" to it.toString()) }
                     matched.ulSlots?.let { add("Uplink slots$p1Suffix" to it.toString()) }
-                    matched.ulSymbols?.let { add("Uplink symbols$p1Suffix" to it.toString()) }
+                    matched.ulSymbols?.let { add("Special slot uplink symbols$p1Suffix" to it.toString()) }
                     if (matched.hasPattern2) {
                         matched.p2DlSlots?.let { add("Downlink slots (pattern 2)" to it.toString()) }
-                        matched.p2DlSymbols?.let { add("Downlink symbols (pattern 2)" to it.toString()) }
+                        matched.p2DlSymbols?.let { add("Special slot downlink symbols (pattern 2)" to it.toString()) }
                         matched.p2UlSlots?.let { add("Uplink slots (pattern 2)" to it.toString()) }
-                        matched.p2UlSymbols?.let { add("Uplink symbols (pattern 2)" to it.toString()) }
+                        matched.p2UlSymbols?.let { add("Special slot uplink symbols (pattern 2)" to it.toString()) }
                     }
                     matched.ssbPeriodicityMs?.let { add("SSB periodicity" to "$it ms") }
                     matched.ssbPosition?.let { add("SSB position" to it.toString()) }
