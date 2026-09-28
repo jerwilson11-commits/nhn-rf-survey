@@ -34,6 +34,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.nhnengineering.rftest.billing.EntitlementRepository
+import com.nhnengineering.rftest.billing.SubscriptionTier
 import com.nhnengineering.rftest.cellular.BandLock
 import com.nhnengineering.rftest.cellular.BandLockController
 import com.nhnengineering.rftest.cellular.CellularCollector
@@ -106,6 +108,9 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val throughputBusy by RecordingState.throughputBusy.collectAsState()
     val thresholds by RecordingState.thresholds.collectAsState()
     val serviceError by RecordingState.error.collectAsState()
+    // Root alone is never sufficient for these two controls -- see the tier check folded into
+    // techLockUnavailableReason and bandUi.unavailableReason below, both below Pro.
+    val tier by EntitlementRepository.tier.collectAsState()
 
     val collector = remember { WifiCollector(context) }
     val locations = remember { LocationCollector(context) }
@@ -123,8 +128,14 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     // showing "unavailable" before the check has actually run would be its own wrong answer.
     var techLockChecking by remember { mutableStateOf(true) }
     var techLockUnavailableReason by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) {
-        techLockUnavailableReason = withContext(Dispatchers.IO) { techLock.unavailableReason }
+    // Keyed on tier, not Unit: a purchase completing while this screen is already open must
+    // unlock the control without the operator having to leave and re-enter the tab.
+    LaunchedEffect(tier) {
+        val rootReason = withContext(Dispatchers.IO) { techLock.unavailableReason }
+        // Root alone is never sufficient -- see the same rule on bandUi below. A rooted device
+        // without Pro must see "requires Pro", not a working control.
+        techLockUnavailableReason = rootReason
+            ?: "Requires a Pro subscription.".takeIf { tier != SubscriptionTier.PRO }
         techLockChecking = false
     }
     var techLockBusy by remember { mutableStateOf(false) }
@@ -164,13 +175,14 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
 
     // Band lock: same availability-check-off-thread pattern as the technology lock above.
     var bandUi by remember { mutableStateOf(BandLockUi()) }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(tier) {
         val supported = withContext(Dispatchers.IO) { bandLockController.supported() }
         bandUi = supported.fold(
             onSuccess = {
                 bandUi.copy(
                     checking = false,
-                    unavailableReason = null,
+                    // Root alone is never sufficient -- same rule as techLockUnavailableReason.
+                    unavailableReason = "Requires a Pro subscription.".takeIf { tier != SubscriptionTier.PRO },
                     supportedLte = it.lte,
                     supportedNrSa = it.nrSa,
                     pendingRestore = bandLockController.pendingRestore,

@@ -11,10 +11,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -31,9 +33,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.collectAsState
 import androidx.core.content.ContextCompat
+import com.nhnengineering.rftest.billing.EntitlementRepository
+import com.nhnengineering.rftest.billing.SubscriptionTier
 import com.nhnengineering.rftest.ui.FloorplanScreen
 import com.nhnengineering.rftest.ui.MapScreen
+import com.nhnengineering.rftest.ui.PaywallScreen
 import com.nhnengineering.rftest.ui.ProfileScreen
 import com.nhnengineering.rftest.ui.SessionsScreen
 import com.nhnengineering.rftest.ui.WifiDashboard
@@ -86,6 +92,7 @@ private enum class Tab(val label: String) {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        EntitlementRepository.init(this)
         enableEdgeToEdge()
         setContent {
             RFTestAppTheme {
@@ -131,11 +138,13 @@ private fun RfTestApp() {
     }
 
     var tab by remember { mutableStateOf(Tab.LIVE) }
+    val tier by EntitlementRepository.tier.collectAsState()
+    val entitlementChecking by EntitlementRepository.checking.collectAsState()
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         bottomBar = {
-            if (granted) {
+            if (granted && tier.grantsField) {
                 NavigationBar {
                     Tab.entries.forEach { t ->
                         NavigationBarItem(
@@ -154,6 +163,13 @@ private fun RfTestApp() {
                 modifier = Modifier.padding(innerPadding),
                 onRequest = { launcher.launch(REQUIRED_PERMISSIONS + OPTIONAL_PERMISSIONS) },
             )
+            // A real third state, not a loading gloss on top of the other two -- showing the
+            // paywall before the first BillingClient round-trip has actually completed would be
+            // its own wrong answer for anyone who already has an active subscription.
+            entitlementChecking && tier == SubscriptionTier.NONE -> CenteredProgress(
+                modifier = Modifier.padding(innerPadding),
+            )
+            !tier.grantsField -> PaywallScreen(modifier = Modifier.padding(innerPadding))
             // Safe to switch tabs mid-session since Phase 6: the recording lives in
             // RecordingService, not in this composition.
             tab == Tab.LIVE -> WifiDashboard(modifier = Modifier.padding(innerPadding))
@@ -162,6 +178,13 @@ private fun RfTestApp() {
             tab == Tab.PROFILES -> ProfileScreen(modifier = Modifier.padding(innerPadding))
             else -> SessionsScreen(modifier = Modifier.padding(innerPadding))
         }
+    }
+}
+
+@Composable
+private fun CenteredProgress(modifier: Modifier = Modifier) {
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator()
     }
 }
 
