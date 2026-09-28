@@ -103,4 +103,43 @@ class WifiPhyRatesTest {
     fun `VHT rejects an MCS index outside 0 to 9`() {
         assertNull(WifiPhyRates.vhtRateMbps(1, 10, 80, LONG))
     }
+
+    // ---- HE ----------------------------------------------------------------
+
+    @Test
+    fun `HE MCS0, 20MHz, matches an independently published reference exactly`() {
+        // 234 data subcarriers x 1 bit (BPSK) x 1/2 coding / 13.6us symbol time = 8.6 Mbps,
+        // cross-checked against a separately published HE MCS table, 2026-09-28.
+        assertEquals(8.6, WifiPhyRates.heRateMbps(0, 20)!!, 0.05)
+    }
+
+    @Test
+    fun `HE 40 and 80MHz are exactly double the width below them, same as VHT`() {
+        // 468 and 980 data subcarriers are each exactly 2x and (roughly) 4.5x 234 -- worth pinning
+        // this relationship since it is what let the 40/80MHz columns be checked against the same
+        // reference the 20MHz column was.
+        assertEquals(17.2, WifiPhyRates.heRateMbps(0, 40)!!, 0.05)
+        assertEquals(36.0, WifiPhyRates.heRateMbps(0, 80)!!, 0.05)
+    }
+
+    @Test
+    fun `HE MCS11 (1024-QAM), the top of the standard, is 600 point 5 at 80MHz`() {
+        assertEquals(600.5, WifiPhyRates.heRateMbps(11, 80)!!, 0.05)
+    }
+
+    @Test
+    fun `HE rejects an MCS index outside 0 to 11`() {
+        assertNull(WifiPhyRates.heRateMbps(12, 20))
+        assertNull(WifiPhyRates.heRateMbps(-1, 20))
+    }
+
+    @Test
+    fun `HE rejects 160MHz -- deliberately unverified, not silently wrong`() {
+        assertNull(WifiPhyRates.heRateMbps(0, 160))
+    }
+
+    @Test
+    fun `HE rejects a width HE does not have, same as it would for HT's 80`() {
+        assertNull(WifiPhyRates.heRateMbps(0, 10))
+    }
 }

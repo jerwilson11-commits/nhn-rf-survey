@@ -40,6 +40,16 @@ object BeaconElements {
     const val ID_EXTENDED_CAPS = 127
     const val ID_VHT_CAPABILITIES = 191
 
+    /**
+     * HE Capabilities. Not a real element ID -- HE (and EHT) elements all share the outer ID 255
+     * ("Extension"), distinguished only by a second byte, exposed by Android as `idExt` rather
+     * than as part of the body. [WifiCollector] folds `(255, idExt)` into this synthetic id
+     * (`256 + idExt`) before this class ever sees it, so that this file's element lookup can stay
+     * a flat id-to-bytes map like every other element here. 35 is the HE Capabilities extension
+     * ID, IEEE 802.11-2020 Table 9-92.
+     */
+    const val ID_HE_CAPABILITIES = 256 + 35
+
     /** Extended Capabilities bit 19: BSS Transition Management, i.e. 802.11v. */
     private const val BIT_BSS_TRANSITION = 19
 
@@ -98,6 +108,23 @@ object BeaconElements {
             }
     }
 
+    /**
+     * Decoded from the HE Capabilities element (802.11ax / Wi-Fi 6/6E).
+     *
+     * Only the Rx HE-MCS Map for <=80MHz's 1-spatial-stream group is read -- see
+     * [WifiPhyRates.heRateMbps]'s own doc for why multi-stream and 160MHz are deliberately not
+     * attempted. [maxRateMbps] takes the width to compute at as a parameter rather than deciding
+     * it itself: an HE Capabilities element's own channel-width bits are considerably more
+     * involved to decode correctly than VHT's, and every 5GHz AP advertising HE also advertises
+     * VHT for backward compatibility on the same radio -- so [Rates.maxPhyRateMbps] reuses the
+     * already-verified VHT width instead of a second, unverified HE-specific decode. A 6GHz-only
+     * AP has no VHT element at all (6GHz beacons cannot carry one), so it falls back to 20MHz --
+     * a real, if conservative, floor rather than a guess.
+     */
+    data class HeCapability(val maxMcsIndex: Int) {
+        fun maxRateMbps(widthMhz: Int): Double? = WifiPhyRates.heRateMbps(maxMcsIndex, widthMhz)
+    }
+
     data class Rates(
         /**
          * The lowest **basic** rate, in Mbps.
@@ -116,27 +143,35 @@ object BeaconElements {
          * the HT, VHT, HE and EHT rate sets live in their own elements. Calling this the AP's
          * maximum rate would put "54 Mbps" beside an 802.11ax radio in a client report, which is
          * the same species of error as printing RSRP without its sign. See [maxPhyRateMbps] for
-         * the figure that actually accounts for HT/VHT.
+         * the figure that actually accounts for HT/VHT/HE.
          */
         val maxLegacyMbps: Double?,
         val basicMbps: List<Double>,
         val ht: HtCapability?,
         val vht: VhtCapability?,
+        val he: HeCapability?,
     ) {
         /**
-         * The AP's best advertised PHY rate, considering HT and VHT capability (whichever is
-         * higher; a real AP's VHT capability always supersedes its own HT one, but nothing here
-         * assumes that rather than checks it). Null when neither element was present or parseable
-         * -- an AP with only legacy rates, or an 802.11ax-only capability set this build does not
-         * decode (see [WifiPhyRates]'s own documented reason for leaving HE out).
+         * The AP's best advertised PHY rate, considering HT, VHT and HE capability (whichever is
+         * higher; a real AP's more recent standard always supersedes its older ones on the same
+         * radio, but nothing here assumes that rather than checks it). Null when none of the three
+         * elements were present or parseable -- an AP with only legacy rates.
          *
          * This is a **ceiling**, not a live measurement: the highest width and guard interval the
-         * AP's capability element advertises, not necessarily the channel width it is actually
+         * AP's capability elements advertise, not necessarily the channel width it is actually
          * running right now. The same honesty rule as [maxLegacyMbps] -- it says what the radio
-         * could do, not what it is doing at this moment for any particular client.
+         * could do, not what it is doing at this moment for any particular client. HE specifically
+         * is further capped to what [WifiPhyRates.heRateMbps] covers (1 spatial stream, <=80MHz) --
+         * see that function's doc for why the rest is left out rather than guessed, which means
+         * this figure can undercount a high-end multi-stream 160MHz Wi-Fi 6E AP. Undercounting was
+         * the deliberate choice; overclaiming was not.
          */
         val maxPhyRateMbps: Double?
-            get() = listOfNotNull(ht?.maxRateMbps, vht?.maxRateMbps).maxOrNull()
+            get() {
+                val heWidth = if (vht != null) 80 else 20
+                return listOfNotNull(ht?.maxRateMbps, vht?.maxRateMbps, he?.maxRateMbps(heWidth))
+                    .maxOrNull()
+            }
     }
 
     data class Beacon(
@@ -177,6 +212,7 @@ object BeaconElements {
                 byId[ID_EXTENDED_RATES],
                 byId[ID_HT_CAPABILITIES],
                 byId[ID_VHT_CAPABILITIES],
+                byId[ID_HE_CAPABILITIES],
             ),
             countryCode = byId[ID_COUNTRY]?.let { body ->
                 if (body.size < 2) null else String(body, 0, 2, Charsets.US_ASCII)
@@ -216,10 +252,12 @@ object BeaconElements {
         extended: ByteArray?,
         htCaps: ByteArray?,
         vhtCaps: ByteArray?,
+        heCaps: ByteArray?,
     ): Rates? {
         val all = (supported?.toList().orEmpty() + extended?.toList().orEmpty())
         val ht = htCaps?.let { parseHtCapability(it) }
         val vht = vhtCaps?.let { parseVhtCapability(it) }
+        val he = heCaps?.let { parseHeCapability(it) }
 
         val basic = mutableListOf<Double>()
         val every = mutableListOf<Double>()
@@ -231,11 +269,11 @@ object BeaconElements {
             every += mbps
             if (v and 0x80 != 0) basic += mbps
         }
-        // A beacon with legacy rates and neither HT nor VHT is the ordinary case and every field
-        // here is populated. One with HT/VHT but no legacy rates parsed (malformed capture, or a
-        // future encoding this build doesn't expect) still deserves a Rates object rather than
+        // A beacon with legacy rates and none of HT/VHT/HE is the ordinary case and every field
+        // here is populated. One with HT/VHT/HE but no legacy rates parsed (malformed capture, or
+        // a future encoding this build doesn't expect) still deserves a Rates object rather than
         // silently losing the PHY capability -- only give up entirely when there is nothing at all.
-        if (every.isEmpty() && ht == null && vht == null) return null
+        if (every.isEmpty() && ht == null && vht == null && he == null) return null
 
         return Rates(
             minBasicMbps = basic.minOrNull(),
@@ -243,6 +281,7 @@ object BeaconElements {
             basicMbps = basic.sorted(),
             ht = ht,
             vht = vht,
+            he = he,
         )
     }
 
@@ -289,6 +328,33 @@ object BeaconElements {
             shortGi80 = info0 and 0x20 != 0,
             shortGi160 = info0 and 0x40 != 0,
         )
+    }
+
+    /**
+     * Reads only the Rx HE-MCS Map for <=80MHz, at a fixed offset -- HE MAC Capabilities
+     * Information (6 octets, offset 0) then HE PHY Capabilities Information (11 octets, offset 6)
+     * are both fixed-length regardless of what they advertise, so the map always starts at offset
+     * 17 without needing to decode either field first. Confirmed against a real AP capture: byte
+     * 0 here decoded to plausible HE MAC Capabilities bits (not the constant HE Capabilities
+     * extension ID, which [WifiCollector] already strips before this class sees the body), and the
+     * map itself decoded to a self-consistent, plausible 4-spatial-stream capability rather than
+     * noise -- see BeaconElementsTest's fixture for the exact bytes.
+     *
+     * Everything past the map (PPE Thresholds, and the 160MHz/80+80MHz MCS maps that only appear
+     * when the PHY Capabilities bits say they do) is intentionally not read; see
+     * [WifiPhyRates.heRateMbps] for why this build never needs a spatial stream above 1 or a width
+     * above 80MHz.
+     */
+    private fun parseHeCapability(body: ByteArray): HeCapability? {
+        val mcsMap = body.u16le(17) ?: return null
+        val group = mcsMap and 0x03
+        val maxMcs = when (group) {
+            0 -> 7
+            1 -> 9
+            2 -> 11
+            else -> return null // 3 = not supported at 1 spatial stream
+        }
+        return HeCapability(maxMcs)
     }
 
     private fun hasBit(body: ByteArray, bit: Int): Boolean {

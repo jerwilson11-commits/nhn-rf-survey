@@ -245,8 +245,13 @@ wifi_ssid, wifi_bssid, wifi_rssi, wifi_freq_mhz, wifi_channel, wifi_band,
 wifi_width_mhz, wifi_standard, wifi_security,
 wifi_tx_mbps, wifi_rx_mbps, wifi_max_tx_mbps,
 wifi_neighbor_count, wifi_cochannel_count, wifi_adjacent_count,
-wifi_neighbors_json, wifi_scan_age_ms
+wifi_neighbors_json, wifi_scan_age_ms,
+wifi_chan_util_pct, wifi_sta_count, wifi_min_basic_mbps, wifi_max_phy_mbps, wifi_dtim,
+wifi_country, wifi_11k, wifi_11v, wifi_11r
 ```
+
+The last two lines are beacon-derived (section 6, and `BeaconElements.kt`), not from `ScanResult`'s
+own fields — that split is why they were added later and sit apart from the rest of the list.
 
 `wifi_cochannel_count` and `wifi_adjacent_count` are computed, not read — the count of other
 observed BSSIDs on the same channel and on overlapping channels above a usable RSSI floor. Those
@@ -255,3 +260,22 @@ them.
 
 `wifi_scan_age_ms` is the age of the neighbor data at sample time, per the split-rate design in
 section 2. Never imply neighbor data is fresher than it is.
+
+## 6. HT/VHT/HE capability, and the `InformationElement.idExt` gotcha
+
+Added 2026-09-28. `wifi_max_phy_mbps` is a beacon-derived ceiling from the AP's HT (802.11n) / VHT
+(802.11ac) / HE (802.11ax) Capabilities elements — see `wifi/WifiPhyRates.kt` for the rate tables
+themselves and their verification, and `wifi/BeaconElements.kt` for the byte layouts. Genuinely
+different from `wifi_standard` (`ScanResult.wifiStandard`), which only says which generation the
+OS thinks the *connection* uses — this instead reads what the beacon *advertises*, for every AP in
+a scan, connected or not.
+
+**The one API detail worth recording here rather than rediscovering it:** HE (and EHT) elements
+all share the outer information-element ID 255 ("Extension"), disambiguated only by a second byte
+that `ScanResult.InformationElement` exposes separately as `idExt` (API 30+) rather than as part of
+`bytes`. Confirmed against a real AP capture, not assumed: `bytes[0]` of an HE Capabilities element
+decodes to a plausible HE MAC Capabilities Info bit pattern, not the constant extension ID (35) —
+if `idExt` were folded into `bytes`, every HE Capabilities body would start with the literal byte
+`0x23`, and none of the captures this session pulled off a real AP did. `elementsOf()` in
+`WifiCollector.kt` folds `(255, idExt)` into a synthetic id (`256 + idExt`) before handing elements
+to `BeaconElements`, which otherwise only ever deals in flat `(id, bytes)` pairs.

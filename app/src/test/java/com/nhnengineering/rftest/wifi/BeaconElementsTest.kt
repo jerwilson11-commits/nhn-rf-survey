@@ -243,4 +243,81 @@ class BeaconElementsTest {
         assertNull(b.rates!!.vht)
         assertNull(b.rates!!.maxPhyRateMbps)
     }
+
+    // ---- HE capability --------------------------------------------------------
+
+    private fun hex(s: String) = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+    /** Builds a minimal HE Capabilities body: 17 bytes of MAC/PHY Capabilities Info this class
+     *  never reads (left zero), then the 2-byte Rx HE-MCS Map for <=80MHz. */
+    private fun heBody(nss1GroupValue: Int): ByteArray {
+        val body = ByteArray(19)
+        body[17] = (nss1GroupValue and 0x03).toByte()
+        return body
+    }
+
+    // BeaconElements.ID_HE_CAPABILITIES is 256 + 35 -- the synthetic key WifiCollector produces
+    // for element 255 (Extension) with idExt 35 (HE Capabilities). Not referenced as the constant
+    // directly, the same way the other `ie(id, ...)` calls in this file use literal element IDs.
+    private val HE_CAPS_ID = 256 + 35
+
+    @Test
+    fun `HE MCS group value maps to the standard's own MCS ceiling, not VHT's`() {
+        // HE's own mapping skips VHT's "MCS0-8" middle option and goes straight to MCS0-9, then
+        // adds MCS0-11 as the third -- worth pinning explicitly since it is easy to assume HE
+        // reuses VHT's 0/1/2 meanings verbatim, and it does not.
+        assertEquals(7, BeaconElements.parse(listOf(HE_CAPS_ID to heBody(0))).rates!!.he!!.maxMcsIndex)
+        assertEquals(9, BeaconElements.parse(listOf(HE_CAPS_ID to heBody(1))).rates!!.he!!.maxMcsIndex)
+        assertEquals(11, BeaconElements.parse(listOf(HE_CAPS_ID to heBody(2))).rates!!.he!!.maxMcsIndex)
+    }
+
+    @Test
+    fun `HE group value 3 (not supported) leaves the element absent`() {
+        val b = BeaconElements.parse(listOf(ie(1, 0x8C), HE_CAPS_ID to heBody(3)))
+
+        assertNull(b.rates!!.he)
+    }
+
+    @Test
+    fun `a real captured HE Capabilities element decodes to a plausible 4-stream, MCS0-11 AP`() {
+        // Captured 2026-09-28 from a real Wi-Fi 6 AP's beacon (see docs/modem-diag-access.md for
+        // the on-device verification this session -- the same capture that proved bytes() for an
+        // Extension element does not include the idExt byte). This test only pins what this build
+        // actually decodes (the 1-spatial-stream MCS ceiling); the wider capability visible by
+        // eye in the raw bytes (4 streams, all MCS0-11) is exactly why deferring multi-stream HE
+        // rather than guessing at it was the right call -- this AP is exactly the case a wrong
+        // guess would have gotten wrong in a client report.
+        val body = hex("050018120010222042c00203950000cc00aaffaaff1b1cc7711cc771")
+        val b = BeaconElements.parse(listOf(HE_CAPS_ID to body))
+
+        assertEquals(11, b.rates!!.he!!.maxMcsIndex)
+    }
+
+    @Test
+    fun `HE rate uses the 80MHz table when a VHT element is also present`() {
+        val vht = 191 to vhtBody(info0 = 0x00, 1 to 0) // 80MHz, no short GI, nss1 = MCS0-7 only
+        val he = HE_CAPS_ID to heBody(2) // MCS0-11
+        val b = BeaconElements.parse(listOf(vht, he))
+
+        // HE MCS11, 80MHz, 1 stream, 0.8us GI (mandatory, no capability bit to check).
+        assertEquals(600.5, b.rates!!.maxPhyRateMbps!!, 0.01)
+    }
+
+    @Test
+    fun `HE rate falls back to 20MHz when no VHT element is present, as on a 6GHz-only beacon`() {
+        // A 6GHz beacon cannot carry a VHT element at all, by the 6GHz standard's own rules -- this
+        // is the ordinary case there, not a malformed capture.
+        val b = BeaconElements.parse(listOf(HE_CAPS_ID to heBody(2)))
+
+        assertEquals(143.4, b.rates!!.maxPhyRateMbps!!, 0.01)
+    }
+
+    @Test
+    fun `HE beats a weaker VHT figure on the same beacon`() {
+        val vht = 191 to vhtBody(info0 = 0x00, 1 to 0) // 80MHz, MCS0-7 -> 292.5
+        val he = HE_CAPS_ID to heBody(2) // MCS0-11 -> 600.5 at 80MHz
+        val b = BeaconElements.parse(listOf(vht, he))
+
+        assertEquals(600.5, b.rates!!.maxPhyRateMbps!!, 0.01)
+    }
 }

@@ -285,12 +285,22 @@ class WifiCollector(context: Context) {
      * ScanResult is handed to every caller, so reading through the buffer would leave it drained
      * for whoever looks next.
      */
+    /**
+     * Extension elements (HE and EHT Capabilities/Operation among them) all share the outer
+     * element ID 255, distinguished only by a second "element ID extension" byte -- exposed by
+     * Android as `idExt`, separately from `bytes`, which starts at the element's real content and
+     * does not itself carry the extension byte (confirmed against a real HE Capabilities capture:
+     * byte 0 decodes to plausible HE MAC Capabilities Info bits, not the constant extension ID).
+     * [BeaconElements] only ever sees flat `(id, bytes)` pairs, so an extension element is folded
+     * into a synthetic id here, 256 + idExt, which can never collide with a real 0-255 element ID.
+     */
     private fun elementsOf(result: ScanResult): List<Pair<Int, ByteArray>> = runCatching {
         result.informationElements.mapNotNull { element ->
             val buffer = element.bytes.duplicate()
             val bytes = ByteArray(buffer.remaining())
             buffer.get(bytes)
-            element.id to bytes
+            val id = if (element.id == 255) 256 + element.idExt else element.id
+            id to bytes
         }
     }.getOrDefault(emptyList())
 

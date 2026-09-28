@@ -1,13 +1,14 @@
 package com.nhnengineering.rftest.wifi
 
 /**
- * Standardized PHY data rate tables for 802.11n (HT) and 802.11ac (VHT), turning an advertised
- * MCS/NSS/channel-width/guard-interval combination into a single Mbps figure.
+ * Standardized PHY data rate tables for 802.11n (HT), 802.11ac (VHT), and a deliberately narrow
+ * slice of 802.11ax (HE), turning an advertised MCS/NSS/channel-width/guard-interval combination
+ * into a single Mbps figure.
  *
- * Values are transcribed from the IEEE 802.11-2016 standard's own rate tables and cross-checked
- * against multiple independently published references (2026-09-28) -- including several famous
- * router marketing figures that turn out to be exact table entries: "433 Mbps" is 1 spatial
- * stream, 80MHz, short GI, MCS9; "867 Mbps" is the same at 2 spatial streams.
+ * The HT and VHT values are transcribed from the IEEE 802.11-2016 standard's own rate tables and
+ * cross-checked against multiple independently published references (2026-09-28) -- including
+ * several famous router marketing figures that turn out to be exact table entries: "433 Mbps" is
+ * 1 spatial stream, 80MHz, short GI, MCS9; "867 Mbps" is the same at 2 spatial streams.
  *
  * The VHT table is hand-transcribed rather than derived from a formula on purpose. A handful of
  * (spatial stream count, MCS, channel width) combinations are genuinely invalid per the standard
@@ -16,11 +17,13 @@ package com.nhnengineering.rftest.wifi
  * as literal absences in the table (`null`), the same way [BeaconElements.Rates.maxLegacyMbps]
  * would rather report nothing than overclaim.
  *
- * HE (802.11ax) is deliberately not covered here. Its rate table has on the order of 2,880 valid
- * combinations -- three guard interval options, DCM, extended range, and RU-based subcarrier
- * counts on top of the same MCS/NSS/width axes -- and no independently verifiable full reference
- * table was available to check a transcription against. Shipping a wrong number would be worse
- * than shipping none.
+ * HE (802.11ax) is covered only for 1 spatial stream, up to 80MHz, at the (universally mandatory)
+ * 0.8us guard interval -- not the full standard, which has on the order of 2,880 valid
+ * combinations across three guard intervals, DCM, extended range, and RU-based subcarrier counts.
+ * That narrow slice is computed from first principles (data subcarrier counts x modulation x code
+ * rate / symbol time) and cross-checked, all 36 values, against an independently published
+ * reference table -- see [heRateMbps]'s own doc for why the rest is left out rather than
+ * extrapolated the same way VHT's multi-stream exceptions turned out not to be derivable.
  */
 object WifiPhyRates {
 
@@ -127,5 +130,54 @@ object WifiPhyRates {
         }
         val v = table[mcsIndex][col]
         return v.takeUnless { it.isNaN() }
+    }
+
+    // ---- HE (802.11ax) ----------------------------------------------------
+
+    // 1 spatial stream, 0.8us guard interval (the shortest, and every HE station is required to
+    // support all three GI options -- unlike HT/VHT's optional short GI, there is no capability
+    // bit to check, so the best one is always usable and is the only one worth carrying here).
+    // [20MHz][40MHz][80MHz], indexed by MCS 0-11.
+    //
+    // Computed from first principles -- data subcarriers (234/468/980 for 20/40/80MHz, confirmed
+    // against a real AP capture's plausible MCS/NSS map, see BeaconElementsTest) x bits-per-symbol
+    // x code rate / OFDM symbol time (12.8us + 0.8us GI = 13.6us) -- then cross-checked against an
+    // independently published reference table: every one of these 36 values matched that source
+    // exactly (to its published rounding), which is the reason this table exists as a formula
+    // result rather than a second hand transcription.
+    //
+    // Deliberately 1 spatial stream and up to 80MHz only. VHT's table proved that some
+    // (spatial streams, MCS, width) combinations are invalid for standard-specific reasons a
+    // formula does not know about on its own (encoder-count constraints, not a subcarrier
+    // divisibility rule); HE's own multi-stream and 160MHz behavior was not independently
+    // verifiable the same way this 1-stream/<=80MHz table was, so it is not included rather than
+    // guessed. See [BeaconElements.HeCapability] for how the width is chosen without needing to
+    // decode HE's own (considerably more involved) channel-width capability bits.
+    private val HE_NSS1_GI08 = arrayOf(
+        doubleArrayOf(8.6, 17.2, 36.0),
+        doubleArrayOf(17.2, 34.4, 72.1),
+        doubleArrayOf(25.8, 51.6, 108.1),
+        doubleArrayOf(34.4, 68.8, 144.1),
+        doubleArrayOf(51.6, 103.2, 216.2),
+        doubleArrayOf(68.8, 137.6, 288.2),
+        doubleArrayOf(77.4, 154.9, 324.3),
+        doubleArrayOf(86.0, 172.1, 360.3),
+        doubleArrayOf(103.2, 206.5, 432.4),
+        doubleArrayOf(114.7, 229.4, 480.4),
+        doubleArrayOf(129.0, 258.1, 540.4),
+        doubleArrayOf(143.4, 286.8, 600.5),
+    )
+
+    /** @param mcsIndex 0-11. @param widthMhz 20, 40 or 80 -- see the table's own doc for why not
+     *  160, and why this is 1 spatial stream only. */
+    fun heRateMbps(mcsIndex: Int, widthMhz: Int): Double? {
+        if (mcsIndex !in 0..11) return null
+        val col = when (widthMhz) {
+            20 -> 0
+            40 -> 1
+            80 -> 2
+            else -> return null
+        }
+        return HE_NSS1_GI08[mcsIndex][col]
     }
 }
