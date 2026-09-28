@@ -246,12 +246,17 @@ wifi_width_mhz, wifi_standard, wifi_security,
 wifi_tx_mbps, wifi_rx_mbps, wifi_max_tx_mbps,
 wifi_neighbor_count, wifi_cochannel_count, wifi_adjacent_count,
 wifi_neighbors_json, wifi_scan_age_ms,
-wifi_chan_util_pct, wifi_sta_count, wifi_min_basic_mbps, wifi_max_phy_mbps, wifi_dtim,
-wifi_country, wifi_11k, wifi_11v, wifi_11r
+wifi_chan_util_pct, wifi_sta_count, wifi_min_basic_mbps, wifi_max_phy_mbps,
+wifi_est_headroom_mbps, wifi_est_mbps_per_station,
+wifi_dtim, wifi_country, wifi_11k, wifi_11v, wifi_11r
 ```
 
-The last two lines are beacon-derived (section 6, and `BeaconElements.kt`), not from `ScanResult`'s
-own fields — that split is why they were added later and sit apart from the rest of the list.
+The last three lines are beacon-derived (section 6, and `BeaconElements.kt`), not from
+`ScanResult`'s own fields — that split is why they were added later and sit apart from the rest of
+the list. `wifi_est_headroom_mbps` and `wifi_est_mbps_per_station` are computed one more step
+downstream, from `wifi_chan_util_pct`, `wifi_sta_count` and `wifi_max_phy_mbps` together (see
+`wifi/WifiCapacityModel.kt`) — an airtime-weighted capacity estimate, not read off the beacon
+directly, and explicitly an optimistic upper bound rather than a throughput guarantee.
 
 `wifi_cochannel_count` and `wifi_adjacent_count` are computed, not read — the count of other
 observed BSSIDs on the same channel and on overlapping channels above a usable RSSI floor. Those

@@ -5,6 +5,7 @@ import android.os.Build
 import com.nhnengineering.rftest.model.MeasurementSample
 import com.nhnengineering.rftest.model.NeighborCell
 import com.nhnengineering.rftest.model.WifiNeighbor
+import com.nhnengineering.rftest.wifi.WifiCapacityModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedWriter
@@ -141,8 +142,12 @@ private val WIFI_COLUMNS = listOf(
     // From the serving AP's beacon rather than from ScanResult's own fields. Channel utilisation
     // is the one that changes conclusions: a site at -55 dBm everywhere with 80% airtime busy has
     // a capacity problem that no amount of signal measurement will find.
-    "wifi_chan_util_pct", "wifi_sta_count", "wifi_min_basic_mbps", "wifi_max_phy_mbps", "wifi_dtim",
-    "wifi_country", "wifi_11k", "wifi_11v", "wifi_11r",
+    "wifi_chan_util_pct", "wifi_sta_count", "wifi_min_basic_mbps", "wifi_max_phy_mbps",
+    // Computed, not read: WifiCapacityModel turns utilisation + station count + PHY ceiling into
+    // an actual capacity estimate, rather than leaving a reader to do that arithmetic themselves.
+    // See that class's own doc for exactly what these do and don't promise.
+    "wifi_est_headroom_mbps", "wifi_est_mbps_per_station",
+    "wifi_dtim", "wifi_country", "wifi_11k", "wifi_11v", "wifi_11r",
 )
 
 /**
@@ -327,6 +332,9 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += beacon?.bssLoad?.stationCount?.toString()
     cells += beacon?.rates?.minBasicMbps?.let { String.format(Locale.US, "%.1f", it) }
     cells += beacon?.rates?.maxPhyRateMbps?.let { String.format(Locale.US, "%.1f", it) }
+    val capacity = beacon?.let { WifiCapacityModel.compute(it) }
+    cells += capacity?.estimatedHeadroomMbps?.let { String.format(Locale.US, "%.1f", it) }
+    cells += capacity?.estimatedMbpsPerStation?.let { String.format(Locale.US, "%.1f", it) }
     cells += beacon?.dtimPeriod?.toString()
     cells += beacon?.countryCode
     cells += beacon?.radioMeasurement?.toString()

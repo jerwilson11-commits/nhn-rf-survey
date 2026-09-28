@@ -79,9 +79,11 @@ class CsvSchemaTest {
         // reading a Network Survey log that carried both and finding we carried neither.
         // 91 until 2026-09-22, when cell_neighbor_source was added: a neighbour count of zero
         // is unreadable after the fact without knowing which instrument produced it.
-        // 92 until 2026-09-28, when wifi_max_phy_mbps was added for HT/VHT capability.
-        assertEquals(93, CSV_COLUMN_COUNT)
-        assertEquals(93, CSV_HEADER.split(",").size)
+        // 92 until 2026-09-28, when wifi_max_phy_mbps was added for HT/VHT capability, then 93
+        // when wifi_est_headroom_mbps and wifi_est_mbps_per_station were added for capacity
+        // modeling the same day.
+        assertEquals(95, CSV_COLUMN_COUNT)
+        assertEquals(95, CSV_HEADER.split(",").size)
     }
 
     @Test
