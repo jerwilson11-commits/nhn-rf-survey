@@ -144,8 +144,9 @@ that hides the control cleanly on an unrooted device, verified by reading the co
 no eager `su` call anywhere in `MainActivity` or in a controller's constructor. The Play
 Store-distributed baseline (public Android APIs only) is unaffected and is the thing every user
 gets; root, where present, is a bonus layer on top of it. See `docs/rooted-vs-unrooted-capabilities.md`
-for the full capability split, and the "On the Play Store" risk this newly creates (bundled native
-binaries executed as root) in the competitive-analysis doc.
+for the full capability split. The native-binary-bundling risk this originally created for a Play
+Store submission was fixed 2026-09-28 (jniLibs packaging, not assets+chmod+exec) — see that doc's
+"Play Store risk" section.
 
 Still genuinely out of scope, unchanged:
 

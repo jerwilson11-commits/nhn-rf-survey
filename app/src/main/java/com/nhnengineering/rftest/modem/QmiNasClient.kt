@@ -26,8 +26,7 @@ class QmiNasClient(context: Context) {
 
     private companion object {
         const val TAG = "QmiNasClient"
-        const val ASSET = "qmilock-arm64-v8a"
-        const val HELPER_NAME = "qmilock"
+        const val HELPER_NAME = "libqmilock.so"
         const val TIMEOUT_MS = 6_000L
     }
 
@@ -57,21 +56,15 @@ class QmiNasClient(context: Context) {
         null
     }
 
-    private fun extractHelper(): File? = runCatching {
-        val dest = File(appContext.filesDir, HELPER_NAME)
-        val expected = appContext.assets.open(ASSET).use { it.available().toLong() }
-        if (!dest.exists() || dest.length() != expected) {
-            appContext.assets.open(ASSET).use { input ->
-                dest.outputStream().use { input.copyTo(it) }
-            }
-        }
-        dest.setExecutable(true, false)
-        dest.setReadable(true, false)
-        dest
-    }.getOrElse {
-        Log.w(TAG, "could not unpack qmilock", it)
-        null
-    }
+    /**
+     * `libqmilock.so` ships as an ordinary native library under `jniLibs`, not as an asset copied
+     * and `chmod`'d at runtime. Android's own installer places it in the app's nativeLibraryDir and
+     * makes it executable at install time -- nothing here writes or elevates a fresh executable
+     * after install, which is the one part of this feature that used to resemble, to automated
+     * scanning, an app dropping its own payload.
+     */
+    private fun helperFile(): File? =
+        File(appContext.applicationInfo.nativeLibraryDir, HELPER_NAME).takeIf { it.exists() }
 
     private fun hexToBytes(hex: String): ByteArray =
         ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
@@ -82,8 +75,8 @@ class QmiNasClient(context: Context) {
             "The Network Access Service is not reachable over QRTR, so the modem cannot be " +
                 "asked. This needs a rooted handset; everything else in the app works without it.",
         )
-        val helper = extractHelper()
-            ?: return Response.Failed("Could not unpack the modem helper.")
+        val helper = helperFile()
+            ?: return Response.Failed("The modem helper is missing from this build.")
         val cmd = (
             listOf(helper.absolutePath, addr.node.toString(), addr.port.toString(), "%04x".format(msgId)) + args
             ).joinToString(" ")

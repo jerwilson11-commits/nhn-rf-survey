@@ -57,11 +57,19 @@ a plain-language reason it can't run, never a crash:
   importing someone else's capture (including one taken with a dedicated tool like NSG).
 - **NR neighbour-cell detail beyond what `CellInfo` exposes**, read the same way as SIB1 capture.
 
-## The Play Store risk this creates
+## The Play Store risk this used to create, and how it was fixed
 
-The root-gated features above work by bundling compiled native binaries in `assets/`, copying them
-out, `chmod +x`-ing them, and executing them as root on request. That shape — an app that ships
-executables and runs them with elevated privilege — resembles what automated malware scanning looks
-for, even though every use here is disclosed, optional, and user-initiated. This needs a decision
-(accept the risk and test via Play Console's pre-launch report, or restructure) before a real
-submission; see the Play Store readiness notes for the rest of that checklist.
+Until 2026-09-28, the root-gated features above worked by bundling compiled native binaries in
+`assets/`, copying them out, `chmod +x`-ing them, and executing them as root on request. That
+shape — an app that ships executables and runs them with elevated privilege — resembles what
+automated malware scanning looks for, even though every use here was disclosed, optional, and
+user-initiated.
+
+Fixed by shipping the three helpers (`libqmilock.so`, `libqmihelper.so`, `libdcilogger.so`) as
+ordinary native libraries under `app/src/main/jniLibs/`, so Android's own installer places and
+marks them executable at install time — nothing in this app's own code writes or elevates a fresh
+executable after install anymore. Verified on a Pixel 6 Pro as an ordinary (non-privileged) install
+and confirmed working end to end on the OnePlus 9's privileged test install; see
+`docs/modem-diag-access.md`'s 2026-09-28 entry for the full verification and the one platform
+gotcha it took to get there (modern Android does not extract native libraries to disk by default;
+`packaging.jniLibs.useLegacyPackaging = true` in `app/build.gradle.kts` opts back in).

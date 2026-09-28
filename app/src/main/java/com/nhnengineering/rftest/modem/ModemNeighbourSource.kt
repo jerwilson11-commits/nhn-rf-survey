@@ -44,8 +44,8 @@ class ModemNeighbourSource(context: Context) {
     companion object {
         private const val TAG = "ModemNeighbours"
 
-        /** The asset shipped for the only ABI this helper is built for. */
-        private const val ASSET = "qmihelper-arm64-v8a"
+        /** The only ABI this helper is built for; also its filename under jniLibs. */
+        private const val HELPER_NAME = "libqmihelper.so"
         private const val ABI = "arm64-v8a"
 
         /**
@@ -131,8 +131,8 @@ class ModemNeighbourSource(context: Context) {
                     "${Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"}.",
             )
         }
-        val helper = extractHelper()
-            ?: return Availability.Unavailable("The modem helper could not be unpacked.")
+        val helper = helperFile()
+            ?: return Availability.Unavailable("The modem helper is missing from this build.")
 
         // Resolved here rather than assumed. The port changes across reboots, and asking the
         // wrong one fails silently: the modem answers, so the transport looks fine, and only the
@@ -156,27 +156,15 @@ class ModemNeighbourSource(context: Context) {
     }
 
     /**
-     * Copies the helper out of assets, if it is not already there and current.
-     *
-     * Compared by length rather than trusting an existing file, so a helper replaced by an app
-     * update is not shadowed by the old one.
+     * `libqmihelper.so` ships as an ordinary native library under `jniLibs`, not as an asset
+     * copied and `chmod`'d at runtime. Android's own installer places it in the app's
+     * nativeLibraryDir and makes it executable at install time -- nothing here writes or elevates
+     * a fresh executable after install, which is the one part of this feature that used to
+     * resemble, to automated scanning, an app dropping its own payload. Root execs it; the app's
+     * own domain is not allowed to, and does not need to.
      */
-    private fun extractHelper(): File? = runCatching {
-        val dest = File(appContext.filesDir, "qmihelper")
-        val expected = appContext.assets.open(ASSET).use { it.available().toLong() }
-        if (!dest.exists() || dest.length() != expected) {
-            appContext.assets.open(ASSET).use { input ->
-                dest.outputStream().use { input.copyTo(it) }
-            }
-        }
-        // Root execs this; the app's own domain is not allowed to, and does not need to.
-        dest.setExecutable(true, false)
-        dest.setReadable(true, false)
-        dest
-    }.getOrElse {
-        Log.w(TAG, "could not unpack helper", it)
-        null
-    }
+    private fun helperFile(): File? =
+        File(appContext.applicationInfo.nativeLibraryDir, HELPER_NAME).takeIf { it.exists() }
 
     /** Asks QRTR where the Network Access Service is listening right now. */
     private fun resolveNas(): QrtrServices.Address? = runCatching {
@@ -223,7 +211,7 @@ class ModemNeighbourSource(context: Context) {
         lastAttemptElapsed = now
         worker.execute {
             try {
-                val helper = extractHelper()
+                val helper = helperFile()
                 val line = helper?.let { runHelper(it) }
                 val parsed = line?.let { QmiCellParser.parseHelperLine(it) }
                 if (parsed != null) {

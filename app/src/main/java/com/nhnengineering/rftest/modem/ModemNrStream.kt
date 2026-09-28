@@ -32,22 +32,26 @@ class ModemNrStream(context: Context) {
 
     companion object {
         private const val TAG = "ModemNrStream"
-        private const val ASSET = "dcilogger-arm64-v8a"
-        private const val HELPER_NAME = "dcilogger"
+        private const val HELPER_NAME = "libdcilogger.so"
 
         /**
-         * Where the helper is run from, which is not where it is unpacked to.
+         * Where the helper is run from, which is not where it ships.
          *
-         * The helper dlopens /vendor/lib64/libdiag.so. Run from the app's own files directory
-         * that fails: the linker puts a /data/data binary in the default namespace, whose
-         * permitted paths cover /system and /system_ext but not /vendor, and the dlopen is
-         * refused outright --
+         * `libdcilogger.so` ships as an ordinary native library under `jniLibs` now, so Android's
+         * own installer places it in the app's nativeLibraryDir and makes it executable at
+         * install time -- there is no longer a runtime copy-and-chmod step to get the binary onto
+         * disk in the first place. But it still cannot be *run* from there: it dlopens
+         * /vendor/lib64/libdiag.so, and a binary executed from the app's own namespace (files
+         * directory or nativeLibraryDir alike) sits in a linker namespace whose permitted paths
+         * cover /system and /system_ext but not /vendor, so the dlopen is refused outright --
          *
          *     library "/vendor/lib64/libdiag.so" ... is not accessible for the namespace
          *     [name="(default)", permitted_paths="/system/lib64/drm:..."]
          *
          * The identical binary run from /data/local/tmp loads it fine, so that directory is
-         * reached through a more permissive namespace. Staging it there is the whole fix.
+         * reached through a more permissive namespace. Staging it there is the whole fix, and is
+         * still root copying its own already-installed library to a location it can actually
+         * execute from -- not this app writing or elevating anything new of its own.
          *
          * The size is part of the name for two reasons: a new build never runs behind an old
          * staged copy, and the copy can be skipped when a good one is already there -- which
@@ -112,9 +116,9 @@ class ModemNrStream(context: Context) {
     }
 
     private fun loop() {
-        val helper = extractHelper()
+        val helper = helperFile()
         if (helper == null) {
-            lastError = "The modem log helper could not be unpacked."
+            lastError = "The modem log helper is missing from this build."
             running.set(false)
             return
         }
@@ -184,19 +188,11 @@ class ModemNrStream(context: Context) {
         }
     }
 
-    private fun extractHelper(): File? = runCatching {
-        val dest = File(appContext.filesDir, HELPER_NAME)
-        val expected = appContext.assets.open(ASSET).use { it.available().toLong() }
-        if (!dest.exists() || dest.length() != expected) {
-            appContext.assets.open(ASSET).use { input ->
-                dest.outputStream().use { input.copyTo(it) }
-            }
-        }
-        dest.setExecutable(true, false)
-        dest.setReadable(true, false)
-        dest
-    }.getOrElse {
-        Log.w(TAG, "could not unpack the modem log helper", it)
-        null
-    }
+    /**
+     * `libdcilogger.so` ships as an ordinary native library under `jniLibs`, installed and made
+     * executable by Android itself. See [stagedPath] for why it still has to be copied again
+     * before it can actually run.
+     */
+    private fun helperFile(): File? =
+        File(appContext.applicationInfo.nativeLibraryDir, HELPER_NAME).takeIf { it.exists() }
 }

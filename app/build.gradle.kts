@@ -56,6 +56,16 @@ android {
             }
         }
     }
+    // The three modem helpers (libqmilock.so, libqmihelper.so, libdcilogger.so) are real
+    // executables that `su -c` runs directly, not JNI code loaded with System.loadLibrary --
+    // they need to exist as standalone files on disk, not stay zipped inside the APK, which is
+    // the modern default for native libraries and (confirmed empirically on a Pixel 6 Pro test
+    // install, 2026-09-28) leaves nativeLibraryDir present but empty without this.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11

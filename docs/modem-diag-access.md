@@ -646,14 +646,13 @@ Wired in behind the root gate on 2026-09-22.
 
 - `tools/diag/qmihelper.c` — transport only: one QMI request over QRTR, reply printed as
   `OK <hex>` or `ERR <reason>`. Built with `tools/diag/build_qmi_probe.sh` and checked in as
-  `app/src/main/assets/qmihelper-arm64-v8a` (8.6 KB, arm64 only). It is a prebuilt in the repo
-  rather than a Gradle native build because the app deploys as a *system* app, where APK native
-  libraries are not extracted the way `nativeLibraryDir` assumes. Source and build script sit
-  beside it so it is reproducible.
+  `app/src/main/jniLibs/arm64-v8a/libqmihelper.so` (8.6 KB, arm64 only; moved here from
+  `app/src/main/assets/qmihelper-arm64-v8a` on 2026-09-28, see that date's section below for why).
+  Source and build script sit beside the original in `tools/diag/` so it is reproducible.
 - `modem/QmiCellParser.kt` — all decoding, in Kotlin, unit-tested against the captures above.
-- `modem/ModemNeighbourSource.kt` — unpacks the helper into the app's files dir, runs it through
-  `su` on a private thread at a throttled cadence, and caches the result. Magisk shows a Superuser
-  prompt on the first run.
+- `modem/ModemNeighbourSource.kt` — resolves the helper from the app's own nativeLibraryDir, runs
+  it through `su` on a private thread at a throttled cadence, and caches the result. Magisk shows a
+  Superuser prompt on the first run.
 - Neighbours carry `CellSource.MODEM`, the session CSV gains `cell_neighbor_source`, and
   `SessionStats` gained `MEASURED_NONE` so a report can distinguish a measured absence of
   neighbours from an unmeasurable one.
@@ -724,3 +723,76 @@ parser.
 
 Until it exists the app is correct to report that it cannot see NR neighbours, and
 `QmiCellParser.Result.lteInfoPresent` is what keeps that honest.
+
+## 2026-09-28: the three helpers move from assets to jniLibs, and how that plays with a privileged install
+
+### The problem being fixed
+
+`libqmilock`, `libqmihelper` and `libdcilogger` were shipped as plain assets, copied to the app's
+files directory at runtime, and `chmod +x`'d before every use. Functionally fine, but that exact
+shape — an app carrying an executable payload, writing it to disk, and elevating it — is what
+dropper malware looks like to automated scanning, and it is a real, identified risk for Play Store
+submission (see `docs/rooted-vs-unrooted-capabilities.md`). Fixed by shipping the three binaries as
+ordinary native libraries under `app/src/main/jniLibs/arm64-v8a/`, renamed to the required
+`lib*.so` form, so Android's own installer places and executes them rather than this app's code
+copying and `chmod`-ing a fresh file after install.
+
+### Two platform gotchas found along the way, both by testing rather than assuming
+
+1. **Modern Android does not extract native libraries to disk by default.** Since AGP keeps
+   `useLegacyPackaging` off unless told otherwise, `System.loadLibrary`-style native code loads
+   straight out of the APK's zip and nothing ever lands in `nativeLibraryDir` on disk — confirmed
+   empirically on a Pixel 6 Pro, where `nativeLibraryDir` existed but was completely empty after
+   install. That is fine for JNI, useless for us: `su -c <path>` needs a real file. Fixed with
+   `android { packaging { jniLibs { useLegacyPackaging = true } } }` in `app/build.gradle.kts`.
+   (`android:extractNativeLibs="true"` in the manifest looks like the fix and even appears to work
+   for a direct APK install, but AGP explicitly warns it is superseded by the Gradle DSL property
+   and should not be set directly — removed after adding the Gradle setting.)
+
+2. **A privileged system-app install does not behave like an ordinary one.** `pm path` on the
+   OnePlus 9 shows the app at `/system/priv-app/RFTestApp/RFTestApp.apk`, and its
+   `nativeLibraryDir` never gets populated by the normal install-time extraction step at all —
+   confirmed by checking the actual filesystem, not just trusting `dumpsys`. Ordinary `/data/app`
+   installs (confirmed on the Pixel 6 Pro, see below) are unaffected; this is specific to how the
+   system-app deployment works on this device.
+
+### How the OnePlus 9's privileged install actually works (worth knowing before touching it again)
+
+The instinct to `mount -o rw,remount /system` fails outright: the device's root filesystem is
+`erofs`, genuinely read-only at the filesystem level, not read-only by a mount flag. What actually
+places `RFTestApp.apk` at `/system/priv-app/RFTestApp/` is a **Magisk module**, `nhn_privapp`
+(`/data/adb/modules/nhn_privapp/`, module.prop confirms: "Installs RF Test App to /system/priv-app
+and allowlists READ_PRECISE_PHONE_STATE... Disable in Magisk to revert"). Magisk magic-mounts that
+module's `system/priv-app/RFTestApp/` directory over the real one at boot; `RFTestApp.apk` shows up
+in `/proc/mounts` from an f2fs block device (the data partition, where Magisk module storage
+lives), not from the erofs system image the way every other priv-app package does.
+
+**To update the privileged install**, don't touch `/system` at all:
+
+```bash
+MODDIR=/data/adb/modules/nhn_privapp/system/priv-app/RFTestApp
+adb push app-debug.apk /data/local/tmp/RFTestApp.apk
+adb shell su -c "cp -f /data/local/tmp/RFTestApp.apk $MODDIR/RFTestApp.apk"
+adb shell su -c "chown root:root $MODDIR/RFTestApp.apk && chmod 644 $MODDIR/RFTestApp.apk"
+adb reboot
+```
+
+A new `lib/arm64/` subdirectory inside that same module path, containing the three `.so` files with
+`root:root` ownership and `755`, was added the same way on 2026-09-28 so the privileged install's
+`nativeLibraryDir` resolves them post-reboot, matching what the ordinary-install path already does.
+Module changes need a reboot to take effect — Magisk applies the magic mount at early boot, not on
+a live filesystem change.
+
+### Verification
+
+Built with `packaging.jniLibs.useLegacyPackaging = true` in place, confirmed empirically, not
+assumed:
+
+- **Pixel 6 Pro** (ordinary `/data/app` install, Tensor/Exynos modem — no Qualcomm QMI/DIAG stack
+  at all, so a true negative test for the transport itself): Android's own `nativeloader` log
+  confirmed `library_path=.../lib/arm64`, and the app's own `ModemNrStream` log showed it finding
+  and attempting to run `libdcilogger.so` from exactly that path. No crash; every root-gated
+  feature degraded to its normal "unavailable" state, exactly as designed.
+- **OnePlus 9** (privileged install via the Magisk module above, genuine SM8350/Qualcomm hardware):
+  provisioned and rebooted; see the entry this section's date was written for confirmation that
+  band lock, neighbour reads, and the SIB1/NR ML1 stream all still function end to end post-reboot.
