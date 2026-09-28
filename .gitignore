@@ -27,3 +27,10 @@ __pycache__/
 
 # Local test artefacts from the throughput endpoint
 speedtest-server/*.log
+
+# Release signing. The keystore itself lives outside this repo entirely (see
+# docs/release-signing.md); this file just belongs on the ignore list defensively, in case a
+# future keystore ever gets generated into the project directory by mistake.
+keystore.properties
+*.jks
+*.keystore
