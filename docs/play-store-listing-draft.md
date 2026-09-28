@@ -1,9 +1,10 @@
 # Play Store Listing — Draft Copy
 
-Drafted 2026-09-28 for the initial submission. Not final until you've reviewed it — the app name,
-short description, and full description all count toward Play's ranking signals and are expensive
-to meaningfully change later (existing installs, reviews, and search history attach to the
-listing), so this is worth a real read before it goes in.
+Drafted 2026-09-28 for the initial submission, revised the same day after Play Billing was
+scoped and built with a different structure than this copy originally assumed (see below). Not
+final until you've reviewed it — the app name, short description, and full description all count
+toward Play's ranking signals and are expensive to meaningfully change later (existing installs,
+reviews, and search history attach to the listing), so this is worth a real read before it goes in.
 
 ## App name (Play Console "App name" field, 30 chars max)
 
@@ -58,12 +59,17 @@ WHAT MAKES THIS DIFFERENT
 • Export everything. PDF client reports, CSV for your own analysis, and KML/GeoJSON/GeoPackage for
   GIS tools survey teams already use. A session is never locked into the app.
 
-FREE TO START
+TWO PLANS, NO ADS, EVER
 
-The core survey — Wi-Fi and cellular signal, capacity analysis, roaming, heatmaps, and every export
-format — works fully for free. Field and Pro tiers add extended session length, advanced reporting,
-and (on supported rooted hardware only, entirely optional) direct radio diagnostics for engineers
-who need them: band locking for controlled testing, and real-time frame-level decode.
+Field unlocks the complete survey toolkit: Wi-Fi and cellular signal, capacity analysis, roaming,
+heatmaps, threshold alarms, the client-ready PDF report, and every export format (CSV, KML,
+GeoJSON, GeoPackage).
+
+Pro adds direct radio diagnostics for engineers on supported rooted hardware: band and technology
+locking for controlled testing, live signalling decode, and neighbour-cell reads over the modem
+diagnostic interface.
+
+Both are monthly subscriptions, cancel anytime.
 
 WHO THIS IS FOR
 
@@ -71,11 +77,11 @@ RF and DAS engineers doing venue and building surveys. Network consultants who n
 report, not a screenshot. IT teams diagnosing a Wi-Fi capacity problem a signal meter can't see.
 Anyone who has ever wanted an honest answer for why "full bars" still feels slow.
 
-No account required to use the free tier. No ads.
+No ads, ever.
 ```
 
-(Roughly 2,700 characters — well under the 4,000 limit, leaving room to add screenshots-referenced
-callouts or tighten later based on what actually converts.)
+(Well under the 4,000 limit, leaving room to add screenshots-referenced callouts or tighten later
+based on what actually converts.)
 
 ## Notes for whoever reviews this before submission
 
@@ -83,9 +89,14 @@ callouts or tighten later based on what actually converts.)
   point itself" are both factual claims this session verified against the actual code and against
   real devices — not marketing copy assembled without checking. If either capability changes, this
   copy needs to change with it.
-- The Free/Field/Pro tier language matches the pricing sketch in the private roadmap doc, but Play
-  Billing isn't implemented yet (see the conversation this file came out of) — this description
-  should not go live before purchasing actually works, or it's advertising a feature that doesn't
-  exist.
-- No specific pricing figures are quoted here on purpose, since those aren't finalized and Play
-  Console enforces its own pricing display separately from the description text.
+- **Revised 2026-09-28, same day as the first draft.** The original draft assumed a free tier
+  ("free to start... no account required"). Play Billing shipped with a different, later-confirmed
+  structure instead: **no free tier at all** — the whole app is behind Field ($9/mo) or Pro
+  ($39/mo), see `docs/play-billing.md`. The original copy would have been a false claim about the
+  shipped product; this revision matches what the app actually does today rather than what an
+  earlier roadmap draft assumed it would do.
+- No specific pricing figures are quoted here on purpose — those live in Play Console's own pricing
+  configuration, not the description text, and change there without a listing edit.
+- No free-trial language is included. `docs/play-billing.md` recommends a 7-day trial on both base
+  plans but it is **not yet configured in Play Console** — do not add trial language to this copy
+  until it is actually live, or this becomes the same class of false claim as the free tier was.

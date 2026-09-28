@@ -64,6 +64,14 @@ absent or clearly disabled on any non-rooted device, which is the normal case fo
 install. See `docs/rooted-vs-unrooted-capabilities.md` in the project repository for the full
 capability breakdown.
 
+## Subscriptions and payment
+
+The app's Field and Pro plans are subscriptions purchased and managed entirely through Google
+Play's own billing system. We never see your payment method, card number, or billing address —
+Google Play collects and processes that directly. The app itself only ever learns which plan is
+currently active (or that none is), which is checked locally on your device against your Google
+Play purchase; no separate account or payment record is created or held by us.
+
 ## Data retention and deletion
 
 Survey data lives in the app's private storage until you delete it — either from within the app or
