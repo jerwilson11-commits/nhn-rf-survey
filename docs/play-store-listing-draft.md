@@ -56,6 +56,10 @@ WHAT MAKES THIS DIFFERENT
 • Wi-Fi roaming and heatmap analysis. Track BSSID transitions across a walk, and visualize coverage
   and signal directly on an uploaded floorplan.
 
+• Public safety coverage evidence. Log FirstNet Band 14/n14 signal against NFPA 1225 ERCES
+  thresholds, classified by area (general/critical) as you walk. A useful supplement to a survey —
+  not a substitute for dedicated LMR-based ERRCS testing, which needs equipment no phone has.
+
 • Export everything. PDF client reports, CSV for your own analysis, and KML/GeoJSON/GeoPackage for
   GIS tools survey teams already use. A session is never locked into the app.
 
@@ -100,3 +104,11 @@ based on what actually converts.)
 - No free-trial language is included. `docs/play-billing.md` recommends a 7-day trial on both base
   plans but it is **not yet configured in Play Console** — do not add trial language to this copy
   until it is actually live, or this becomes the same class of false claim as the free tier was.
+- **Public safety coverage bullet added 2026-09-28**, after discussing whether "Public Safety"
+  should go in the app *name* instead. Deliberately kept out of the 30-char title: the title is
+  already full with the app's actual primary positioning (WiFi+Cellular), and Track B only measures
+  FirstNet Band 14/n14 — not strict LMR ERRCS, which is what most searchers using that term actually
+  need and which no phone can measure. Putting "Public Safety" in the title would draw exactly that
+  audience and then disappoint them. The description bullet gets the ERRCS/NFPA 1225/FirstNet
+  keyword discoverability without that risk, and matches the same non-overclaiming framing as
+  `docs/public-safety-coverage.md` and the PDF report itself.
