@@ -87,4 +87,45 @@ class BandLockTest {
         // Old behaviour, kept: free text does not say which technology it means.
         assertTrue(BandLockCheck.check(listOf("n41"), listOf("n41", "B2")).any { it.headline.contains("excludes") })
     }
+
+    // ---- NSA: the scope that actually reaches n41 at a site with no SA n41 ------
+
+    @Test
+    fun `NSA validates against its own supported set, independent of SA`() {
+        // n41 reachable in NSA but absent from the SA list (this project's own 2026-09-26 test
+        // desk) must still validate for an NSA-only request.
+        assertNull(BandLock.validate(emptySet(), emptySet(), lte, supportedNrSa = setOf(25), nrNsa = setOf(41), supportedNrNsa = nr))
+    }
+
+    @Test
+    fun `an NSA band the modem does not list is refused and named`() {
+        val msg = BandLock.validate(emptySet(), emptySet(), lte, nr, nrNsa = setOf(77), supportedNrNsa = nr)
+        assertTrue(msg!!.contains("n77"))
+        assertTrue(msg.contains("NSA"))
+    }
+
+    @Test
+    fun `SA and NSA locked to the same band collapse to one token, not two`() {
+        // BandLockCheck matches by band existence, not by which NR scope carried it, so a token
+        // per scope would be redundant -- and if it were duplicated the label would misleadingly
+        // suggest two separate restrictions were requested rather than one band on both scopes.
+        val label = BandLock.verifiedLabel(emptySet(), setOf(41), setOf(41))
+        assertEquals("n41 (locked and verified by this app)", label)
+        assertEquals(listOf("n41"), BandLock.tokens(label))
+    }
+
+    @Test
+    fun `an NSA-only lock is not contradicted by the SA leg, and vice versa`() {
+        // Mirrors "an LTE-only lock is not contradicted by the NR leg" -- BandLockCheck's
+        // same-technology scoping does not know about SA vs NSA, only B vs n, so this is really
+        // checking that an NR lock (either scope) does not get compared against unrelated bands.
+        val label = BandLock.verifiedLabel(emptySet(), emptySet(), setOf(41))
+        assertTrue(BandLockCheck.check(listOf(label), listOf("n41")).isEmpty())
+    }
+
+    @Test
+    fun `an NSA lock whose band never appeared is caught the same as an SA one`() {
+        val label = BandLock.verifiedLabel(emptySet(), emptySet(), setOf(41))
+        assertTrue(BandLockCheck.check(listOf(label), listOf("n25")).any { it.headline.contains("never seen") })
+    }
 }

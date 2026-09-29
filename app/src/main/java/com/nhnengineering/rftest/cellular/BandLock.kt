@@ -13,7 +13,21 @@ package com.nhnengineering.rftest.cellular
  *    EARFCN 1000 (B2) to EARFCN 2350 (B4) and it stayed there.
  *  - **Standalone NR bands**, by restricting the SA mask -- but only when the mode preference is
  *    written in the same request. Restricted to n41, the phone left n25 SA for LTE (no n41
- *    reachable at the test desk) and returned to NR on restore.
+ *    reachable *as a standalone cell* at the test desk) and returned to NR on restore.
+ *  - **Non-standalone NR bands**, by restricting the NSA mask the same way. First proven under load
+ *    via raw packet capture (2026-09-26, not through this mechanism): restricting the NSA mask
+ *    (TLV 0x30) to n41 while an LTE anchor carried data left n41 as the only NR leg added, in 49 of
+ *    49 observed packets, and excluding n41 removed the leg entirely. Then proven through this
+ *    app's own write path (2026-09-29): NSA-only technology lock plus an NSA band lock to n41
+ *    camped the serving cell on n41 NSA, ARFCN 501390 -- the same channel the raw-capture
+ *    experiment found. This is the scope that actually reaches n41 at the test desk -- SA failed
+ *    there for a site-coverage reason ("no n41 standalone cell"), not because the write mechanism
+ *    does not work.
+ *
+ * SA and NR are independent restrictions on the same modem preference group and can be set to
+ * different bands (or one left alone) at the same time; which one the radio actually uses depends
+ * on the technology lock held alongside, if any. See [BandLockController] for why they share one
+ * QMI write.
  *
  * Not offered, because it was tried and the modem refused it (error 48, InvalidArgument):
  * LTE bands above 64 (B66, B71) via the extended mask, and an LTE selection with no band in
@@ -22,28 +36,31 @@ package com.nhnengineering.rftest.cellular
  *
  * Not possible over this interface at all: a specific EARFCN. QMI NAS carries band masks, not
  * channel lists.
- *
- * NSA NR bands are left exactly as the modem reported them. Restricting only the SA mask does not
- * constrain an NSA connection, and the label says so by naming the SA scope.
  */
 object BandLock {
 
     /**
      * Why a request cannot be made, or null where it can. Checked before anything is written so a
-     * bad request never reaches the modem.
+     * bad request never reaches the modem. [nrSa] and [nrNsa] are validated against their own
+     * supported sets independently -- a band can be reachable on one NR scope and not the other.
      */
     fun validate(
         lte: Set<Int>,
         nrSa: Set<Int>,
         supportedLte: Set<Int>,
         supportedNrSa: Set<Int>,
+        nrNsa: Set<Int> = emptySet(),
+        supportedNrNsa: Set<Int> = emptySet(),
     ): String? {
-        if (lte.isEmpty() && nrSa.isEmpty()) return "Pick at least one band."
+        if (lte.isEmpty() && nrSa.isEmpty() && nrNsa.isEmpty()) return "Pick at least one band."
         (lte - supportedLte).let {
             if (it.isNotEmpty()) return "LTE ${it.sorted().joinToString { b -> "B$b" }} is not in this modem's band list."
         }
         (nrSa - supportedNrSa).let {
             if (it.isNotEmpty()) return "NR ${it.sorted().joinToString { b -> "n$b" }} is not in this modem's band list."
+        }
+        (nrNsa - supportedNrNsa).let {
+            if (it.isNotEmpty()) return "NR ${it.sorted().joinToString { b -> "n$b" }} (NSA) is not in this modem's band list."
         }
         return null
     }
@@ -56,10 +73,19 @@ object BandLock {
     /**
      * The string recorded per sample: bands as the serving-cell labels write them (`B4`, `n41`) so
      * the report can compare directly, then the marker that this app -- not the operator --
-     * applied and read it back. NR bands here are the standalone scope; see the class doc.
+     * applied and read it back.
+     *
+     * [nrSa] and [nrNsa] are folded into the same bare `n<band>` tokens without a scope suffix,
+     * deliberately: [BandLockCheck][com.nhnengineering.rftest.report.BandLockCheck] matches these
+     * tokens against the plain band string a serving cell reports, which never says which NR scope
+     * produced it, so a scope-qualified token here would never match anything and every NSA-locked
+     * walk would report its own locked band as "never seen". A band locked on both scopes at once
+     * collapses to one token, which is correct: the question that check answers is only whether the
+     * band appeared, not which scope carried it.
      */
-    fun verifiedLabel(lte: Set<Int>, nrSa: Set<Int>): String =
-        (lte.sorted().map { "B$it" } + nrSa.sorted().map { "n$it" }).joinToString(", ") + VERIFIED_SUFFIX
+    fun verifiedLabel(lte: Set<Int>, nrSa: Set<Int>, nrNsa: Set<Int> = emptySet()): String =
+        (lte.sorted().map { "B$it" } + (nrSa + nrNsa).sorted().map { "n$it" })
+            .distinct().joinToString(", ") + VERIFIED_SUFFIX
 
     fun isVerifiedLabel(declared: String): Boolean = declared.endsWith(VERIFIED_SUFFIX)
 

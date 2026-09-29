@@ -186,24 +186,27 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                     unavailableReason = "Requires a Pro subscription.".takeIf { tier != SubscriptionTier.PRO },
                     supportedLte = it.lte,
                     supportedNrSa = it.nrSa,
+                    supportedNrNsa = it.nrNsa,
+                    heldNrSa = bandLockController.lockedNrSa,
+                    heldNrNsa = bandLockController.lockedNrNsa,
                     pendingRestore = bandLockController.pendingRestore,
                 )
             },
             onFailure = { bandUi.copy(checking = false, unavailableReason = it.message ?: "Unavailable.") },
         )
     }
-    val onBandApply: (Set<Int>, Set<Int>) -> Unit = { lte, nr ->
+    val onBandApply: (Set<Int>, Set<Int>, Set<Int>) -> Unit = { lte, nrSa, nrNsa ->
         bandUi = bandUi.copy(busy = true, status = null)
         scope.launch {
-            if (nr.isNotEmpty() && techLock.holdsSaMask) {
+            if (nrSa.isNotEmpty() && techLock.holdsSaMask) {
                 bandUi = bandUi.copy(
                     busy = false,
                     status = "Release NSA-only first: it has emptied the standalone band mask, so " +
-                        "a 5G band lock has nothing to narrow.",
+                        "a 5G standalone band lock has nothing to narrow.",
                 )
                 return@launch
             }
-            val requested = withContext(Dispatchers.IO) { bandLockController.lock(lte, nr) }
+            val requested = withContext(Dispatchers.IO) { bandLockController.lock(lte, nrSa, nrNsa) }
             bandUi = bandUi.copy(status = requested.message)
             if (requested.applied) {
                 // Same reason as the technology lock: accepted is not held. Read it back.
@@ -211,9 +214,14 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 val verified = withContext(Dispatchers.IO) { bandLockController.verify() }
                 bandUi = bandUi.copy(status = verified.message)
                 RecordingState.bandLock.value =
-                    if (verified.applied) BandLock.verifiedLabel(lte, nr) else null
+                    if (verified.applied) BandLock.verifiedLabel(lte, nrSa, nrNsa) else null
             }
-            bandUi = bandUi.copy(busy = false, pendingRestore = bandLockController.pendingRestore)
+            bandUi = bandUi.copy(
+                busy = false,
+                pendingRestore = bandLockController.pendingRestore,
+                heldNrSa = bandLockController.lockedNrSa,
+                heldNrNsa = bandLockController.lockedNrNsa,
+            )
         }
     }
     val onBandRelease: () -> Unit = {
@@ -222,7 +230,12 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
             val outcome = withContext(Dispatchers.IO) { bandLockController.release() }
             bandUi = bandUi.copy(status = outcome.message)
             if (outcome.applied) RecordingState.bandLock.value = null
-            bandUi = bandUi.copy(busy = false, pendingRestore = bandLockController.pendingRestore)
+            bandUi = bandUi.copy(
+                busy = false,
+                pendingRestore = bandLockController.pendingRestore,
+                heldNrSa = bandLockController.lockedNrSa,
+                heldNrNsa = bandLockController.lockedNrNsa,
+            )
         }
     }
 

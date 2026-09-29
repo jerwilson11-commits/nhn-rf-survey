@@ -116,6 +116,9 @@ object QmiSelectionPreference {
         return out.toList()
     }
 
+    /** [maskOf] sized for an NR5G mask (SA or NSA) -- the width both share. */
+    fun maskOfNr(bands: Set<Int>): List<Long> = maskOf(bands, NR_BAND_WORDS)
+
     private fun wordsHex(words: List<Long>): String = words.joinToString("") { w ->
         (0 until 8).joinToString("") { "%02x".format(((w ushr (8 * it)) and 0xFF).toInt()) }
     }
@@ -225,4 +228,27 @@ object QmiSelectionPreference {
             "%02x:%02x".format(TLV_CHANGE_DURATION, DURATION_UNTIL_POWER_CYCLE),
         )
     }
+
+    /**
+     * Argument list restricting the *NSA* NR leg to [nsaBands] -- the mirror of [setNrSaBandArgs]
+     * for the mask this app's own testing actually proved steers a reachable site. The 2026-09-26
+     * NSA-mask experiment (see `docs/modem-diag-access.md`, "NSA n41 at the test desk") restricted
+     * this exact mask under load and watched the NR leg's ARFCN follow it directly, band for band --
+     * unlike SA, which depends on the site broadcasting a *standalone* cell on that band at all, and
+     * failed at that same desk for n41 for exactly that reason (n25 was the only SA layer there).
+     *
+     * Verified through this app's own write path on 2026-09-29: technology-locked to NSA-only,
+     * this function used to band-lock to n41, and the serving cell camped n41 NSA on ARFCN 501390
+     * -- the same channel the 2026-09-26 raw-capture experiment found -- once data traffic was
+     * flowing. Confirms the MissingArgument requirement generalizes to "the whole NR5G preference
+     * group travels together" rather than being specific to the SA TLV.
+     */
+    fun setNrNsaBandArgs(currentModePref: Int, nsaBands: Set<Int>, saWords: List<Long>): List<String> {
+        require(nsaBands.isNotEmpty()) { "Restricting to no bands would leave the modem nothing." }
+        return restoreNrNsaArgs(currentModePref, saWords, maskOf(nsaBands, NR_BAND_WORDS))
+    }
+
+    /** Writes the NSA mask exactly as given, with the mode preference and SA mask it needs. */
+    fun restoreNrNsaArgs(currentModePref: Int, saWords: List<Long>, nsaWords: List<Long>): List<String> =
+        restoreNrSaArgs(currentModePref, saWords, nsaWords)
 }

@@ -159,4 +159,69 @@ class QmiSelectionPreferenceTest {
     fun `change duration until power cycle is zero`() {
         assertEquals(0x00, QmiSelectionPreference.DURATION_UNTIL_POWER_CYCLE)
     }
+
+    // ---- NR5G SA / NSA band writes ---------------------------------------------
+
+    @Test
+    fun `maskOfNr sizes to the eight-word NR mask`() {
+        val words = QmiSelectionPreference.maskOfNr(setOf(41))
+        assertEquals(8, words.size)
+        // n41: bit 40 of word 0.
+        assertEquals(1L shl 40, words[0])
+        assertTrue(words.drop(1).all { it == 0L })
+    }
+
+    @Test
+    fun `an SA write and an NSA write to the same band produce the same wire bytes in swapped slots`() {
+        // setNrSaBandArgs restricts the SA mask and passes the NSA mask through unchanged;
+        // setNrNsaBandArgs is its mirror. Restricting SA to n41 while NSA is empty must produce
+        // byte-for-byte the same TLV 0x2f payload as restricting NSA to n41 while SA is empty
+        // produces for TLV 0x30 -- the two functions must not be secretly asymmetric.
+        val empty = List(8) { 0L }
+        val saArgs = QmiSelectionPreference.setNrSaBandArgs(0x005F, setOf(41), empty)
+        val nsaArgs = QmiSelectionPreference.setNrNsaBandArgs(0x005F, setOf(41), empty)
+
+        val saMaskTlv = saArgs.first { it.startsWith("2f:") }.removePrefix("2f:")
+        val nsaMaskTlv = nsaArgs.first { it.startsWith("30:") }.removePrefix("30:")
+        assertEquals(saMaskTlv, nsaMaskTlv)
+
+        // And the *other* mask in each request is the empty one passed through, not the band.
+        assertTrue(saArgs.first { it.startsWith("30:") }.removePrefix("30:").all { it == '0' })
+        assertTrue(nsaArgs.first { it.startsWith("2f:") }.removePrefix("2f:").all { it == '0' })
+    }
+
+    @Test
+    fun `an NSA write carries mode preference and change duration, same as an SA write`() {
+        // The 2026-09-26 finding was that the SA write is refused (MissingArgument) without mode
+        // preference riding along; setNrNsaBandArgs is built on the same restoreNrSaArgs wire
+        // format on the working assumption that requirement generalises to the whole preference
+        // group. This pins that the mode and duration TLVs are actually present, not just assumed.
+        val args = QmiSelectionPreference.setNrNsaBandArgs(0x005F, setOf(41), List(8) { 0L })
+        assertTrue("must carry mode preference: $args", args.any { it.startsWith("11:") })
+        assertTrue("must carry change duration: $args", args.any { it.startsWith("17:") })
+        assertEquals("11:5f00", args.first { it.startsWith("11:") })
+    }
+
+    @Test
+    fun `restoreNrNsaArgs and restoreNrSaArgs are the same write, not two different mechanisms`() {
+        // Both masks travel in one QMI write regardless of which one logically "changed" -- see
+        // BandLockController. If these ever diverge it means someone added scope-specific
+        // behaviour to what is actually one shared wire format, silently.
+        val sa = List(8) { 1L }
+        val nsa = List(8) { 2L }
+        assertEquals(
+            QmiSelectionPreference.restoreNrSaArgs(0x005F, sa, nsa),
+            QmiSelectionPreference.restoreNrNsaArgs(0x005F, sa, nsa),
+        )
+    }
+
+    @Test
+    fun `setNrNsaBandArgs refuses an empty band set`() {
+        try {
+            QmiSelectionPreference.setNrNsaBandArgs(0x005F, emptySet(), List(8) { 0L })
+            org.junit.Assert.fail("expected an IllegalArgumentException for an empty band set")
+        } catch (e: IllegalArgumentException) {
+            // expected
+        }
+    }
 }

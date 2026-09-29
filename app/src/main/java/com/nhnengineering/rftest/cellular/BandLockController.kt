@@ -30,6 +30,7 @@ class BandLockController(context: Context) {
         const val KEY_BASE_NSA = "baseline_nr_nsa"
         const val KEY_WANT_LTE = "locked_lte"
         const val KEY_WANT_SA = "locked_nr_sa"
+        const val KEY_WANT_NSA = "locked_nr_nsa"
     }
 
     private val client = QmiNasClient(context)
@@ -51,10 +52,11 @@ class BandLockController(context: Context) {
     /** What this app last locked to, empty if nothing. */
     val lockedLte: Set<Int> get() = getBands(KEY_WANT_LTE)
     val lockedNrSa: Set<Int> get() = getBands(KEY_WANT_SA)
+    val lockedNrNsa: Set<Int> get() = getBands(KEY_WANT_NSA)
 
     data class Outcome(val applied: Boolean, val message: String)
 
-    data class Supported(val lte: Set<Int>, val nrSa: Set<Int>)
+    data class Supported(val lte: Set<Int>, val nrSa: Set<Int>, val nrNsa: Set<Int> = emptySet())
 
     /**
      * The bands that may be chosen, or the reason they cannot be read. While a lock is held this
@@ -68,19 +70,23 @@ class BandLockController(context: Context) {
                 ?: r.result.bands.lte?.let { QmiSelectionPreference.bandsOf(listOf(it)) }
             val sa = getLongs(KEY_BASE_SA)?.let { QmiSelectionPreference.bandsOf(it) }
                 ?: r.result.bands.nrSa?.let { QmiSelectionPreference.bandsOf(it) }
-            if (lte == null && sa == null) {
+            val nsa = getLongs(KEY_BASE_NSA)?.let { QmiSelectionPreference.bandsOf(it) }
+                ?: r.result.bands.nrNsa?.let { QmiSelectionPreference.bandsOf(it) }
+            if (lte == null && sa == null && nsa == null) {
                 Result.failure(IllegalStateException("The modem did not report any band masks."))
             } else {
-                Result.success(Supported(BandLock.selectableLte(lte.orEmpty()), sa.orEmpty()))
+                Result.success(Supported(BandLock.selectableLte(lte.orEmpty()), sa.orEmpty(), nsa.orEmpty()))
             }
         }
     }
 
     /**
-     * Restricts LTE to [lte] and standalone NR to [nrSa]. An empty set means "leave that side as
-     * it was originally", not "allow nothing".
+     * Restricts LTE to [lte], standalone NR to [nrSa], and the NSA NR leg to [nrNsa]. An empty set
+     * means "leave that side as it was originally", not "allow nothing". [nrSa] and [nrNsa] are
+     * independent: locking NSA does not touch the SA mask and vice versa, since a technology lock
+     * held alongside (LTE-only, SA-only, ...) decides which one the radio actually uses.
      */
-    fun lock(lte: Set<Int>, nrSa: Set<Int>): Outcome {
+    fun lock(lte: Set<Int>, nrSa: Set<Int>, nrNsa: Set<Int> = emptySet()): Outcome {
         val snap = when (val r = client.read()) {
             is QmiNasClient.Snapshot.Failed -> return Outcome(false, r.reason)
             is QmiNasClient.Snapshot.Ok -> r.result
@@ -101,9 +107,11 @@ class BandLockController(context: Context) {
         }
         val baseLte = getLongs(KEY_BASE_LTE)?.firstOrNull()
         val baseSa = getLongs(KEY_BASE_SA)
+        val baseNsa = getLongs(KEY_BASE_NSA)
 
         val supportedLte = baseLte?.let { BandLock.selectableLte(QmiSelectionPreference.bandsOf(listOf(it))) }.orEmpty()
         val supportedSa = baseSa?.let { QmiSelectionPreference.bandsOf(it) }.orEmpty()
+        val supportedNsa = baseNsa?.let { QmiSelectionPreference.bandsOf(it) }.orEmpty()
         // A failure before any write leaves the modem untouched, so a baseline captured just now
         // would be a stale "restore pending" with nothing to restore. After a write it must stay.
         var wrote = false
@@ -111,7 +119,7 @@ class BandLockController(context: Context) {
             if (!wrote && !pendingLockHeld()) clearBaseline()
             return Outcome(false, message)
         }
-        BandLock.validate(lte, nrSa, supportedLte, supportedSa)?.let {
+        BandLock.validate(lte, nrSa, supportedLte, supportedSa, nrNsa, supportedNsa)?.let {
             return fail("$it Nothing was changed.")
         }
 
@@ -127,29 +135,45 @@ class BandLockController(context: Context) {
             }
             wrote = true
         }
-        if (nrSa.isNotEmpty()) {
-            val nsa = curNsa ?: return fail("The modem reported no NSA mask, which the NR write must carry.")
+
+        // SA and NSA share one QMI write (mode + both masks travel together, see
+        // QmiSelectionPreference), so they are resolved to one target pair and written at most
+        // once -- two sequential writes would each read the other mask back to build its own
+        // request, and a GET right after a SET can still return the stale value (observed
+        // 2026-09-26), which would silently undo whichever mask was written first.
+        val targetSa = when {
+            nrSa.isNotEmpty() -> QmiSelectionPreference.maskOfNr(nrSa)
+            baseSa != null && curSa != baseSa -> baseSa
+            else -> curSa
+        }
+        val targetNsa = when {
+            nrNsa.isNotEmpty() -> QmiSelectionPreference.maskOfNr(nrNsa)
+            baseNsa != null && curNsa != baseNsa -> baseNsa
+            else -> curNsa
+        }
+        val nrChanged = targetSa != curSa || targetNsa != curNsa
+        if (nrChanged) {
+            if (targetSa == null || targetNsa == null) {
+                return fail("The modem reported no NR band masks, which the NR write must carry.")
+            }
             // The NR write must carry the mode preference already in force (see
-            // setNrSaBandArgs), so a technology lock held alongside is left as it is.
-            client.write(QmiSelectionPreference.setNrSaBandArgs(mode, nrSa, nsa))?.let {
+            // restoreNrSaArgs), so a technology lock held alongside is left as it is.
+            client.write(QmiSelectionPreference.restoreNrSaArgs(mode, targetSa, targetNsa))?.let {
                 return fail("NR band write failed: $it")
             }
-        } else if (baseSa != null && curSa != baseSa) {
-            val nsa = curNsa ?: return fail("The modem reported no NSA mask, which the NR write must carry.")
-            client.write(QmiSelectionPreference.restoreNrSaArgs(mode, baseSa, nsa))?.let {
-                return fail("Could not restore NR bands: $it")
-            }
+            wrote = true
         }
 
         prefs.edit()
             .putString(KEY_WANT_LTE, lte.sorted().joinToString(","))
             .putString(KEY_WANT_SA, nrSa.sorted().joinToString(","))
+            .putString(KEY_WANT_NSA, nrNsa.sorted().joinToString(","))
             .apply()
-        Log.i(TAG, "requested LTE=$lte NR-SA=$nrSa; awaiting verification")
+        Log.i(TAG, "requested LTE=$lte NR-SA=$nrSa NR-NSA=$nrNsa; awaiting verification")
         return Outcome(true, "Requested. Confirming the modem holds it...")
     }
 
-    private fun pendingLockHeld() = lockedLte.isNotEmpty() || lockedNrSa.isNotEmpty()
+    private fun pendingLockHeld() = lockedLte.isNotEmpty() || lockedNrSa.isNotEmpty() || lockedNrNsa.isNotEmpty()
 
     private fun clearBaseline() {
         prefs.edit().remove(KEY_BASE_LTE).remove(KEY_BASE_SA).remove(KEY_BASE_NSA).apply()
@@ -159,34 +183,50 @@ class BandLockController(context: Context) {
     fun verify(): Outcome {
         val wantLte = lockedLte
         val wantSa = lockedNrSa
-        if (wantLte.isEmpty() && wantSa.isEmpty()) return Outcome(true, "No band lock is being held.")
+        val wantNsa = lockedNrNsa
+        if (wantLte.isEmpty() && wantSa.isEmpty() && wantNsa.isEmpty()) {
+            return Outcome(true, "No band lock is being held.")
+        }
         val snap = when (val r = client.read()) {
             is QmiNasClient.Snapshot.Failed -> return Outcome(false, r.reason)
             is QmiNasClient.Snapshot.Ok -> r.result
         }
         val baseLte = getLongs(KEY_BASE_LTE)?.firstOrNull()
         val baseSa = getLongs(KEY_BASE_SA)
+        val baseNsa = getLongs(KEY_BASE_NSA)
         val gotLte = snap.bands.lte?.let { QmiSelectionPreference.bandsOf(listOf(it)) }.orEmpty()
         val gotSa = snap.bands.nrSa?.let { QmiSelectionPreference.bandsOf(it) }.orEmpty()
+        val gotNsa = snap.bands.nrNsa?.let { QmiSelectionPreference.bandsOf(it) }.orEmpty()
         val expectLte = if (wantLte.isNotEmpty()) wantLte else baseLte?.let { QmiSelectionPreference.bandsOf(listOf(it)) }.orEmpty()
         val expectSa = if (wantSa.isNotEmpty()) wantSa else baseSa?.let { QmiSelectionPreference.bandsOf(it) }.orEmpty()
+        val expectNsa = if (wantNsa.isNotEmpty()) wantNsa else baseNsa?.let { QmiSelectionPreference.bandsOf(it) }.orEmpty()
 
-        val held = (wantLte.isEmpty() || gotLte == expectLte) && (wantSa.isEmpty() || gotSa == expectSa)
+        val held = (wantLte.isEmpty() || gotLte == expectLte) &&
+            (wantSa.isEmpty() || gotSa == expectSa) &&
+            (wantNsa.isEmpty() || gotNsa == expectNsa)
         return if (held) {
             Outcome(
                 true,
-                "Modem allows " + describe(wantLte, wantSa) +
+                "Modem allows " + describe(wantLte, wantSa, wantNsa) +
                     ". Where the phone camps follows within seconds; the report checks the bands the " +
                     "session actually saw against this.",
             )
         } else {
-            Log.w(TAG, "lock did not hold: wanted LTE=$wantLte SA=$wantSa got LTE=$gotLte SA=$gotSa")
+            Log.w(
+                TAG,
+                "lock did not hold: wanted LTE=$wantLte SA=$wantSa NSA=$wantNsa " +
+                    "got LTE=$gotLte SA=$gotSa NSA=$gotNsa",
+            )
             Outcome(false, "The modem is not holding the band lock (it reports something else). Measurements will not be band-restricted.")
         }
     }
 
-    private fun describe(lte: Set<Int>, nrSa: Set<Int>): String =
-        (lte.sorted().map { "B$it" } + nrSa.sorted().map { "n$it (SA)" }).joinToString(", ")
+    private fun describe(lte: Set<Int>, nrSa: Set<Int>, nrNsa: Set<Int> = emptySet()): String =
+        (
+            lte.sorted().map { "B$it" } +
+                nrSa.sorted().map { "n$it (SA)" } +
+                nrNsa.sorted().map { "n$it (NSA)" }
+            ).joinToString(", ")
 
     /** Restores the masks read before the first lock. Succeeds trivially when there is nothing to restore. */
     fun release(): Outcome {
@@ -211,7 +251,7 @@ class BandLockController(context: Context) {
             }
         }
         clearBaseline()
-        prefs.edit().remove(KEY_WANT_LTE).remove(KEY_WANT_SA).apply()
+        prefs.edit().remove(KEY_WANT_LTE).remove(KEY_WANT_SA).remove(KEY_WANT_NSA).apply()
         Log.i(TAG, "released")
         return Outcome(true, "Band lock released. Original band masks restored.")
     }

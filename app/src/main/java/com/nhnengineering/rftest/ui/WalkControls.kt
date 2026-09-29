@@ -310,10 +310,21 @@ data class BandLockUi(
     val unavailableReason: String? = null,
     val supportedLte: Set<Int> = emptySet(),
     val supportedNrSa: Set<Int> = emptySet(),
+    val supportedNrNsa: Set<Int> = emptySet(),
+    /**
+     * What is actually locked right now, straight from
+     * [com.nhnengineering.rftest.cellular.BandLockController.lockedNrSa] /
+     * `.lockedNrNsa`, not re-derived from [BandLockControl]'s `activeLabel`. The recorded label
+     * folds both NR scopes into the same bare band tokens (see
+     * [com.nhnengineering.rftest.cellular.BandLock.verifiedLabel] for why), so it cannot say which
+     * scope a given band came from -- only the controller's own separately persisted state can.
+     */
+    val heldNrSa: Set<Int> = emptySet(),
+    val heldNrNsa: Set<Int> = emptySet(),
     val busy: Boolean = false,
     val status: String? = null,
     val pendingRestore: Boolean = false,
-    val onApply: (lte: Set<Int>, nrSa: Set<Int>) -> Unit = { _, _ -> },
+    val onApply: (lte: Set<Int>, nrSa: Set<Int>, nrNsa: Set<Int>) -> Unit = { _, _, _ -> },
     val onRelease: () -> Unit = {},
 )
 
@@ -321,16 +332,23 @@ data class BandLockUi(
  * Restricts the modem to chosen bands via [com.nhnengineering.rftest.cellular.BandLockController].
  *
  * Bands the modem does not list are not offered. What cannot be done is said here rather than
- * discovered later: no specific channel, no LTE band above 64, and the NR choice governs
- * standalone only (see [com.nhnengineering.rftest.cellular.BandLock]).
+ * discovered later: no specific channel, no LTE band above 64 (see
+ * [com.nhnengineering.rftest.cellular.BandLock]).
+ *
+ * NR is two independent scopes, not one choice: **5G standalone** restricts which band the radio
+ * may camp on as its own standalone NR cell, and **5G non-standalone** restricts which band may be
+ * added as a secondary leg alongside an LTE anchor. A site can carry one without the other -- this
+ * app's own 2026-09-26 test desk had n41 reachable in NSA but only n25 available as a standalone
+ * cell, so an SA-only lock to n41 left the radio with nowhere to camp while an NSA-only lock to n41
+ * held. Pick whichever scope the technology lock alongside this is actually going to use.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BandLockControl(ui: BandLockUi, activeLabel: String?) {
     val heldLte = remember(activeLabel) { bandsIn(activeLabel, 'B') }
-    val heldNr = remember(activeLabel) { bandsIn(activeLabel, 'n') }
     var lte by remember(activeLabel) { mutableStateOf(heldLte) }
-    var nr by remember(activeLabel) { mutableStateOf(heldNr) }
+    var sa by remember(ui.heldNrSa) { mutableStateOf(ui.heldNrSa) }
+    var nsa by remember(ui.heldNrNsa) { mutableStateOf(ui.heldNrNsa) }
     // A free-text declaration in the same field is not a lock this app is holding.
     val held = activeLabel != null && com.nhnengineering.rftest.cellular.BandLock.isVerifiedLabel(activeLabel)
 
@@ -364,8 +382,21 @@ fun BandLockControl(ui: BandLockUi, activeLabel: String?) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 ui.supportedNrSa.sorted().forEach { b ->
                     FilterChip(
-                        selected = b in nr,
-                        onClick = { nr = if (b in nr) nr - b else nr + b },
+                        selected = b in sa,
+                        onClick = { sa = if (b in sa) sa - b else sa + b },
+                        enabled = !ui.busy,
+                        label = { Text("n$b") },
+                    )
+                }
+            }
+        }
+        if (ui.supportedNrNsa.isNotEmpty()) {
+            Text("5G non-standalone", style = MaterialTheme.typography.labelMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ui.supportedNrNsa.sorted().forEach { b ->
+                    FilterChip(
+                        selected = b in nsa,
+                        onClick = { nsa = if (b in nsa) nsa - b else nsa + b },
                         enabled = !ui.busy,
                         label = { Text("n$b") },
                     )
@@ -375,8 +406,8 @@ fun BandLockControl(ui: BandLockUi, activeLabel: String?) {
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(
-                onClick = { ui.onApply(lte, nr) },
-                enabled = !ui.busy && (lte.isNotEmpty() || nr.isNotEmpty()),
+                onClick = { ui.onApply(lte, sa, nsa) },
+                enabled = !ui.busy && (lte.isNotEmpty() || sa.isNotEmpty() || nsa.isNotEmpty()),
                 modifier = Modifier.weight(1f),
             ) { Text(if (held) "Change lock" else "Apply lock") }
             OutlinedButton(
@@ -392,16 +423,21 @@ fun BandLockControl(ui: BandLockUi, activeLabel: String?) {
         }
         Text(
             "Picks bands, not a channel: a specific EARFCN or ARFCN cannot be selected this way. " +
-                "Leaving one side empty leaves it unrestricted. A band this site does not carry " +
-                "can leave the phone with no service until released. Clears itself on Airplane " +
-                "Mode or a restart.",
+                "Leaving a scope empty leaves it unrestricted. A band this site does not carry in " +
+                "that scope can leave the phone with no service until released. Clears itself on " +
+                "Airplane Mode or a restart.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
 
-/** Band numbers in a verified label ("B4, n41 (locked ...)") for one technology prefix. */
+/**
+ * Band numbers in a verified label ("B4, n41 (locked ...)") for one technology prefix. Only LTE
+ * ('B') is unambiguous this way -- NR's two scopes fold into the same bare `n<band>` tokens (see
+ * [com.nhnengineering.rftest.cellular.BandLock.verifiedLabel]), so [BandLockUi.heldNrSa] /
+ * `.heldNrNsa` carry those instead of trying to recover them from this string.
+ */
 private fun bandsIn(label: String?, prefix: Char): Set<Int> {
     if (label == null || !com.nhnengineering.rftest.cellular.BandLock.isVerifiedLabel(label)) return emptySet()
     return com.nhnengineering.rftest.cellular.BandLock.tokens(label)
