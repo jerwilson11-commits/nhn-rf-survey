@@ -52,6 +52,11 @@ import com.nhnengineering.rftest.model.WifiSample
 import com.nhnengineering.rftest.service.RecordingService
 import com.nhnengineering.rftest.model.Verdict
 import com.nhnengineering.rftest.service.RecordingState
+import com.nhnengineering.rftest.automation.AutomationRunner
+import com.nhnengineering.rftest.automation.AutomationScript
+import com.nhnengineering.rftest.automation.AutomationStep
+import com.nhnengineering.rftest.automation.AutomationStepResult
+import com.nhnengineering.rftest.automation.FtpConfig
 import com.nhnengineering.rftest.speedtest.Ndt7Config
 import com.nhnengineering.rftest.speedtest.Ndt7Tester
 import com.nhnengineering.rftest.speedtest.SpeedTestConfig
@@ -271,6 +276,14 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
 
     var diagRunning by remember { mutableStateOf(false) }
     var diagResult by remember { mutableStateOf<String?>(null) }
+
+    var automationConfig by remember { mutableStateOf(AutomationConfig()) }
+    var automationResults by remember { mutableStateOf<List<AutomationStepResult>>(emptyList()) }
+    var automationRunning by remember { mutableStateOf(false) }
+    val automationRunner = remember { AutomationRunner() }
+    // A looping script must not outlive the screen -- otherwise leaving this tab while "Loop" is on
+    // leaves a ping/HTTP/FTP cycle running against the operator's own server indefinitely.
+    DisposableEffect(Unit) { onDispose { automationRunner.stop() } }
 
     // Keyed on `recording`, so the handover between local collectors and the service happens
     // automatically in both directions.
@@ -549,6 +562,33 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 },
             )
         }
+        item {
+            AutomationCard(
+                running = automationRunning,
+                config = automationConfig,
+                onConfigChange = { automationConfig = it },
+                results = automationResults,
+                onRun = {
+                    val script = buildAutomationScript(automationConfig, speedServer)
+                    if (automationConfig.loop) {
+                        automationRunning = true
+                        automationRunner.start(scope, script) { results ->
+                            automationResults = results
+                        }
+                    } else {
+                        scope.launch {
+                            automationRunning = true
+                            automationResults = automationRunner.runOnce(script)
+                            automationRunning = false
+                        }
+                    }
+                },
+                onStop = {
+                    automationRunner.stop()
+                    automationRunning = false
+                },
+            )
+        }
         item { CellularCard(cell) }
         item { GpsCard(fix, providersEnabled = locations.isAnyProviderEnabled()) }
 
@@ -572,6 +612,31 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
             }
         }
     }
+}
+
+/**
+ * Turns the checkboxes in [AutomationConfig] into the ordered step list [AutomationRunner] actually
+ * runs. Throughput always reads [speedServerUrl] (the Custom/LAN field in the Throughput card above)
+ * regardless of which backend that card's own one-off button is set to -- see [AutomationCard]'s doc
+ * for why.
+ */
+private fun buildAutomationScript(config: AutomationConfig, speedServerUrl: String): AutomationScript {
+    val steps = buildList {
+        if (config.pingEnabled) add(AutomationStep.Ping(config.pingHost))
+        if (config.httpEnabled) add(AutomationStep.HttpGet(config.httpUrl))
+        if (config.throughputEnabled) {
+            val cfg = SpeedTestConfig.fromDownloadUrl(speedServerUrl)
+            add(AutomationStep.Download(cfg))
+            add(AutomationStep.Upload(cfg))
+        }
+        if (config.ftpEnabled) {
+            val (host, port) = config.ftpHost.split(":", limit = 2).let {
+                it[0] to (it.getOrNull(1)?.toIntOrNull() ?: 21)
+            }
+            add(AutomationStep.Ftp(FtpConfig(host = host, port = port)))
+        }
+    }
+    return AutomationScript(steps, intervalMs = config.intervalSeconds * 1_000L)
 }
 
 @Composable
