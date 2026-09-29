@@ -91,6 +91,12 @@ dependencies {
     // measurement that reports a number to a client would be the wrong place to risk a subtle
     // protocol bug, so this uses OkHttp's WebSocket client instead of a from-scratch one.
     implementation(libs.okhttp)
+    // Video Streaming QoE test needs real playback instrumentation (first-frame timing,
+    // rebuffer events, resolution changes) -- there is no lightweight way to get those without
+    // an actual player. HLS extension included since the default test stream is HLS.
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.exoplayer.hls)
+    implementation(libs.media3.common)
     testImplementation(libs.junit)
     // Android's own org.json is stubbed to throw in local (JVM) unit tests -- this pulls in a
     // real, API-compatible implementation for tests only, so Ndt7TesterTest can parse a locate

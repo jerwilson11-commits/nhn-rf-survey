@@ -63,6 +63,9 @@ import com.nhnengineering.rftest.speedtest.SpeedTestConfig
 import com.nhnengineering.rftest.speedtest.SpeedTester
 import com.nhnengineering.rftest.support.DiagnosticsExporter
 import com.nhnengineering.rftest.support.renderDiagnosticsText
+import com.nhnengineering.rftest.videoqoe.VideoQoeConfig
+import com.nhnengineering.rftest.videoqoe.VideoQoeResult
+import com.nhnengineering.rftest.videoqoe.VideoQoeTester
 import com.nhnengineering.rftest.wifi.WifiCollector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -276,6 +279,11 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
 
     var diagRunning by remember { mutableStateOf(false) }
     var diagResult by remember { mutableStateOf<String?>(null) }
+
+    var videoQoeRunning by remember { mutableStateOf(false) }
+    var videoQoeStage by remember { mutableStateOf<String?>(null) }
+    var videoQoeUrl by remember { mutableStateOf(VideoQoeConfig().url) }
+    var videoQoeResult by remember { mutableStateOf<VideoQoeResult?>(null) }
 
     var automationConfig by remember { mutableStateOf(AutomationConfig()) }
     var automationResults by remember { mutableStateOf<List<AutomationStepResult>>(emptyList()) }
@@ -586,6 +594,27 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 onStop = {
                     automationRunner.stop()
                     automationRunning = false
+                },
+            )
+        }
+        item {
+            VideoStreamingCard(
+                running = videoQoeRunning,
+                stage = videoQoeStage,
+                url = videoQoeUrl,
+                onUrlChange = { videoQoeUrl = it },
+                result = videoQoeResult,
+                onRun = {
+                    scope.launch {
+                        videoQoeRunning = true
+                        videoQoeStage = null
+                        videoQoeResult = null
+                        videoQoeResult = VideoQoeTester(context).run(VideoQoeConfig(url = videoQoeUrl)) {
+                            videoQoeStage = it
+                        }
+                        videoQoeRunning = false
+                        videoQoeStage = null
+                    }
                 },
             )
         }
