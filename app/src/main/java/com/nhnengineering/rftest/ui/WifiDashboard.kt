@@ -66,6 +66,9 @@ import com.nhnengineering.rftest.support.renderDiagnosticsText
 import com.nhnengineering.rftest.videoqoe.VideoQoeConfig
 import com.nhnengineering.rftest.videoqoe.VideoQoeResult
 import com.nhnengineering.rftest.videoqoe.VideoQoeTester
+import com.nhnengineering.rftest.voicecall.VoiceCallConfig
+import com.nhnengineering.rftest.voicecall.VoiceCallResult
+import com.nhnengineering.rftest.voicecall.VoiceCallTester
 import com.nhnengineering.rftest.wifi.WifiCollector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -284,6 +287,18 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     var videoQoeStage by remember { mutableStateOf<String?>(null) }
     var videoQoeUrl by remember { mutableStateOf(VideoQoeConfig().url) }
     var videoQoeResult by remember { mutableStateOf<VideoQoeResult?>(null) }
+
+    var voiceCallRunning by remember { mutableStateOf(false) }
+    var voiceCallStage by remember { mutableStateOf<String?>(null) }
+    var voiceCallNumber by remember { mutableStateOf("") }
+    var voiceCallResult by remember { mutableStateOf<VoiceCallResult?>(null) }
+    // Defaults the field to this SIM's own voicemail number -- carrier-agnostic and disturbs no
+    // one, unlike guessing a hardcoded shortcode. Left blank (operator must type one) when the
+    // SIM does not report one or the permission behind it was denied.
+    LaunchedEffect(Unit) {
+        val tm = context.getSystemService(android.telephony.TelephonyManager::class.java)
+        voiceCallNumber = runCatching { tm?.voiceMailNumber }.getOrNull().orEmpty()
+    }
 
     var automationConfig by remember { mutableStateOf(AutomationConfig()) }
     var automationResults by remember { mutableStateOf<List<AutomationStepResult>>(emptyList()) }
@@ -614,6 +629,27 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                         }
                         videoQoeRunning = false
                         videoQoeStage = null
+                    }
+                },
+            )
+        }
+        item {
+            VoiceCallCard(
+                running = voiceCallRunning,
+                stage = voiceCallStage,
+                number = voiceCallNumber,
+                onNumberChange = { voiceCallNumber = it },
+                result = voiceCallResult,
+                onRun = {
+                    scope.launch {
+                        voiceCallRunning = true
+                        voiceCallStage = null
+                        voiceCallResult = null
+                        voiceCallResult = VoiceCallTester(context).run(VoiceCallConfig(number = voiceCallNumber)) {
+                            voiceCallStage = it
+                        }
+                        voiceCallRunning = false
+                        voiceCallStage = null
                     }
                 },
             )

@@ -76,6 +76,10 @@ private val OPTIONAL_PERMISSIONS: Array<String> = buildList {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         add(Manifest.permission.POST_NOTIFICATIONS)
     }
+    // Voice call KPI test only. Not gated on: every other feature works without it, and the
+    // call card itself reports plainly when it is missing rather than silently doing nothing.
+    add(Manifest.permission.CALL_PHONE)
+    add(Manifest.permission.ANSWER_PHONE_CALLS)
 }.toTypedArray()
 
 private fun hasAllPermissions(context: Context): Boolean = REQUIRED_PERMISSIONS.all {

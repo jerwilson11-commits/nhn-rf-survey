@@ -50,6 +50,14 @@
     <uses-permission android:name="android.permission.MODIFY_PHONE_STATE"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- Voice call KPI test: places a real call (ACTION_CALL, not ACTION_DIAL) to measure setup
+         time and detect drops. ANSWER_PHONE_CALLS lets the same feature end the call itself via
+         TelecomManager.endCall() when the observation window ends, rather than leaving that to
+         the operator. See VoiceCallTester for why this is attempted rather than assumed to
+         work (MODIFY_PHONE_STATE alone was not confirmed sufficient). -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
+
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Required to call startScan(). Does not actually change any Wi-Fi state. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
