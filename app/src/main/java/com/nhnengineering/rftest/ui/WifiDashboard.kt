@@ -56,6 +56,8 @@ import com.nhnengineering.rftest.speedtest.Ndt7Config
 import com.nhnengineering.rftest.speedtest.Ndt7Tester
 import com.nhnengineering.rftest.speedtest.SpeedTestConfig
 import com.nhnengineering.rftest.speedtest.SpeedTester
+import com.nhnengineering.rftest.support.DiagnosticsExporter
+import com.nhnengineering.rftest.support.renderDiagnosticsText
 import com.nhnengineering.rftest.wifi.WifiCollector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -266,6 +268,9 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     // NDT7 default: see SpeedTestBackend's doc for the 2026-09-29 Cloudflare-anycast finding that
     // motivated it. Custom stays available for the on-site-LAN-server case NDT7 is wrong for.
     var speedBackend by remember { mutableStateOf(SpeedTestBackend.NDT7) }
+
+    var diagRunning by remember { mutableStateOf(false) }
+    var diagResult by remember { mutableStateOf<String?>(null) }
 
     // Keyed on `recording`, so the handover between local collectors and the service happens
     // automatically in both directions.
@@ -523,6 +528,23 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                         speedRunning = false
                         speedStage = null
                         speedLiveMbps = null
+                    }
+                },
+            )
+        }
+        item {
+            DiagnosticsCard(
+                running = diagRunning,
+                resultMessage = diagResult,
+                onExport = {
+                    scope.launch {
+                        diagRunning = true
+                        diagResult = null
+                        val bundle = DiagnosticsExporter(context).collect()
+                        val text = renderDiagnosticsText(bundle)
+                        val file = shareDiagnosticsText(context, text)
+                        diagResult = "Saved and shared: ${file.name}"
+                        diagRunning = false
                     }
                 },
             )

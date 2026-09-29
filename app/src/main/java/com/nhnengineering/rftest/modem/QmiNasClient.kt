@@ -66,6 +66,9 @@ class QmiNasClient(context: Context) {
     private fun helperFile(): File? =
         File(appContext.applicationInfo.nativeLibraryDir, HELPER_NAME).takeIf { it.exists() }
 
+    /** Whether `libqmilock.so` is actually present in this install -- for diagnostics only. */
+    fun helperPresent(): Boolean = helperFile() != null
+
     private fun hexToBytes(hex: String): ByteArray =
         ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 
