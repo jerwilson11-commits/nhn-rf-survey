@@ -12,22 +12,41 @@ package com.nhnengineering.rftest.cellular
  *  - **LTE bands 1-64**, by restricting the base LTE mask. Band 4 moved the serving cell from
  *    EARFCN 1000 (B2) to EARFCN 2350 (B4) and it stayed there.
  *  - **Standalone NR bands**, by restricting the SA mask -- but only when the mode preference is
- *    written in the same request. Restricted to n41, the phone left n25 SA for LTE (no n41
- *    reachable *as a standalone cell* at the test desk) and returned to NR on restore.
+ *    written in the same request. The modem accepts the restriction (reads back "allows n41 (SA)")
+ *    but that is not the same as the radio camping there -- see the 2026-09-29 correction below.
  *  - **Non-standalone NR bands**, by restricting the NSA mask the same way. First proven under load
  *    via raw packet capture (2026-09-26, not through this mechanism): restricting the NSA mask
  *    (TLV 0x30) to n41 while an LTE anchor carried data left n41 as the only NR leg added, in 49 of
  *    49 observed packets, and excluding n41 removed the leg entirely. Then proven through this
  *    app's own write path (2026-09-29): NSA-only technology lock plus an NSA band lock to n41
  *    camped the serving cell on n41 NSA, ARFCN 501390 -- the same channel the raw-capture
- *    experiment found. This is the scope that actually reaches n41 at the test desk -- SA failed
- *    there for a site-coverage reason ("no n41 standalone cell"), not because the write mechanism
- *    does not work.
+ *    experiment found.
+ *
+ * ## Correction, 2026-09-29: the site does broadcast SA n41, and this handset still cannot hold it
+ *
+ * The original note above ("no n41 reachable as a standalone cell at the test desk") was wrong. An
+ * iPhone 16 in Qualcomm field-test mode (`*3001#12345#*`) at the same desk read **SA n41, 100 MHz
+ * bandwidth, PCI 206** -- a real, wide standalone layer. Retried on the OnePlus 9 the same day with
+ * "5G SA only" technology-locked and the SA mask restricted to n41: the modem again confirmed the
+ * restriction ("Modem allows n41 (SA)"), but the radio did not camp there. `getAllCellInfo` and this
+ * app's own Cellular card both went to RAT `unknown`, and `dumpsys telephony.registry` showed
+ * `getRilDataRadioTechnology=18 (IWLAN)` -- the phone had lost cellular PS data entirely and failed
+ * over to Wi-Fi. So the SA write mechanism is correct (the modem accepts and echoes back the
+ * restriction) but this handset could not complete the RRC-level connection to the site's actual SA
+ * n41 layer, while forced to exclude every fallback. This reads as a genuine OnePlus 9 / Snapdragon
+ * 888 (X60 modem) limitation reaching that specific layer, not a site-coverage fact and not a bug in
+ * this class or in [QmiSelectionPreference][com.nhnengineering.rftest.modem.QmiSelectionPreference] --
+ * consistent with the throughput gap also seen this session (34.5 Mbps NSA-locked on this handset vs.
+ * 500+ Mbps SA on the iPhone 16 at the same desk): NSA here rides a 10 MHz LTE anchor with an NR
+ * secondary leg that Android's `PhysicalChannelConfig` shows attaching only intermittently, nowhere
+ * near saturating a 100 MHz channel, while true SA n41 -- the config that would actually deliver that
+ * bandwidth -- is the one mode this handset cannot hold at this desk.
  *
  * SA and NR are independent restrictions on the same modem preference group and can be set to
  * different bands (or one left alone) at the same time; which one the radio actually uses depends
  * on the technology lock held alongside, if any. See [BandLockController] for why they share one
- * QMI write.
+ * QMI write. Restricting SA-only to a band the radio cannot hold is exactly the scenario the
+ * "service until released" warning on the band-lock UI exists for.
  *
  * Not offered, because it was tried and the modem refused it (error 48, InvalidArgument):
  * LTE bands above 64 (B66, B71) via the extended mask, and an LTE selection with no band in
