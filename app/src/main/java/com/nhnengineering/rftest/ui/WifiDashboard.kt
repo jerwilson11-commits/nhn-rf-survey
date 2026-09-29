@@ -52,6 +52,8 @@ import com.nhnengineering.rftest.model.WifiSample
 import com.nhnengineering.rftest.service.RecordingService
 import com.nhnengineering.rftest.model.Verdict
 import com.nhnengineering.rftest.service.RecordingState
+import com.nhnengineering.rftest.speedtest.Ndt7Config
+import com.nhnengineering.rftest.speedtest.Ndt7Tester
 import com.nhnengineering.rftest.speedtest.SpeedTestConfig
 import com.nhnengineering.rftest.speedtest.SpeedTester
 import com.nhnengineering.rftest.wifi.WifiCollector
@@ -261,6 +263,9 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     var speedStage by remember { mutableStateOf<String?>(null) }
     var speedLiveMbps by remember { mutableStateOf<Double?>(null) }
     var speedResult by remember { mutableStateOf<ThroughputSample?>(null) }
+    // NDT7 default: see SpeedTestBackend's doc for the 2026-09-29 Cloudflare-anycast finding that
+    // motivated it. Custom stays available for the on-site-LAN-server case NDT7 is wrong for.
+    var speedBackend by remember { mutableStateOf(SpeedTestBackend.NDT7) }
 
     // Keyed on `recording`, so the handover between local collectors and the service happens
     // automatically in both directions.
@@ -491,6 +496,8 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 stage = speedStage,
                 liveMbps = speedLiveMbps,
                 result = speedResult,
+                backend = speedBackend,
+                onBackendChange = { speedBackend = it },
                 serverUrl = speedServer,
                 onServerUrlChange = { speedServer = it },
                 onRun = {
@@ -498,10 +505,17 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                         speedRunning = true
                         speedResult = null
                         speedLiveMbps = null
-                        val cfg = SpeedTestConfig.fromDownloadUrl(speedServer)
-                        val r = SpeedTester(cfg).runAll { st, mbps ->
-                            speedStage = st
-                            speedLiveMbps = mbps
+                        val r = if (speedBackend == SpeedTestBackend.NDT7) {
+                            Ndt7Tester(Ndt7Config()).runAll { st, mbps ->
+                                speedStage = st
+                                speedLiveMbps = mbps
+                            }
+                        } else {
+                            val cfg = SpeedTestConfig.fromDownloadUrl(speedServer)
+                            SpeedTester(cfg).runAll { st, mbps ->
+                                speedStage = st
+                                speedLiveMbps = mbps
+                            }
                         }
                         speedResult = r
                         // Handed to the service so the file keeps a single writer.

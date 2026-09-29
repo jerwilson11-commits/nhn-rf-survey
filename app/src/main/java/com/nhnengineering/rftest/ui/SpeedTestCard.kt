@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -19,6 +20,24 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.nhnengineering.rftest.model.ThroughputSample
 import java.util.Locale
+
+/** Which measurement path [SpeedTestCard]'s "Run speed test" button uses. */
+enum class SpeedTestBackend(val label: String) {
+    /**
+     * M-Lab's NDT7, auto-selecting a nearby low-latency server. The default: on 2026-09-29,
+     * Cloudflare's anycast handed this app's own tester a server in New York (~187 ms median) from
+     * the same desk where an iPhone read 617/47 Mbps at 10 ms to a nearby server over Ookla's
+     * equivalent methodology -- the distant server was capping the reading, not the radio.
+     */
+    NDT7("M-Lab NDT7 (nearest server)"),
+
+    /**
+     * The original Cloudflare-or-typed-URL path. Still the right choice for a DAS/Private 5G/CBRS
+     * acceptance test, where a LAN server on site is the correct instrument and the internet path
+     * -- NDT7 included -- is deliberately the wrong thing to measure.
+     */
+    CUSTOM("Custom / LAN server"),
+}
 
 /**
  * Speed test control and last result.
@@ -34,6 +53,8 @@ fun SpeedTestCard(
     stage: String?,
     liveMbps: Double?,
     result: ThroughputSample?,
+    backend: SpeedTestBackend,
+    onBackendChange: (SpeedTestBackend) -> Unit,
     serverUrl: String,
     onServerUrlChange: (String) -> Unit,
     onRun: () -> Unit,
@@ -42,19 +63,40 @@ fun SpeedTestCard(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Throughput", style = MaterialTheme.typography.titleMedium)
 
-            OutlinedTextField(
-                value = serverUrl,
-                onValueChange = onServerUrlChange,
-                label = { Text("Server base URL") },
-                singleLine = true,
-                enabled = !running,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text(
-                "Point this at a LAN server on site — testing to the internet measures backhaul, " +
-                    "not the radio system.",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SpeedTestBackend.entries.forEach { b ->
+                    FilterChip(
+                        selected = backend == b,
+                        onClick = { onBackendChange(b) },
+                        enabled = !running,
+                        label = { Text(b.label) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+
+            if (backend == SpeedTestBackend.CUSTOM) {
+                OutlinedTextField(
+                    value = serverUrl,
+                    onValueChange = onServerUrlChange,
+                    label = { Text("Server base URL") },
+                    singleLine = true,
+                    enabled = !running,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Point this at a LAN server on site — testing to the internet measures " +
+                        "backhaul, not the radio system.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else {
+                Text(
+                    "Picks the nearest low-latency M-Lab server automatically. For a DAS, " +
+                        "Private 5G or CBRS acceptance test, switch to Custom and point it at a " +
+                        "server on the venue LAN instead — this still measures the internet path.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
 
             if (running) {
                 HorizontalDivider()

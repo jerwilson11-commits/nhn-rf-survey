@@ -86,7 +86,16 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.billing.ktx)
+    // WebSocket transport for NDT7 (M-Lab) throughput tests -- java.net.http's WebSocket support
+    // needs API 34, and this app's minSdk is 31. Hand-rolling RFC 6455 framing/masking/TLS for a
+    // measurement that reports a number to a client would be the wrong place to risk a subtle
+    // protocol bug, so this uses OkHttp's WebSocket client instead of a from-scratch one.
+    implementation(libs.okhttp)
     testImplementation(libs.junit)
+    // Android's own org.json is stubbed to throw in local (JVM) unit tests -- this pulls in a
+    // real, API-compatible implementation for tests only, so Ndt7TesterTest can parse a locate
+    // response without Robolectric. Never shipped: the app itself uses the platform's org.json.
+    testImplementation(libs.json)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
