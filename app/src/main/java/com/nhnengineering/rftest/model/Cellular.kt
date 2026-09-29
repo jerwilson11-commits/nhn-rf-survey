@@ -201,6 +201,26 @@ data class ComponentCarrier(
         get() = band?.let { if (isNr) "n$it" else "B$it" }
 }
 
+/**
+ * The modem's own RRC-layer serving-cell record -- see [CellularSample.modemRrcServingCell] for
+ * why this exists alongside the Android-API-derived [NrCell]. Field layout traced to
+ * `com.nhnengineering.rftest.modem.NrRrcServingCellParser`, not reverse-engineered independently.
+ */
+data class ModemRrcServingCell(
+    val pci: Int?,
+    /** Present only from a later payload version -- see the parser's own doc. */
+    val nrCgi: Long?,
+    val dlNrArfcn: Long?,
+    val ulNrArfcn: Long?,
+    val cellId: Long?,
+    val mcc: Int?,
+    val mnc: Int?,
+    val tac: Long?,
+    val band: Int?,
+    /** e.g. "0.4" or "3.2" -- which of the parser's known payload shapes this came from. */
+    val payloadVersion: String?,
+)
+
 data class CellularSample(
     val simState: SimState,
     val rat: Rat,
@@ -280,6 +300,15 @@ data class CellularSample(
      * more use to an engineer than a silently shorter list.
      */
     val modemUnavailableReason: String? = null,
+
+    /**
+     * The modem's own RRC-layer view of the serving cell, from DIAG log `0xB823` -- a second,
+     * independent reading of the same facts [nr] already reports from Android's public
+     * `CellInfoNr`, the same spirit as this project's own practice of cross-checking against
+     * Field Test Mode. Null when the modem log has not been read (needs root) or has not yet
+     * decoded a packet.
+     */
+    val modemRrcServingCell: ModemRrcServingCell? = null,
 ) {
     /** Primary serving-cell coverage KPI, whichever radio is serving. */
     val servingRsrpDbm: Int? get() = nr?.ssRsrpDbm ?: lte?.rsrpDbm

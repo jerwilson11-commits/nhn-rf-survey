@@ -24,6 +24,7 @@ import com.nhnengineering.rftest.model.CellSource
 import com.nhnengineering.rftest.model.CellularSample
 import com.nhnengineering.rftest.model.ComponentCarrier
 import com.nhnengineering.rftest.model.LteCell
+import com.nhnengineering.rftest.model.ModemRrcServingCell
 import com.nhnengineering.rftest.model.NeighborCell
 import com.nhnengineering.rftest.model.NrCell
 import com.nhnengineering.rftest.model.NrState
@@ -350,6 +351,7 @@ class CellularCollector(context: Context) {
         modemNeighbours.refreshIfDue()
         val modemSnapshot = modemNeighbours.snapshot()
         val nrSnapshot = modemNr.snapshot()
+        val scellSnapshot = modemNr.scellSnapshot()
 
         val seenNow = buildList {
             lteCells.filter { it !== servingLte }.forEach { add(neighborFromLte(it)) }
@@ -394,6 +396,20 @@ class CellularCollector(context: Context) {
                 } else {
                     null
                 },
+            modemRrcServingCell = scellSnapshot?.result?.takeIf { it.looksValid }?.let {
+                ModemRrcServingCell(
+                    pci = it.pci,
+                    nrCgi = it.nrCgi,
+                    dlNrArfcn = it.dlNrArfcn,
+                    ulNrArfcn = it.ulNrArfcn,
+                    cellId = it.cellId,
+                    mcc = it.mcc,
+                    mnc = it.mnc,
+                    tac = it.tac,
+                    band = it.band,
+                    payloadVersion = it.payloadVersion,
+                )
+            },
         )
     }
 

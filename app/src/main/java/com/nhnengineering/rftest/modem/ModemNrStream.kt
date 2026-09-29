@@ -7,7 +7,8 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * 5G NR neighbour cells, streamed from the modem's own measurement log over DCI.
+ * 5G NR neighbour cells and RRC-layer serving-cell info, streamed from the modem's own logs over
+ * DCI, one subscription carrying both.
  *
  * ## Why a stream and not a request
  *
@@ -15,7 +16,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * such question: QMI NAS carries no cell list at all on NR SA, verified directly. The only place
  * the neighbours exist is the modem's `0xB97F` measurement log, which is pushed several times a
  * second once a DCI client subscribes to it. So this owns a subscription rather than making a
- * call, and the sampling loop reads whatever the last packet said.
+ * call, and the sampling loop reads whatever the last packet said. `0xB823`, RRC's own serving-cell
+ * record (see [NrRrcServingCellParser]), rides the same subscription -- one client, one log mask,
+ * two codes multiplexed on the one stream rather than a second subscriber competing for the same
+ * global modem state.
  *
  * ## Why it runs in bounded windows
  *
@@ -64,6 +68,9 @@ class ModemNrStream(context: Context) {
         /** NR ML1 Measurement Database Update. */
         private const val LOG_CODE_NR_ML1 = "b97f"
 
+        /** NR RRC Serving Cell Info -- see [NrRrcServingCellParser]. */
+        private const val LOG_CODE_NR_RRC_SCELL = "b823"
+
         /**
          * Length of one subscription window, in seconds.
          *
@@ -77,6 +84,7 @@ class ModemNrStream(context: Context) {
     }
 
     data class Snapshot(val result: NrMl1Parser.Result, val ageMs: Long)
+    data class ScellSnapshot(val result: NrRrcServingCellParser.Result, val ageMs: Long)
 
     private val appContext = context.applicationContext
     private val running = AtomicBoolean(false)
@@ -85,6 +93,8 @@ class ModemNrStream(context: Context) {
     @Volatile private var process: Process? = null
     @Volatile private var latest: NrMl1Parser.Result? = null
     @Volatile private var latestAtElapsed = 0L
+    @Volatile private var latestScell: NrRrcServingCellParser.Result? = null
+    @Volatile private var latestScellAtElapsed = 0L
     @Volatile private var lastError: String? = null
 
     /** Why NR neighbours are unavailable, or null once packets are arriving. */
@@ -96,6 +106,14 @@ class ModemNrStream(context: Context) {
         val age = SystemClock.elapsedRealtime() - latestAtElapsed
         if (age > STALE_AFTER_MS) return null
         return Snapshot(r, age)
+    }
+
+    /** The most recent RRC serving-cell reading, or null if none has arrived or gone stale. */
+    fun scellSnapshot(): ScellSnapshot? {
+        val r = latestScell ?: return null
+        val age = SystemClock.elapsedRealtime() - latestScellAtElapsed
+        if (age > STALE_AFTER_MS) return null
+        return ScellSnapshot(r, age)
     }
 
     fun start() {
@@ -113,6 +131,7 @@ class ModemNrStream(context: Context) {
         worker?.interrupt()
         worker = null
         latest = null
+        latestScell = null
     }
 
     private fun loop() {
@@ -146,13 +165,14 @@ class ModemNrStream(context: Context) {
         val staged = stagedPath(helper)
         val command = "cp -f ${helper.absolutePath} $staged 2>/dev/null" +
             " ; chmod 755 $staged 2>/dev/null" +
-            " ; $staged $WINDOW_SECONDS $LOG_CODE_NR_ML1"
+            " ; $staged $WINDOW_SECONDS $LOG_CODE_NR_ML1 $LOG_CODE_NR_RRC_SCELL"
         Log.i(TAG, "window starting: $command")
         val p = ProcessBuilder("su", "-c", command)
             .redirectErrorStream(true).start()
         process = p
         var lines = 0
         var stored = 0
+        var storedScell = 0
         try {
             p.inputStream.bufferedReader().use { reader ->
                 while (running.get()) {
@@ -160,20 +180,41 @@ class ModemNrStream(context: Context) {
                     lines++
                     when {
                         line.startsWith("LOG ") -> {
-                            val parsed = NrMl1Parser.parseLogLine(line)
-                            if (parsed != null && parsed.looksValid) {
-                                latest = parsed
-                                latestAtElapsed = SystemClock.elapsedRealtime()
-                                lastError = null
-                                stored++
-                                if (stored == 1) {
-                                    Log.i(TAG, "stored first packet: serving=${parsed.servingPci} " +
-                                        "neighbours=${parsed.neighbours.map { it.pci }}")
+                            // One subscription now carries two log codes multiplexed on the same
+                            // stream, so the code embedded in each packet decides which parser
+                            // gets it -- trying both would silently double-parse every line.
+                            when (logCodeOf(line)) {
+                                NrMl1Parser.LOG_CODE -> {
+                                    val parsed = NrMl1Parser.parseLogLine(line)
+                                    if (parsed != null && parsed.looksValid) {
+                                        latest = parsed
+                                        latestAtElapsed = SystemClock.elapsedRealtime()
+                                        lastError = null
+                                        stored++
+                                        if (stored == 1) {
+                                            Log.i(TAG, "stored first ML1 packet: serving=${parsed.servingPci} " +
+                                                "neighbours=${parsed.neighbours.map { it.pci }}")
+                                        }
+                                    } else if (parsed != null) {
+                                        // A packet that failed its own integrity check. Worth
+                                        // knowing, but not worth replacing a good reading with.
+                                        Log.w(TAG, "discarded ML1 packet: ${parsed.notes.firstOrNull()}")
+                                    }
                                 }
-                            } else if (parsed != null) {
-                                // A packet that failed its own integrity check. Worth knowing,
-                                // but not worth replacing a good reading with.
-                                Log.w(TAG, "discarded packet: ${parsed.notes.firstOrNull()}")
+                                NrRrcServingCellParser.LOG_CODE -> {
+                                    val parsed = NrRrcServingCellParser.parseLogLine(line)
+                                    if (parsed != null && parsed.looksValid) {
+                                        latestScell = parsed
+                                        latestScellAtElapsed = SystemClock.elapsedRealtime()
+                                        storedScell++
+                                        if (storedScell == 1) {
+                                            Log.i(TAG, "stored first RRC scell packet: v${parsed.payloadVersion} " +
+                                                "pci=${parsed.pci} band=${parsed.band}")
+                                        }
+                                    } else if (parsed != null) {
+                                        Log.w(TAG, "discarded RRC scell packet: ${parsed.notes.firstOrNull()}")
+                                    }
+                                }
                             }
                         }
                         line.startsWith("ERR ") -> lastError = line.removePrefix("ERR ").take(160)
@@ -182,10 +223,23 @@ class ModemNrStream(context: Context) {
                 }
             }
         } finally {
-            Log.i(TAG, "window ended: $lines line(s), $stored stored, lastError=$lastError")
+            Log.i(
+                TAG,
+                "window ended: $lines line(s), $stored ML1 stored, $storedScell RRC scell stored, " +
+                    "lastError=$lastError",
+            )
             runCatching { p.destroy() }
             process = null
         }
+    }
+
+    /** The log code embedded in a `LOG <hex>` line (bytes 2-3, little-endian), or null. */
+    private fun logCodeOf(line: String): Int? {
+        val hex = line.removePrefix("LOG ").trim()
+        if (hex.length < 8) return null
+        val lo = hex.substring(4, 6).toIntOrNull(16) ?: return null
+        val hi = hex.substring(6, 8).toIntOrNull(16) ?: return null
+        return (hi shl 8) or lo
     }
 
     /**

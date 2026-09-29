@@ -138,6 +138,36 @@ fun CellularCard(sample: CellularSample?) {
                 KeyValue("SS-SINR", nr.ssSinrDb?.let { "$it dB" } ?: "—")
             }
 
+            sample.modemRrcServingCell?.let { rrc ->
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                Text(
+                    "NR (modem RRC log)",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "From the modem's own 0xB823 RRC log, not the CellInfoNr surface above -- a " +
+                        "second, independent reading of the same cell.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (sample.nr?.pci != null && rrc.pci != null && sample.nr.pci != rrc.pci) {
+                    Text(
+                        "⚠ PCI mismatch: CellInfoNr says ${sample.nr.pci}, the RRC log says " +
+                            "${rrc.pci}.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFEF6C00),
+                    )
+                }
+                KeyValue("Band", rrc.band?.let { "n$it" } ?: "—")
+                KeyValue("PCI", rrc.pci?.toString() ?: "—")
+                KeyValue("NR CGI", rrc.nrCgi?.toString() ?: "— (payload v${rrc.payloadVersion} has none)")
+                KeyValue("Cell ID", rrc.cellId?.toString() ?: "—")
+                KeyValue("DL / UL NR-ARFCN", "${rrc.dlNrArfcn ?: "—"} / ${rrc.ulNrArfcn ?: "—"}")
+                KeyValue("MCC / MNC", "${rrc.mcc ?: "—"} / ${rrc.mnc ?: "—"}")
+                KeyValue("TAC", rrc.tac?.toString() ?: "—")
+            }
+
             sample.lte?.let { lte ->
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                 Text(
