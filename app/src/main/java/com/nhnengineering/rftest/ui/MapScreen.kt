@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.size
 import com.nhnengineering.rftest.live.BuildingFootprintProxy
 import com.nhnengineering.rftest.live.quantize
 import com.nhnengineering.rftest.map.BuildingFootprintCache
+import com.nhnengineering.rftest.map.GpsOutlierFilter
 import com.nhnengineering.rftest.map.Mercator
 import com.nhnengineering.rftest.map.TileCache
 import com.nhnengineering.rftest.model.RsrpBucket
@@ -451,8 +452,17 @@ private fun DrawScope.drawWalkMap(
 
     val points = track.map { project(it.lat, it.lon) }
 
+    // GPS multipath near a structure produces a cluster of points computed somewhere the
+    // operator never walked -- see GpsOutlierFilter's own doc for the real capture this was
+    // built from. Flagged fixes get no trail line in/out of them and a visually distinct marker,
+    // rather than being silently dropped: the RF reading is not in doubt, only the position.
+    val outlierFlags = GpsOutlierFilter.flagOutliers(
+        track.map { GpsOutlierFilter.Fix(it.lat, it.lon, it.timestampUtcMillis) },
+    )
+
     // Bright and thick: a thin grey line disappears over satellite imagery.
     for (i in 0 until points.size - 1) {
+        if (outlierFlags[i] || outlierFlags[i + 1]) continue
         drawLine(
             color = Color.White.copy(alpha = 0.75f),
             start = points[i],
@@ -462,10 +472,15 @@ private fun DrawScope.drawWalkMap(
     }
 
     points.forEachIndexed { i, p ->
-        val argb = RsrpBucket.of(track[i].rsrpDbm)?.argb ?: RssiBucket.of(track[i].rssiDbm)?.argb
-        drawCircle(Color(argb ?: 0xFF7A7A7A.toInt()), radius = 6f, center = p)
-        // A dark ring so a green dot stays readable over grass and a red one over a roof.
-        drawCircle(Color.Black.copy(alpha = 0.55f), radius = 6f, center = p, style = Stroke(1.5f))
+        if (outlierFlags[i]) {
+            // Hollow and grey rather than RSRP-coloured: a suspect position, not a reading.
+            drawCircle(Color(0xFF9E9E9E), radius = 6f, center = p, style = Stroke(1.8f))
+        } else {
+            val argb = RsrpBucket.of(track[i].rsrpDbm)?.argb ?: RssiBucket.of(track[i].rssiDbm)?.argb
+            drawCircle(Color(argb ?: 0xFF7A7A7A.toInt()), radius = 6f, center = p)
+            // A dark ring so a green dot stays readable over grass and a red one over a roof.
+            drawCircle(Color.Black.copy(alpha = 0.55f), radius = 6f, center = p, style = Stroke(1.5f))
+        }
     }
 
     // Current position. The live fix rather than the last trail point, because the trail is
@@ -684,8 +699,16 @@ private fun MapKpiStrip(
             cellText("dBm", level?.toString() ?: "—")
             cellText("SINR", sinr?.toString() ?: "—")
             // Accuracy rather than coordinates: a position is only as good as its uncertainty, and
-            // six decimal places of latitude tell the operator nothing they can act on.
-            cellText("GPS ±m", fix?.accuracyM?.let { "%.0f".format(it) } ?: "—")
+            // six decimal places of latitude tell the operator nothing they can act on. Satellite
+            // count rides along in the same cell rather than a third row -- this strip sits above a
+            // map that should keep most of the screen.
+            cellText(
+                "GPS ±m",
+                buildString {
+                    append(fix?.accuracyM?.let { "%.0f".format(it) } ?: "—")
+                    fix?.gnssSatellitesUsed?.let { append(" · ").append(it).append("sat") }
+                },
+            )
         }
     }
 }

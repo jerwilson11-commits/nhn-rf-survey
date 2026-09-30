@@ -1,12 +1,14 @@
 package com.nhnengineering.rftest.location
 
 import android.content.Context
+import android.location.GnssStatus
 import android.location.Location
 import android.os.SystemClock
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Looper
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.nhnengineering.rftest.model.GeoPoint
 
 /**
@@ -44,16 +46,36 @@ class LocationCollector(context: Context) {
     @Volatile private var latestGps: Location? = null
     @Volatile private var latestFused: Location? = null
 
+    /** Most recent satellite snapshot from the GPS chip. Updated on the GNSS HAL's own cadence,
+     *  independent of [gpsListener] -- not guaranteed to be from the exact same instant as
+     *  [latestGps], just the most recent one available. Only meaningful for the GPS fix; the
+     *  fused provider has no satellite data of its own. */
+    @Volatile private var latestGnssStatus: GnssStatus? = null
+
     private var started = false
 
     private val gpsListener = LocationListener { location -> latestGps = location }
     private val fusedListener = LocationListener { location -> latestFused = location }
+
+    private val gnssStatusCallback = object : GnssStatus.Callback() {
+        override fun onSatelliteStatusChanged(status: GnssStatus) {
+            latestGnssStatus = status
+        }
+    }
 
     fun start() {
         if (started) return
         started = true
         request(LocationManager.GPS_PROVIDER, gpsListener)
         request(LocationManager.FUSED_PROVIDER, fusedListener)
+        try {
+            locationManager?.registerGnssStatusCallback(
+                ContextCompat.getMainExecutor(appContext),
+                gnssStatusCallback,
+            )
+        } catch (e: SecurityException) {
+            Log.w(TAG, "GNSS status updates denied", e)
+        }
     }
 
     fun stop() {
@@ -61,6 +83,7 @@ class LocationCollector(context: Context) {
         started = false
         runCatching { locationManager?.removeUpdates(gpsListener) }
         runCatching { locationManager?.removeUpdates(fusedListener) }
+        runCatching { locationManager?.unregisterGnssStatusCallback(gnssStatusCallback) }
     }
 
     private fun request(provider: String, listener: LocationListener) {
@@ -105,10 +128,12 @@ class LocationCollector(context: Context) {
         val gps = latestGps?.takeIf { now - it.time <= MAX_FIX_AGE_MS }
         val fused = latestFused?.takeIf { now - it.time <= MAX_FIX_AGE_MS }
         val best = gps ?: fused ?: return null
-        return best.toGeoPoint()
+        // Satellite data only means something for the GPS fix itself, not a fused fallback.
+        val gnss = latestGnssStatus.takeIf { best === gps }
+        return best.toGeoPoint(gnss)
     }
 
-    private fun Location.toGeoPoint() = GeoPoint(
+    private fun Location.toGeoPoint(gnss: GnssStatus?) = GeoPoint(
         latitudeDeg = latitude,
         longitudeDeg = longitude,
         altitudeM = if (hasAltitude()) altitude else null,
@@ -125,5 +150,17 @@ class LocationCollector(context: Context) {
         fixAgeMs = ((SystemClock.elapsedRealtimeNanos() - elapsedRealtimeNanos) / 1_000_000L)
             .takeIf { it >= 0 },
         provider = provider ?: "unknown",
+        gnssSatellitesUsed = gnss?.usedSatelliteCount(),
+        gnssSatellitesInView = gnss?.satelliteCount,
+        gnssAvgCn0DbHz = gnss?.usedCn0Values()?.takeIf { it.isNotEmpty() }?.let { it.sum() / it.size },
+        gnssMinCn0DbHz = gnss?.usedCn0Values()?.minOrNull(),
     )
+
+    /** Only satellites that actually informed this fix -- the ones relevant to explaining it,
+     *  not every satellite merely visible. */
+    private fun GnssStatus.usedSatelliteCount(): Int =
+        (0 until satelliteCount).count { usedInFix(it) }
+
+    private fun GnssStatus.usedCn0Values(): List<Float> =
+        (0 until satelliteCount).filter { usedInFix(it) }.map { getCn0DbHz(it) }
 }

@@ -43,6 +43,22 @@ data class GeoPoint(
      *  equivalent: a fused fix may be smoothed or derived from Wi-Fi/cell, which is fine for
      *  navigation and misleading in a drive test. The log should say which one it was. */
     val provider: String,
+    /** Satellites that actually contributed to this fix (`usedInFix()`), not merely visible.
+     *  Null for a fused fix or when no GNSS status has arrived yet. Captured to give a real, more
+     *  sensitive lever on a degraded-but-plausible-looking fix (multipath near a structure) than
+     *  [accuracyM] alone — a real 2026-09-30 session had a visibly wrong GPS cluster while
+     *  `accuracyM` stayed a flat, unvarying value the whole time. Not auto-flagged on yet: this is
+     *  a hypothesis waiting on real bad-segment data to validate it, not a proven threshold. */
+    val gnssSatellitesUsed: Int? = null,
+    /** Total satellites visible to the chip, whether or not they were used in this fix — context
+     *  for [gnssSatellitesUsed] (many visible but few used is itself informative). */
+    val gnssSatellitesInView: Int? = null,
+    /** Average carrier-to-noise density (dB-Hz) among satellites used in this fix. */
+    val gnssAvgCn0DbHz: Float? = null,
+    /** Weakest carrier-to-noise density among satellites used in this fix — potentially a more
+     *  sensitive signal than the average, since one weak/reflected satellite can be enough to bias
+     *  a fix without dragging the average down much. */
+    val gnssMinCn0DbHz: Float? = null,
 )
 
 // ---------------------------------------------------------------------------

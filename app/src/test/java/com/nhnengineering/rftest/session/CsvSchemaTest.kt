@@ -83,8 +83,11 @@ class CsvSchemaTest {
         // when wifi_est_headroom_mbps and wifi_est_mbps_per_station were added for capacity
         // modeling the same day, then 96 when errcs_area_class was added for public-safety-
         // coverage Track B (public-safety-coverage classification, see model/PublicSafetyCoverage.kt).
-        assertEquals(96, CSV_COLUMN_COUNT)
-        assertEquals(96, CSV_HEADER.split(",").size)
+        // 100 from 2026-09-30, when gnss_satellites_used, gnss_satellites_in_view,
+        // gnss_avg_cn0_dbhz and gnss_min_cn0_dbhz were added to capture satellite-quality data
+        // that might explain a GPS fix that looks fine but is not (see model/GeoPoint).
+        assertEquals(100, CSV_COLUMN_COUNT)
+        assertEquals(100, CSV_HEADER.split(",").size)
     }
 
     @Test

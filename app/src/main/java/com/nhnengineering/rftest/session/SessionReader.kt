@@ -142,6 +142,13 @@ data class TrackPoint(
      * one that succeeded would hide it.
      */
     val throughputError: String? = null,
+    /** Satellites used in this fix, satellites visible, and Cn0 (dB-Hz) among the used ones --
+     *  see [com.nhnengineering.rftest.model.GeoPoint] for why. Null for a session recorded before
+     *  this column existed, or any row with no GPS fix. */
+    val gnssSatellitesUsed: Int? = null,
+    val gnssSatellitesInView: Int? = null,
+    val gnssAvgCn0DbHz: Float? = null,
+    val gnssMinCn0DbHz: Float? = null,
 ) {
     /** True when this sample can be placed on a floorplan even though GPS could not place it. */
     val hasIndoorPosition: Boolean
@@ -246,6 +253,8 @@ object SessionReader {
             val iFp = idx("floorplan_id"); val iFpX = idx("floorplan_x")
             val iFpY = idx("floorplan_y"); val iWp = idx("waypoint")
             val iErrcsAreaClass = idx("errcs_area_class")
+            val iGnssUsed = idx("gnss_satellites_used"); val iGnssInView = idx("gnss_satellites_in_view")
+            val iGnssAvgCn0 = idx("gnss_avg_cn0_dbhz"); val iGnssMinCn0 = idx("gnss_min_cn0_dbhz")
             if (iLat == null || iLon == null) return@withContext null
 
             val points = mutableListOf<TrackPoint>()
@@ -344,6 +353,10 @@ object SessionReader {
                     downloadMbps = s(iDl)?.toDoubleOrNull(),
                     uploadMbps = s(iUl)?.toDoubleOrNull(),
                     throughputError = s(iTpErr),
+                    gnssSatellitesUsed = s(iGnssUsed)?.toIntOrNull(),
+                    gnssSatellitesInView = s(iGnssInView)?.toIntOrNull(),
+                    gnssAvgCn0DbHz = s(iGnssAvgCn0)?.toFloatOrNull(),
+                    gnssMinCn0DbHz = s(iGnssMinCn0)?.toFloatOrNull(),
                 )
             }
 

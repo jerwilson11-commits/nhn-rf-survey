@@ -14,6 +14,7 @@ import android.os.Build
 import com.nhnengineering.rftest.cellular.BandLock
 import com.nhnengineering.rftest.cellular.TechnologyLock
 import com.nhnengineering.rftest.live.TileProxy
+import com.nhnengineering.rftest.map.GpsOutlierFilter
 import com.nhnengineering.rftest.map.Mercator
 import com.nhnengineering.rftest.session.FloorplanStore
 import com.nhnengineering.rftest.session.SessionSummary
@@ -1321,6 +1322,10 @@ object PdfReportGenerator {
      * basemap -- the same shapes [drawPlot]'s equirectangular GPS fallback below already draws,
      * projected the same way the tiles underneath them are (see [Mercator]'s own class doc for why
      * a different projection for the trail than the tiles is worse than no imagery at all).
+     *
+     * Returns the number of fixes flagged by [GpsOutlierFilter] and excluded from the trail, so
+     * the caller can add a caveat line below the plot -- this function only draws within the
+     * plot's own fixed rect and never touches [Ctx.y], so it cannot add flowing text itself.
      */
     private fun drawMercatorTrackOverlay(
         c: Ctx,
@@ -1331,8 +1336,8 @@ object PdfReportGenerator {
         top: Float,
         w: Float,
         h: Float,
-    ) {
-        val canvas = c.canvas ?: return
+    ): Int {
+        val canvas = c.canvas ?: return 0
         val tilePx = Mercator.TILE_SIZE
         val centerLon = (bounds.minLon + bounds.maxLon) / 2
         val centerWx = Mercator.lonToTileX(centerLon, zoom) * tilePx
@@ -1346,6 +1351,7 @@ object PdfReportGenerator {
         )
 
         val projected = gps.map { project(it.latitudeDeg!!, it.longitudeDeg!!) }
+        val outlierFlags = gpsOutlierFlags(gps)
 
         // Bright and thick, same reasoning as the live map: a thin grey line (right for blank
         // paper) disappears over satellite imagery.
@@ -1353,6 +1359,7 @@ object PdfReportGenerator {
             color = Color.WHITE; alpha = 190; strokeWidth = 2.2f; isAntiAlias = true
         }
         for (i in 0 until projected.size - 1) {
+            if (outlierFlags[i] || outlierFlags[i + 1]) continue
             canvas.drawLine(projected[i][0], projected[i][1], projected[i + 1][0], projected[i + 1][1], trail)
         }
         val dot = Paint().apply { isAntiAlias = true }
@@ -1360,10 +1367,19 @@ object PdfReportGenerator {
             style = Paint.Style.STROKE; strokeWidth = 1.2f
             color = Color.BLACK; alpha = 140; isAntiAlias = true
         }
+        val outlierRing = Paint().apply {
+            style = Paint.Style.STROKE; strokeWidth = 1.4f
+            color = Color.GRAY; isAntiAlias = true
+        }
         gps.forEachIndexed { i, p ->
-            dot.color = pointColor(p)
-            canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, dot)
-            canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, ring)
+            if (outlierFlags[i]) {
+                // Hollow and grey rather than RSRP-coloured: a suspect position, not a reading.
+                canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, outlierRing)
+            } else {
+                dot.color = pointColor(p)
+                canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, dot)
+                canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, ring)
+            }
         }
 
         val marker = Paint().apply {
@@ -1371,7 +1387,11 @@ object PdfReportGenerator {
             color = Color.BLACK; isAntiAlias = true
         }
         val tag = c.paint(8f, bold = true)
-        listOf(projected.first() to "S", projected.last() to "E").forEach { (pt, label) ->
+        // The trusted first/last fix, not necessarily the literal first/last sample -- an S or E
+        // marker sitting at a flagged position would misreport where the walk actually started.
+        val startIdx = outlierFlags.indexOfFirst { !it }.takeIf { it >= 0 } ?: 0
+        val endIdx = outlierFlags.indexOfLast { !it }.takeIf { it >= 0 } ?: projected.lastIndex
+        listOf(projected[startIdx] to "S", projected[endIdx] to "E").forEach { (pt, label) ->
             canvas.drawCircle(pt[0], pt[1], 5.5f, marker)
             canvas.drawText(label, pt[0] + 7f, pt[1] + 3f, tag)
         }
@@ -1379,7 +1399,14 @@ object PdfReportGenerator {
         drawNorthArrow(c, left + w - 18f, top + 8f)
         val pxPerMetre = 1.0 / Mercator.metresPerPixel(bounds.midLat, zoom)
         drawScaleBar(c, left + 16f, top + h - 10f, pxPerMetre, w / 4f)
+        return outlierFlags.count { it }
     }
+
+    /** [GpsOutlierFilter.flagOutliers] over [TrackPoint]'s own field names. */
+    private fun gpsOutlierFlags(gps: List<TrackPoint>): List<Boolean> =
+        GpsOutlierFilter.flagOutliers(
+            gps.map { GpsOutlierFilter.Fix(it.latitudeDeg!!, it.longitudeDeg!!, it.timestampUtcMillis) },
+        )
 
     /**
      * Plots the survey — the floorplan where one was used, otherwise the GPS track.
@@ -1493,7 +1520,7 @@ object PdfReportGenerator {
                 )
                 if (tilesDrawn > 0) {
                     canvas.drawRect(MARGIN, mercatorTop, MARGIN + availW, mercatorTop + availH, frame)
-                    drawMercatorTrackOverlay(c, gps, bounds, zoom, MARGIN, mercatorTop, availW, availH)
+                    val excluded = drawMercatorTrackOverlay(c, gps, bounds, zoom, MARGIN, mercatorTop, availW, availH)
                     c.y = mercatorTop + availH + LINE
                     c.y += drawLegend(c, kpi, MARGIN, c.y)
                     c.gap(6f)
@@ -1502,6 +1529,13 @@ object PdfReportGenerator {
                         "${gps.size} GPS-located samples over satellite imagery, north up. S marks " +
                             "the start of the walk and E the end.",
                     )
+                    if (excluded > 0) {
+                        c.para(
+                            "$excluded sample(s) excluded from the trail as suspect GPS positions " +
+                                "(implied speed too high from the last trusted fix -- likely " +
+                                "multipath near a structure). Still counted in the statistics above.",
+                        )
+                    }
                     return
                 }
                 // Zero tiles came back -- offline, or an external outage. Fall through to the
@@ -1540,13 +1574,23 @@ object PdfReportGenerator {
                 offY + ((summary.maxLat - it.latitudeDeg!!) * mLat * scale).toFloat(),
             )
         }
+        val outlierFlags = gpsOutlierFlags(gps)
         for (i in 0 until projected.size - 1) {
+            if (outlierFlags[i] || outlierFlags[i + 1]) continue
             canvas.drawLine(projected[i][0], projected[i][1], projected[i + 1][0], projected[i + 1][1], line)
         }
         val dot = Paint().apply { isAntiAlias = true }
+        val outlierRing = Paint().apply {
+            style = Paint.Style.STROKE; strokeWidth = 1.2f
+            color = Color.GRAY; isAntiAlias = true
+        }
         gps.forEachIndexed { i, p ->
-            dot.color = pointColor(p)
-            canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, dot)
+            if (outlierFlags[i]) {
+                canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, outlierRing)
+            } else {
+                dot.color = pointColor(p)
+                canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, dot)
+            }
         }
 
         // Start and end, so a reader can tell which way the walk ran. Without them an
@@ -1556,7 +1600,9 @@ object PdfReportGenerator {
             color = Color.BLACK; isAntiAlias = true
         }
         val tag = c.paint(8f, bold = true)
-        listOf(projected.first() to "S", projected.last() to "E").forEach { (pt, label) ->
+        val startIdx = outlierFlags.indexOfFirst { !it }.takeIf { it >= 0 } ?: 0
+        val endIdx = outlierFlags.indexOfLast { !it }.takeIf { it >= 0 } ?: projected.lastIndex
+        listOf(projected[startIdx] to "S", projected[endIdx] to "E").forEach { (pt, label) ->
             canvas.drawCircle(pt[0], pt[1], 5.5f, marker)
             canvas.drawText(label, pt[0] + 7f, pt[1] + 3f, tag)
         }
@@ -1571,6 +1617,14 @@ object PdfReportGenerator {
             "${gps.size} GPS-located samples, north up, equal scale on both axes. " +
                 "S marks the start of the walk and E the end.",
         )
+        val excluded = outlierFlags.count { it }
+        if (excluded > 0) {
+            c.para(
+                "$excluded sample(s) excluded from the trail as suspect GPS positions (implied " +
+                    "speed too high from the last trusted fix -- likely multipath near a " +
+                    "structure). Still counted in the statistics above.",
+            )
+        }
     }
 
     /**
@@ -1758,10 +1812,19 @@ object PdfReportGenerator {
         if (summary.pointCount > 0) {
             val accs = points.mapNotNull { it.accuracyM }
             if (accs.isNotEmpty()) {
+                val sats = points.mapNotNull { it.gnssSatellitesUsed }
+                // Older sessions carry no satellite data at all -- omit the sentence rather than
+                // show a placeholder. Informational only: this is not yet used to flag or exclude
+                // any position, since satellite count correlating with a bad fix is a hypothesis
+                // this project has not yet validated against a real bad segment.
+                val satNote = if (sats.isNotEmpty()) {
+                    " Satellites used per fix ranged from ${sats.min()} to ${sats.max()}."
+                } else ""
                 add(
                     "GPS accuracy" to
                         "Reported fix accuracy ranged from ${accs.min().toInt()} m to " +
-                            "${accs.max().toInt()} m. Positions are no better than this figure."
+                            "${accs.max().toInt()} m. Positions are no better than this figure." +
+                            satNote
                 )
             }
         }

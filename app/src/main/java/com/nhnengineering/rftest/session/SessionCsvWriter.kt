@@ -114,7 +114,8 @@ private val CORE_COLUMNS = listOf(
 
 private val LOCATION_COLUMNS = listOf(
     "lat", "lon", "alt_m", "gps_accuracy_m", "gps_fix_age_ms", "speed_mps", "bearing_deg",
-    "gps_provider",
+    "gps_provider", "gnss_satellites_used", "gnss_satellites_in_view", "gnss_avg_cn0_dbhz",
+    "gnss_min_cn0_dbhz",
 )
 
 /**
@@ -255,6 +256,10 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += g?.speedMps?.let { String.format(Locale.US, "%.2f", it) }
     cells += g?.bearingDeg?.let { String.format(Locale.US, "%.1f", it) }
     cells += g?.provider
+    cells += g?.gnssSatellitesUsed?.toString()
+    cells += g?.gnssSatellitesInView?.toString()
+    cells += g?.gnssAvgCn0DbHz?.let { String.format(Locale.US, "%.1f", it) }
+    cells += g?.gnssMinCn0DbHz?.let { String.format(Locale.US, "%.1f", it) }
 
     // Cellular. Column order must match CELLULAR_COLUMNS exactly; the assertion at the end of
     // this function catches a count mismatch, but not a transposition — so the two lists are kept
