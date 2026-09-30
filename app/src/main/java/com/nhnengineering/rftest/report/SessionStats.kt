@@ -1184,4 +1184,97 @@ object SessionStats {
             )
         }
     }
+
+    // ---- Building entry / wall loss ---------------------------------------
+
+    /**
+     * Which side of a doorway a sample was on, per the operator's own quick-tap mark -- see
+     * [areaOf].
+     */
+    enum class Area { INDOOR, OUTDOOR }
+
+    /**
+     * Exact, case-insensitive match against the two literal strings `WalkControls`' quick-tap
+     * "Indoor"/"Outdoor" buttons write to the `waypoint` column. The Setup panel's free-text "Area
+     * name" field can write anything else into the same column ("Driveway", "Lobby") -- those are
+     * left unclassified rather than guessed at, the same "not measured, not assumed" posture as
+     * [NeighbourVisibility].
+     */
+    fun areaOf(point: TrackPoint): Area? = when (point.waypoint?.trim()?.lowercase()) {
+        "indoor" -> Area.INDOOR
+        "outdoor" -> Area.OUTDOOR
+        else -> null
+    }
+
+    enum class CrossingDirection { ENTERING, EXITING }
+
+    /** One Indoor/Outdoor transition and the RSRP either side of it. */
+    data class Crossing(
+        val direction: CrossingDirection,
+        val outdoorTimestampUtcMillis: Long,
+        val indoorTimestampUtcMillis: Long,
+        val outdoorDbm: Int,
+        val indoorDbm: Int,
+        val pci: Int?,
+        val band: String?,
+        /** False when the serving cell differed between the two endpoint samples -- the delta
+         *  would then reflect a different cell's own baseline as much as the wall, so no figure
+         *  is attributed to the structure. */
+        val sameCell: Boolean,
+    ) {
+        /** Positive means weaker indoors. Null when [sameCell] is false: not measurable. */
+        val lossDb: Int? get() = if (sameCell) outdoorDbm - indoorDbm else null
+    }
+
+    /** Below this many measurable crossings, a median is one or two points dressed up as a trend. */
+    const val MIN_CROSSINGS_FOR_MEDIAN = 2
+
+    /**
+     * Finds each Indoor/Outdoor transition in sequence order and the RSRP either side of it.
+     *
+     * Cellular only: this needs a serving-cell identity to guard against a handover masquerading
+     * as a wall, and Wi-Fi's equivalent would be BSSID -- not built here. Identity comes from
+     * [TrackPoint.cells]'s own serving entry, the same PCI/channel pairing already used for cell
+     * identity elsewhere in this file (see [dominance], [strongerNeighbours]). `SessionReader`
+     * synthesises that serving entry from the plain serving PCI/RSRP columns for every cellular
+     * sample, not only where modem neighbours were read, so this works on an unrooted phone too.
+     *
+     * A gap of unclassified samples between a last-Outdoor and a next-Indoor sample (the operator
+     * tapped a little late) does not break detection: unlabelled samples are dropped before
+     * scanning for transitions, the same skip-rather-than-guess idiom [cadence] uses above.
+     */
+    fun buildingCrossings(points: List<TrackPoint>, kpi: Kpi = kpiFor(points)): List<Crossing> {
+        if (kpi != Kpi.CELL_RSRP) return emptyList()
+        val classified = points.mapNotNull { p -> areaOf(p)?.let { it to p } }
+        val out = mutableListOf<Crossing>()
+        for (i in 1 until classified.size) {
+            val (prevArea, prevPoint) = classified[i - 1]
+            val (area, point) = classified[i]
+            if (area == prevArea) continue
+            val outdoorPoint = if (area == Area.INDOOR) prevPoint else point
+            val indoorPoint = if (area == Area.INDOOR) point else prevPoint
+            val outdoorDbm = outdoorPoint.rsrpDbm ?: continue
+            val indoorDbm = indoorPoint.rsrpDbm ?: continue
+            val outCell = outdoorPoint.cells.firstOrNull { it.serving }
+            val inCell = indoorPoint.cells.firstOrNull { it.serving }
+            val sameCell = outCell?.pci != null && outCell.pci == inCell?.pci &&
+                (outCell.channel == null || inCell?.channel == null || outCell.channel == inCell.channel)
+            out += Crossing(
+                direction = if (area == Area.INDOOR) CrossingDirection.ENTERING else CrossingDirection.EXITING,
+                outdoorTimestampUtcMillis = outdoorPoint.timestampUtcMillis,
+                indoorTimestampUtcMillis = indoorPoint.timestampUtcMillis,
+                outdoorDbm = outdoorDbm,
+                indoorDbm = indoorDbm,
+                pci = outCell?.pci,
+                band = outCell?.band ?: outdoorPoint.cellBand,
+                sameCell = sameCell,
+            )
+        }
+        return out
+    }
+
+    /** Median of the measurable crossings' loss, via the same interpolated [percentile] used
+     *  everywhere else in this file. Null when none of [crossings] kept the same serving cell. */
+    fun medianLossDb(crossings: List<Crossing>): Int? =
+        crossings.mapNotNull { it.lossDb }.sorted().let { if (it.isEmpty()) null else percentile(it, 50.0) }
 }

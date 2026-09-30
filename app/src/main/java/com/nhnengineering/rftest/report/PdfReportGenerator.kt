@@ -418,6 +418,74 @@ object PdfReportGenerator {
             c.gap(); c.rule()
         }
 
+        // ---- Building entry / wall loss -------------------------------------
+        //
+        // Reuses the same waypoint marks as "By area" above, but scored per doorway crossing
+        // rather than as a site-wide average -- see SessionStats.buildingCrossings.
+        val crossings = SessionStats.buildingCrossings(points, report.kpi)
+        if (crossings.isNotEmpty()) {
+            c.ensure(160f)
+            c.text("Building entry / wall loss", c.h2)
+            c.para(
+                "Estimated from the Indoor/Outdoor marks set live during the walk: the serving-cell " +
+                    "RSRP immediately before and after each doorway crossing. Only crossings where " +
+                    "the serving cell did not change are scored -- a crossing where the cell also " +
+                    "changed is listed but not attributed to the structure, since the delta would " +
+                    "then reflect a different cell's own baseline as much as the wall.",
+            )
+            c.gap()
+            c.text(
+                String.format(
+                    Locale.US, "%-6s %-9s %-6s %-8s %-9s %-8s %-8s %s",
+                    "#", "Time", "Dir", "PCI", "Band", "Out dBm", "In dBm", "Loss",
+                ),
+                c.monoBold,
+            )
+            val timeFmt = java.text.SimpleDateFormat("HH:mm:ss", Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }
+            crossings.forEachIndexed { i, cr ->
+                val t = timeFmt.format(java.util.Date(cr.outdoorTimestampUtcMillis))
+                val dir = if (cr.direction == SessionStats.CrossingDirection.ENTERING) "IN" else "OUT"
+                val lossText = cr.lossDb?.let { "${it} dB" } ?: "cell changed"
+                c.text(
+                    String.format(
+                        Locale.US, "%-6d %-9s %-6s %-8s %-9s %-8d %-8d %s",
+                        i + 1, t, dir, cr.pci?.toString() ?: "—", (cr.band ?: "—").take(9),
+                        cr.outdoorDbm, cr.indoorDbm, lossText,
+                    ),
+                    c.mono,
+                )
+            }
+            c.gap()
+            val measurable = crossings.filter { it.sameCell }
+            when {
+                measurable.size >= SessionStats.MIN_CROSSINGS_FOR_MEDIAN -> {
+                    val median = SessionStats.medianLossDb(crossings)
+                    c.text(
+                        "Median estimated building loss: $median dB across ${measurable.size} " +
+                            "measurable crossing(s) (of ${crossings.size} total).",
+                        c.paint(10f, bold = true),
+                    )
+                }
+                measurable.size == 1 -> {
+                    c.text(
+                        "Single measurable crossing: ${measurable.first().lossDb} dB. Not enough " +
+                            "crossings for a median -- treat as one data point, not a building average.",
+                        c.paint(10f, bold = true),
+                    )
+                }
+                else -> {
+                    c.text(
+                        "No crossing kept the same serving cell on both sides, so no loss figure " +
+                            "could be attributed to the structure alone.",
+                        c.body,
+                    )
+                }
+            }
+            c.gap(); c.rule()
+        }
+
         // ---- Public Safety Coverage -----------------------------------------
         //
         // Track A (manual LMR entry) and Track B (FirstNet Band 14/n14, auto-measured) never
@@ -1377,8 +1445,15 @@ object PdfReportGenerator {
                 canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, outlierRing)
             } else {
                 dot.color = pointColor(p)
-                canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, dot)
-                canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, ring)
+                val x = projected[i][0]; val y = projected[i][1]
+                // Square rather than a second colour: shape carries the Indoor/Outdoor mark, so
+                // the existing RSRP-bucket colour legend keeps its meaning unchanged.
+                if (SessionStats.areaOf(p) == SessionStats.Area.INDOOR) {
+                    canvas.drawRect(x - 2.6f, y - 2.6f, x + 2.6f, y + 2.6f, dot)
+                } else {
+                    canvas.drawCircle(x, y, 2.6f, dot)
+                }
+                canvas.drawCircle(x, y, 2.6f, ring)
             }
         }
 
@@ -1536,6 +1611,13 @@ object PdfReportGenerator {
                                 "multipath near a structure). Still counted in the statistics above.",
                         )
                     }
+                    if (gps.any { SessionStats.areaOf(it) == SessionStats.Area.INDOOR }) {
+                        c.para(
+                            "Square markers are Indoor-tagged samples (set live via the " +
+                                "Indoor/Outdoor buttons while walking); circles are Outdoor or " +
+                                "unlabelled.",
+                        )
+                    }
                     return
                 }
                 // Zero tiles came back -- offline, or an external outage. Fall through to the
@@ -1589,7 +1671,12 @@ object PdfReportGenerator {
                 canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, outlierRing)
             } else {
                 dot.color = pointColor(p)
-                canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, dot)
+                val x = projected[i][0]; val y = projected[i][1]
+                if (SessionStats.areaOf(p) == SessionStats.Area.INDOOR) {
+                    canvas.drawRect(x - 2.6f, y - 2.6f, x + 2.6f, y + 2.6f, dot)
+                } else {
+                    canvas.drawCircle(x, y, 2.6f, dot)
+                }
             }
         }
 
@@ -1623,6 +1710,12 @@ object PdfReportGenerator {
                 "$excluded sample(s) excluded from the trail as suspect GPS positions (implied " +
                     "speed too high from the last trusted fix -- likely multipath near a " +
                     "structure). Still counted in the statistics above.",
+            )
+        }
+        if (gps.any { SessionStats.areaOf(it) == SessionStats.Area.INDOOR }) {
+            c.para(
+                "Square markers are Indoor-tagged samples (set live via the Indoor/Outdoor " +
+                    "buttons while walking); circles are Outdoor or unlabelled.",
             )
         }
     }
@@ -1827,6 +1920,19 @@ object PdfReportGenerator {
                             satNote
                 )
             }
+        }
+        val buildingCrossings = SessionStats.buildingCrossings(points, report.kpi)
+        if (buildingCrossings.isNotEmpty()) {
+            add(
+                "Building entry / wall loss" to
+                    "Each figure compares one outdoor sample against one indoor sample at a single " +
+                        "doorway crossing, not a controlled measurement -- ordinary fading affects " +
+                        "each side independently. Only crossings where the serving cell was the " +
+                        "same immediately before and after are scored, so a difference is never " +
+                        "conflated with a handover to a different site. Treat this as a field " +
+                        "indicator of which structures attenuate meaningfully, not a laboratory " +
+                        "loss figure."
+            )
         }
         val staleNeighbours = points.any { it.coChannel != null }
         if (staleNeighbours) {

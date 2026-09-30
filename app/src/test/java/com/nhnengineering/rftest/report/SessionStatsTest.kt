@@ -545,4 +545,92 @@ class SessionStatsTest {
         assertEquals(99, sinr.longestRunSamples)
         assertTrue("RSRP must change far more often", sinr.changes * 2 <= rsrp.changes)
     }
+
+    // ---- Building entry / wall loss ----------------------------------------
+
+    private fun servingCell(pci: Int?, channel: Int? = null, rsrp: Int? = null, band: String? = null) =
+        listOf(ObservedCell(pci = pci, channel = channel, rsrpDbm = rsrp, band = band, serving = true, ageMs = 0))
+
+    @Test
+    fun `areaOf matches the two literal button strings, case and whitespace insensitively`() {
+        assertEquals(SessionStats.Area.INDOOR, SessionStats.areaOf(pt(0, waypoint = "Indoor")))
+        assertEquals(SessionStats.Area.INDOOR, SessionStats.areaOf(pt(0, waypoint = " indoor ")))
+        assertEquals(SessionStats.Area.OUTDOOR, SessionStats.areaOf(pt(0, waypoint = "OUTDOOR")))
+    }
+
+    @Test
+    fun `areaOf leaves free-text area names and no label unclassified`() {
+        assertNull(SessionStats.areaOf(pt(0, waypoint = "Driveway")))
+        assertNull(SessionStats.areaOf(pt(0, waypoint = null)))
+    }
+
+    @Test
+    fun `a same-cell outdoor-to-indoor pair computes the expected entering loss`() {
+        val pts = listOf(
+            pt(0, rsrp = -77, waypoint = "Outdoor", cellBand = "n66", cells = servingCell(511, 100, -77, "n66")),
+            pt(1, rsrp = -94, waypoint = "Indoor", cellBand = "n66", cells = servingCell(511, 100, -94, "n66")),
+        )
+        val crossings = SessionStats.buildingCrossings(pts, SessionStats.Kpi.CELL_RSRP)
+        assertEquals(1, crossings.size)
+        val c = crossings.first()
+        assertEquals(SessionStats.CrossingDirection.ENTERING, c.direction)
+        assertTrue(c.sameCell)
+        assertEquals(17, c.lossDb)
+    }
+
+    @Test
+    fun `the reverse direction is reported as exiting with the same sign convention`() {
+        val pts = listOf(
+            pt(0, rsrp = -94, waypoint = "Indoor", cells = servingCell(511, 100, -94)),
+            pt(1, rsrp = -77, waypoint = "Outdoor", cells = servingCell(511, 100, -77)),
+        )
+        val c = SessionStats.buildingCrossings(pts, SessionStats.Kpi.CELL_RSRP).single()
+        assertEquals(SessionStats.CrossingDirection.EXITING, c.direction)
+        assertEquals(17, c.lossDb)
+    }
+
+    @Test
+    fun `a crossing where the serving cell changed is unmeasurable, not guessed at`() {
+        val pts = listOf(
+            pt(0, rsrp = -77, waypoint = "Outdoor", cells = servingCell(511, 100, -77)),
+            pt(1, rsrp = -94, waypoint = "Indoor", cells = servingCell(729, 200, -94)),
+        )
+        val c = SessionStats.buildingCrossings(pts, SessionStats.Kpi.CELL_RSRP).single()
+        assertEquals(false, c.sameCell)
+        assertNull(c.lossDb)
+    }
+
+    @Test
+    fun `an unlabelled gap between outdoor and indoor does not prevent detection`() {
+        val pts = listOf(
+            pt(0, rsrp = -77, waypoint = "Outdoor", cells = servingCell(511, 100, -77)),
+            pt(1, rsrp = -85), // operator tapped the button a moment late
+            pt(2, rsrp = -94, waypoint = "Indoor", cells = servingCell(511, 100, -94)),
+        )
+        val crossings = SessionStats.buildingCrossings(pts, SessionStats.Kpi.CELL_RSRP)
+        assertEquals(1, crossings.size)
+        assertEquals(17, crossings.first().lossDb)
+    }
+
+    @Test
+    fun `a Wi-Fi session yields no crossings regardless of labels`() {
+        val pts = listOf(
+            pt(0, rssi = -50, waypoint = "Outdoor"),
+            pt(1, rssi = -70, waypoint = "Indoor"),
+        )
+        assertEquals(emptyList<SessionStats.Crossing>(), SessionStats.buildingCrossings(pts, SessionStats.Kpi.WIFI_RSSI))
+    }
+
+    @Test
+    fun `medianLossDb is null with no measurable crossings and interpolates with several`() {
+        assertNull(SessionStats.medianLossDb(emptyList()))
+        val one = SessionStats.buildingCrossings(
+            listOf(
+                pt(0, rsrp = -77, waypoint = "Outdoor", cells = servingCell(511, 100, -77)),
+                pt(1, rsrp = -94, waypoint = "Indoor", cells = servingCell(511, 100, -94)),
+            ),
+            SessionStats.Kpi.CELL_RSRP,
+        )
+        assertEquals(17, SessionStats.medianLossDb(one))
+    }
 }
