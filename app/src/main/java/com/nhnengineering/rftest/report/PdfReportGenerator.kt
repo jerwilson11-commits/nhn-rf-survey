@@ -7,11 +7,14 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.os.Build
 import com.nhnengineering.rftest.cellular.BandLock
 import com.nhnengineering.rftest.cellular.TechnologyLock
+import com.nhnengineering.rftest.live.TileProxy
+import com.nhnengineering.rftest.map.Mercator
 import com.nhnengineering.rftest.session.FloorplanStore
 import com.nhnengineering.rftest.session.SessionSummary
 import com.nhnengineering.rftest.session.TrackPoint
@@ -1254,6 +1257,130 @@ object PdfReportGenerator {
         canvas.drawText("N", cx - n.measureText("N") / 2f, top + 23f, n)
     }
 
+    /** A tight walk should not zoom into GPS scatter -- mirrors [Mercator.Bounds.expandedToAtLeast]'s
+     *  own stated rationale, applied to the report's basemap fallback. */
+    private const val MIN_PLOT_SPAN_M = 50.0
+
+    /**
+     * Draws satellite/street tiles covering [bounds] at [zoom] into the rect at ([left],[top]),
+     * [w] by [h]. Uses [TileProxy] directly rather than `TileCache`: this runs once, synchronously,
+     * already off the main thread ([generate] is `withContext(Dispatchers.IO)`), so a blocking
+     * fetch is exactly right and `TileCache`'s non-blocking/redraw-callback machinery -- built for
+     * a Compose canvas that redraws every frame -- would be pure overhead here.
+     *
+     * Returns the number of tiles actually drawn, so the caller can detect "nothing came back"
+     * (offline, an external outage) and fall through to the existing blank-background plot rather
+     * than publish a half-drawn page.
+     */
+    private fun drawMercatorBasemap(
+        canvas: Canvas,
+        proxy: TileProxy,
+        bounds: Mercator.Bounds,
+        zoom: Int,
+        left: Float,
+        top: Float,
+        w: Float,
+        h: Float,
+    ): Int {
+        val tilePx = Mercator.TILE_SIZE
+        val centerLon = (bounds.minLon + bounds.maxLon) / 2
+        val centerWx = Mercator.lonToTileX(centerLon, zoom) * tilePx
+        val centerWy = Mercator.latToTileY(bounds.midLat, zoom) * tilePx
+        val halfW = w / 2f
+        val halfH = h / 2f
+
+        val x0 = floor((centerWx - halfW) / tilePx).toInt()
+        val x1 = floor((centerWx + halfW) / tilePx).toInt()
+        val y0 = floor((centerWy - halfH) / tilePx).toInt()
+        val y1 = floor((centerWy + halfH) / tilePx).toInt()
+        val maxIndex = 1 shl zoom
+
+        var drawn = 0
+        for (tx in x0..x1) {
+            for (ty in y0..y1) {
+                if (tx < 0 || ty < 0 || tx >= maxIndex || ty >= maxIndex) continue
+                val bytes = proxy.tile(zoom, tx, ty) ?: continue
+                val bmp = runCatching {
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                }.getOrNull() ?: continue
+                val tileLeft = (tx * tilePx - centerWx).toFloat() + left + halfW
+                val tileTop = (ty * tilePx - centerWy).toFloat() + top + halfH
+                canvas.drawBitmap(
+                    bmp, null,
+                    RectF(tileLeft, tileTop, tileLeft + tilePx, tileTop + tilePx),
+                    null,
+                )
+                drawn++
+            }
+        }
+        return drawn
+    }
+
+    /**
+     * The trail, sample dots, S/E markers, north arrow and scale bar over a Mercator-projected
+     * basemap -- the same shapes [drawPlot]'s equirectangular GPS fallback below already draws,
+     * projected the same way the tiles underneath them are (see [Mercator]'s own class doc for why
+     * a different projection for the trail than the tiles is worse than no imagery at all).
+     */
+    private fun drawMercatorTrackOverlay(
+        c: Ctx,
+        gps: List<TrackPoint>,
+        bounds: Mercator.Bounds,
+        zoom: Int,
+        left: Float,
+        top: Float,
+        w: Float,
+        h: Float,
+    ) {
+        val canvas = c.canvas ?: return
+        val tilePx = Mercator.TILE_SIZE
+        val centerLon = (bounds.minLon + bounds.maxLon) / 2
+        val centerWx = Mercator.lonToTileX(centerLon, zoom) * tilePx
+        val centerWy = Mercator.latToTileY(bounds.midLat, zoom) * tilePx
+        val halfW = w / 2f
+        val halfH = h / 2f
+
+        fun project(lat: Double, lon: Double): FloatArray = floatArrayOf(
+            (Mercator.lonToTileX(lon, zoom) * tilePx - centerWx).toFloat() + left + halfW,
+            (Mercator.latToTileY(lat, zoom) * tilePx - centerWy).toFloat() + top + halfH,
+        )
+
+        val projected = gps.map { project(it.latitudeDeg!!, it.longitudeDeg!!) }
+
+        // Bright and thick, same reasoning as the live map: a thin grey line (right for blank
+        // paper) disappears over satellite imagery.
+        val trail = Paint().apply {
+            color = Color.WHITE; alpha = 190; strokeWidth = 2.2f; isAntiAlias = true
+        }
+        for (i in 0 until projected.size - 1) {
+            canvas.drawLine(projected[i][0], projected[i][1], projected[i + 1][0], projected[i + 1][1], trail)
+        }
+        val dot = Paint().apply { isAntiAlias = true }
+        val ring = Paint().apply {
+            style = Paint.Style.STROKE; strokeWidth = 1.2f
+            color = Color.BLACK; alpha = 140; isAntiAlias = true
+        }
+        gps.forEachIndexed { i, p ->
+            dot.color = pointColor(p)
+            canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, dot)
+            canvas.drawCircle(projected[i][0], projected[i][1], 2.6f, ring)
+        }
+
+        val marker = Paint().apply {
+            style = Paint.Style.STROKE; strokeWidth = 1.3f
+            color = Color.BLACK; isAntiAlias = true
+        }
+        val tag = c.paint(8f, bold = true)
+        listOf(projected.first() to "S", projected.last() to "E").forEach { (pt, label) ->
+            canvas.drawCircle(pt[0], pt[1], 5.5f, marker)
+            canvas.drawText(label, pt[0] + 7f, pt[1] + 3f, tag)
+        }
+
+        drawNorthArrow(c, left + w - 18f, top + 8f)
+        val pxPerMetre = 1.0 / Mercator.metresPerPixel(bounds.midLat, zoom)
+        drawScaleBar(c, left + 16f, top + h - 10f, pxPerMetre, w / 4f)
+    }
+
     /**
      * Plots the survey — the floorplan where one was used, otherwise the GPS track.
      *
@@ -1351,6 +1478,35 @@ object PdfReportGenerator {
             }
             c.text("Floorplan image \"$planId\" was not available on this device.", c.small)
             c.gap()
+        }
+
+        if (planId == null && gps.size >= 2) {
+            val bounds = Mercator.Bounds.of(gps.map { it.latitudeDeg!! to it.longitudeDeg!! })
+                ?.expandedToAtLeast(MIN_PLOT_SPAN_M)
+            if (bounds != null) {
+                val basemap = TileProxy.Basemap.SATELLITE
+                val zoom = Mercator.fitZoom(bounds, availW.toInt(), availH.toInt(), basemap.maxZoom)
+                val proxy = TileProxy(File(context.cacheDir, "tiles"), basemap)
+                val mercatorTop = c.y
+                val tilesDrawn = drawMercatorBasemap(
+                    canvas, proxy, bounds, zoom, MARGIN, mercatorTop, availW, availH,
+                )
+                if (tilesDrawn > 0) {
+                    canvas.drawRect(MARGIN, mercatorTop, MARGIN + availW, mercatorTop + availH, frame)
+                    drawMercatorTrackOverlay(c, gps, bounds, zoom, MARGIN, mercatorTop, availW, availH)
+                    c.y = mercatorTop + availH + LINE
+                    c.y += drawLegend(c, kpi, MARGIN, c.y)
+                    c.gap(6f)
+                    c.text(basemap.attribution, c.small)
+                    c.para(
+                        "${gps.size} GPS-located samples over satellite imagery, north up. S marks " +
+                            "the start of the walk and E the end.",
+                    )
+                    return
+                }
+                // Zero tiles came back -- offline, or an external outage. Fall through to the
+                // existing blank-background plot below rather than publish a half-drawn page.
+            }
         }
 
         if (gps.size < 2) {

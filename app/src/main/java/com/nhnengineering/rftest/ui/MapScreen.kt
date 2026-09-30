@@ -35,16 +35,23 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.size
+import com.nhnengineering.rftest.live.BuildingFootprintProxy
+import com.nhnengineering.rftest.live.quantize
+import com.nhnengineering.rftest.map.BuildingFootprintCache
 import com.nhnengineering.rftest.map.Mercator
 import com.nhnengineering.rftest.map.TileCache
 import com.nhnengineering.rftest.model.RsrpBucket
 import com.nhnengineering.rftest.model.RssiBucket
 import com.nhnengineering.rftest.service.RecordingState
 import java.util.Locale
+import kotlin.math.atan2
 import kotlin.math.floor
 import kotlin.math.log10
 import kotlin.math.pow
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
@@ -130,6 +137,10 @@ fun MapScreen(modifier: Modifier = Modifier) {
     }
     DisposableEffect(Unit) { onDispose { } }
 
+    var showBuildings by remember { mutableStateOf(true) }
+    var buildingGeneration by remember { mutableIntStateOf(0) }
+    val buildings = remember { BuildingFootprintCache(context, scope) { buildingGeneration++ } }
+
     Column(
         modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -172,6 +183,14 @@ fun MapScreen(modifier: Modifier = Modifier) {
                                 label = { Text(option.label, maxLines = 1) },
                             )
                         }
+                        // A separate source from the basemap tiles, fetched over the same radio
+                        // the survey is measuring -- same rationale as the imagery toggle, its own
+                        // switch rather than bundled silently into "on."
+                        FilterChip(
+                            selected = showBuildings,
+                            onClick = { showBuildings = !showBuildings },
+                            label = { Text("Buildings", maxLines = 1) },
+                        )
                     }
                 }
 
@@ -188,8 +207,9 @@ fun MapScreen(modifier: Modifier = Modifier) {
                         style = MaterialTheme.typography.bodySmall,
                     )
                 } else {
-                    // Referenced so Compose redraws when a tile lands.
+                    // Referenced so Compose redraws when a tile or a building footprint lands.
                     @Suppress("UNUSED_EXPRESSION") tileGeneration
+                    @Suppress("UNUSED_EXPRESSION") buildingGeneration
 
                     MapKpiStrip(shownCell, shownFix)
 
@@ -202,9 +222,13 @@ fun MapScreen(modifier: Modifier = Modifier) {
                                     val cLat = centerLat ?: return@detectTransformGestures
                                     val cLon = centerLon ?: return@detectTransformGestures
 
+                                    // Satellite and street have very different real max zoom --
+                                    // see Basemap.maxZoom's own doc for where the numbers come
+                                    // from -- so the cap follows whichever layer is selected.
+                                    val maxZoom = basemap.maxZoom
                                     val newZoom = (zoom * zoomChange)
-                                        .coerceIn(MIN_ZOOM.toFloat(), MAX_ZOOM.toFloat())
-                                    val zi = floor(newZoom).toInt().coerceIn(MIN_ZOOM, MAX_ZOOM)
+                                        .coerceIn(MIN_ZOOM.toFloat(), maxZoom.toFloat())
+                                    val zi = floor(newZoom).toInt().coerceIn(MIN_ZOOM, maxZoom)
                                     val sc = 2.0.pow(newZoom.toDouble() - zi)
 
                                     // Drag moves the map with the finger, so the centre moves the
@@ -230,11 +254,16 @@ fun MapScreen(modifier: Modifier = Modifier) {
                                 track = track,
                                 tiles = tiles,
                                 showImagery = showImagery,
+                                buildings = buildings,
+                                showBuildings = showBuildings,
                                 currentLat = shownFix?.latitudeDeg,
                                 currentLon = shownFix?.longitudeDeg,
+                                bearingDeg = shownFix?.bearingDeg,
+                                rsrpDbm = shownCell?.servingRsrpDbm,
                                 centerLat = centerLat ?: shownFix?.latitudeDeg ?: 0.0,
                                 centerLon = centerLon ?: shownFix?.longitudeDeg ?: 0.0,
                                 zoom = zoom,
+                                maxZoom = basemap.maxZoom,
                             )
                         }
                     }
@@ -274,6 +303,7 @@ fun MapScreen(modifier: Modifier = Modifier) {
                         },
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    SignalLegend()
                 }
             }
         }
@@ -299,6 +329,27 @@ fun MapScreen(modifier: Modifier = Modifier) {
                     )
                     TextButton(onClick = { tiles.clear(); tileGeneration++ }) { Text("Clear cache") }
                 }
+                if (showBuildings) {
+                    Text(
+                        BuildingFootprintProxy.ATTRIBUTION + ". Building outlines are fetched " +
+                            "live from OpenStreetMap over this phone's own connection, separately " +
+                            "from the imagery above.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        YieldingText(
+                            "Buildings cached: " + formatBytes(buildings.diskBytes()),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        TextButton(onClick = { buildings.clear(); buildingGeneration++ }) {
+                            Text("Clear cache")
+                        }
+                    }
+                }
             }
         }
     }
@@ -314,11 +365,16 @@ private fun DrawScope.drawWalkMap(
     track: List<RecordingState.LiveFix>,
     tiles: TileCache,
     showImagery: Boolean,
+    buildings: BuildingFootprintCache,
+    showBuildings: Boolean,
     currentLat: Double?,
     currentLon: Double?,
+    bearingDeg: Float?,
+    rsrpDbm: Int?,
     centerLat: Double,
     centerLon: Double,
     zoom: Float,
+    maxZoom: Int,
 ) {
     // Centre-and-zoom rather than fit-to-bounds.
     //
@@ -327,7 +383,7 @@ private fun DrawScope.drawWalkMap(
     // is zoom 19, and the street base map has nothing to draw at 69 m per tile -- a house number
     // and fill colour. The satellite layer looked fine there, which is why the problem only
     // appeared when a second layer existed.
-    val zi = floor(zoom).toInt().coerceIn(1, MAX_ZOOM)
+    val zi = floor(zoom).toInt().coerceIn(1, maxZoom)
     // Fractional zoom is carried as a scale on integer tiles, which is how every slippy map does
     // it: tiles exist only at whole zooms, and pinching between them must not snap.
     val scale = 2.0.pow(zoom.toDouble() - zi).toFloat()
@@ -343,15 +399,17 @@ private fun DrawScope.drawWalkMap(
         ((Mercator.latToTileY(lat, zi) * tilePx - centerWy) * scale).toFloat() + halfH,
     )
 
+    // Shared by the imagery loop and the building-outline fetch below: both need to know what
+    // area of the world is actually on screen right now.
+    val x0 = floor((centerWx - halfW / scale) / tilePx).toInt()
+    val x1 = floor((centerWx + halfW / scale) / tilePx).toInt()
+    val y0 = floor((centerWy - halfH / scale) / tilePx).toInt()
+    val y1 = floor((centerWy + halfH / scale) / tilePx).toInt()
+
     if (showImagery) {
         // Only the tiles the viewport actually covers, which is what makes panning affordable:
         // the old code fetched everything inside the track's bounds whatever was on screen.
         val tileSpan = tilePx * scale
-        val x0 = floor((centerWx - halfW / scale) / tilePx).toInt()
-        val x1 = floor((centerWx + halfW / scale) / tilePx).toInt()
-        val y0 = floor((centerWy - halfH / scale) / tilePx).toInt()
-        val y1 = floor((centerWy + halfH / scale) / tilePx).toInt()
-
         if ((x1 - x0 + 1).toLong() * (y1 - y0 + 1).toLong() <= MAX_TILES) {
             val maxIndex = 1 shl zi
             for (tx in x0..x1) {
@@ -368,6 +426,26 @@ private fun DrawScope.drawWalkMap(
                     )
                 }
             }
+        }
+    }
+
+    if (showBuildings) {
+        // The viewport's own lat/lon bounds, from the same tile range the imagery loop just used --
+        // y increases southward, so y0 is the north edge and y1+1 is the south edge of its tile.
+        val north = Mercator.tileYToLat(y0.toDouble(), zi)
+        val south = Mercator.tileYToLat((y1 + 1).toDouble(), zi)
+        val west = Mercator.tileXToLon(x0.toDouble(), zi)
+        val east = Mercator.tileXToLon((x1 + 1).toDouble(), zi)
+        val cell = quantize((north + south) / 2, (west + east) / 2)
+        val polygons = buildings.get(cell)
+        polygons?.forEach { ring ->
+            val path = androidx.compose.ui.graphics.Path()
+            ring.forEachIndexed { i, (lat, lon) ->
+                val p = project(lat, lon)
+                if (i == 0) path.moveTo(p.x, p.y) else path.lineTo(p.x, p.y)
+            }
+            path.close()
+            drawPath(path, Color.White.copy(alpha = 0.7f), style = Stroke(1.5f))
         }
     }
 
@@ -397,9 +475,42 @@ private fun DrawScope.drawWalkMap(
     } else {
         points.lastOrNull()
     }
-    here?.let {
-        drawCircle(Color.White, radius = 15f, center = it, style = Stroke(3.5f))
-        drawCircle(Color.Black.copy(alpha = 0.5f), radius = 18f, center = it, style = Stroke(1.5f))
+    here?.let { center ->
+        // GPS bearing is the real heading but is frequently absent -- hasBearing() is typically
+        // only true at non-trivial speed, so standing still or an indoor/fused fix commonly has
+        // none. Falling back to the direction of the last couple of trail points rather than
+        // leaving the marker meaningless in the most common case a walking survey actually hits.
+        val heading = bearingDeg ?: track.takeLast(2).let {
+            if (it.size == 2) headingBetween(it[0].lat, it[0].lon, it[1].lat, it[1].lon) else null
+        }
+        val fillColor = Color(RsrpBucket.of(rsrpDbm)?.argb ?: 0xFF2196F3.toInt())
+        rotate(degrees = heading ?: 0f, pivot = center) {
+            val cone = androidx.compose.ui.graphics.Path().apply {
+                moveTo(center.x, center.y - 16f)
+                lineTo(center.x - 11f, center.y + 12f)
+                lineTo(center.x, center.y + 5f)
+                lineTo(center.x + 11f, center.y + 12f)
+                close()
+            }
+            drawPath(cone, fillColor)
+            drawPath(cone, Color.Black.copy(alpha = 0.6f), style = Stroke(1.5f))
+        }
+        drawCircle(Color.White, radius = 15f, center = center, style = Stroke(3.5f))
+        drawCircle(Color.Black.copy(alpha = 0.5f), radius = 18f, center = center, style = Stroke(1.5f))
+        rsrpDbm?.let {
+            drawContext.canvas.nativeCanvas.drawText(
+                "$it dBm",
+                center.x + 22f,
+                center.y + 6f,
+                android.graphics.Paint().apply {
+                    color = android.graphics.Color.WHITE
+                    textSize = 28f
+                    isFakeBoldText = true
+                    isAntiAlias = true
+                    setShadowLayer(3f, 0f, 0f, android.graphics.Color.BLACK)
+                },
+            )
+        }
     }
 
     drawScaleBar(centerLat, zi, scale, size)
@@ -480,8 +591,26 @@ private fun formatBytes(bytes: Long): String = when {
     else -> "$bytes B"
 }
 
-/** Standing still is a few metres of GPS scatter; fitting to that would zoom into jitter. */
-private const val MAX_ZOOM = 19
+/**
+ * Initial great-circle bearing from one point to another, in degrees clockwise from north.
+ *
+ * The fallback heading for the position marker when [com.nhnengineering.rftest.model.GeoPoint.bearingDeg]
+ * is null -- which `hasBearing()` commonly is at low speed or on an indoor/fused fix. Standard
+ * forward-azimuth formula, not device- or app-specific.
+ */
+internal fun headingBetween(fromLat: Double, fromLon: Double, toLat: Double, toLon: Double): Float {
+    val phi1 = Math.toRadians(fromLat)
+    val phi2 = Math.toRadians(toLat)
+    val dLambda = Math.toRadians(toLon - fromLon)
+    val y = kotlin.math.sin(dLambda) * kotlin.math.cos(phi2)
+    val x = kotlin.math.cos(phi1) * kotlin.math.sin(phi2) -
+        kotlin.math.sin(phi1) * kotlin.math.cos(phi2) * kotlin.math.cos(dLambda)
+    val theta = atan2(y, x)
+    return ((Math.toDegrees(theta) + 360.0) % 360.0).toFloat()
+}
+
+/** Standing still is a few metres of GPS scatter; fitting to that would zoom into jitter.
+ *  The upper bound is per-basemap now -- see [com.nhnengineering.rftest.live.TileProxy.Basemap.maxZoom]. */
 private const val MIN_ZOOM = 3
 
 /**
@@ -557,6 +686,35 @@ private fun MapKpiStrip(
             // Accuracy rather than coordinates: a position is only as good as its uncertainty, and
             // six decimal places of latitude tell the operator nothing they can act on.
             cellText("GPS ±m", fix?.accuracyM?.let { "%.0f".format(it) } ?: "—")
+        }
+    }
+}
+
+/**
+ * What the trail's dots and the position marker's fill colour mean.
+ *
+ * The same [RsrpBucket] scale colours the trail (`drawWalkMap`'s per-point dots) and the live
+ * marker, but nothing on screen said what a given colour meant until now — an operator new to the
+ * app, or a client looking at a screenshot later, had no way to read it without already knowing
+ * the thresholds by heart.
+ */
+@Composable
+private fun SignalLegend() {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        for (bucket in RsrpBucket.entries) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.foundation.Canvas(Modifier.size(9.dp)) {
+                    drawCircle(Color(bucket.argb))
+                }
+                Text(
+                    "  " + bucket.label,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
         }
     }
 }

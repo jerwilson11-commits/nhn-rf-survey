@@ -111,18 +111,35 @@ class TileProxy(
         val attribution: String,
         /** Part of the cache key. Without it, switching serves the other layer's tiles. */
         val cacheTag: String,
+        /**
+         * Deepest zoom worth requesting, per Esri's own service metadata
+         * (`.../MapServer?f=json`, `tileInfo.lods`) rather than one shared guess.
+         *
+         * World Imagery: true native resolution only reaches this deep in "select metropolitan
+         * areas" (0.3 m at z19, down to 0.03 m at z23 in the best-covered communities) -- most of
+         * the world has real imagery only to z19 (0.5-1 m). Past a location's own resolution, Esri
+         * serves an upscaled tile rather than a blank one, so this degrades to blurry, not broken.
+         *
+         * World Street Map: Esri's own description caps general coverage around 1:4k (z17), with
+         * 1:1k-1:2k (z18-19) only in "select urban areas" and nothing documented past that --
+         * matches this file's own earlier hands-on finding that the layer has nothing left to draw
+         * past 18.
+         */
+        val maxZoom: Int,
     ) {
         SATELLITE(
             "Satellite",
             ESRI_WORLD_IMAGERY,
             "Imagery © Esri, Maxar, Earthstar Geographics",
             "img",
+            maxZoom = 21,
         ),
         STREET(
             "Street",
             "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
             "© Esri, HERE, Garmin, OpenStreetMap contributors",
             "str",
+            maxZoom = 19,
         ),
     }
 
