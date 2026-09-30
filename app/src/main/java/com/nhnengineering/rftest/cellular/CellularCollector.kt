@@ -302,6 +302,17 @@ class CellularCollector(context: Context) {
         modemNr.stop()
     }
 
+    /**
+     * Starts or stops a NAS-5GS/RRC OTA signaling capture on the same modem subscription
+     * [modemNr] already holds -- see [ModemNrStream.setSignalingCapture] for why this is not a
+     * second, competing subscription. A no-op if [start] has not been called (or has since
+     * [stop]ped): there is no subscription to add the extra log codes to yet.
+     */
+    fun setSignalingCapture(capture: Boolean) = modemNr.setSignalingCapture(capture)
+
+    /** Every signaling event captured since capture was last turned on, in arrival order. */
+    fun signalingEvents(): List<ModemNrStream.SignalingEvent> = modemNr.signalingEvents()
+
     // -----------------------------------------------------------------------
     // Sampling
     // -----------------------------------------------------------------------

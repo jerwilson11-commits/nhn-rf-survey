@@ -51,16 +51,18 @@ fun DiagnosticsCard(
     }
 }
 
-private fun exportFile(context: Context): File {
+private fun exportFile(context: Context, filePrefix: String): File {
     val dir = File(context.getExternalFilesDir(null), "exports").apply { mkdirs() }
-    return File(dir, "diagnostics_${System.currentTimeMillis()}.txt")
+    return File(dir, "${filePrefix}_${System.currentTimeMillis()}.txt")
 }
 
 /** Writes [text] to a fresh file under the app's own exports directory and hands it to the OS
  *  share sheet. Mirrors `SessionsScreen.kt`'s identical `share()` -- both need the same
- *  `FileProvider` authority and grant, and duplicating it here keeps this card self-contained. */
-fun shareDiagnosticsText(context: Context, text: String): File {
-    val file = exportFile(context)
+ *  `FileProvider` authority and grant, and duplicating it here keeps this card self-contained.
+ *  [filePrefix] names the export (e.g. "diagnostics", "signaling_capture") -- this helper is not
+ *  specific to the diagnostics bundle, any plain-text export in the app can share it. */
+fun shareDiagnosticsText(context: Context, text: String, filePrefix: String = "diagnostics"): File {
+    val file = exportFile(context, filePrefix)
     file.writeText(text)
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent = Intent(Intent.ACTION_SEND).apply {

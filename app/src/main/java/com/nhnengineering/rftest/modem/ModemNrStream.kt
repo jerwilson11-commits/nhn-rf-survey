@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.util.Log
 import java.io.File
+import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -71,6 +72,14 @@ class ModemNrStream(context: Context) {
         /** NR RRC Serving Cell Info -- see [NrRrcServingCellParser]. */
         private const val LOG_CODE_NR_RRC_SCELL = "b823"
 
+        /** NAS-5GS OTA, incoming/outgoing -- see [Nas5gsOtaParser]. Only requested while a
+         *  signaling capture is running (see [setSignalingCapture]), not on every window. */
+        private const val LOG_CODE_NAS5GS_IN = "b80a"
+        private const val LOG_CODE_NAS5GS_OUT = "b80b"
+
+        /** NR RRC OTA -- see [RrcOtaParser]. Same capture-only gating as the NAS-5GS codes. */
+        private const val LOG_CODE_NR_RRC_OTA = "b821"
+
         /**
          * Length of one subscription window, in seconds.
          *
@@ -81,10 +90,27 @@ class ModemNrStream(context: Context) {
 
         /** A reading older than this is not shown at all; the modem logs far faster than this. */
         const val STALE_AFTER_MS = 10_000L
+
+        /** Oldest events are dropped first once a capture exceeds this -- bounded, not unlimited. */
+        private const val MAX_SIGNALING_EVENTS = 200
     }
 
     data class Snapshot(val result: NrMl1Parser.Result, val ageMs: Long)
     data class ScellSnapshot(val result: NrRrcServingCellParser.Result, val ageMs: Long)
+
+    /**
+     * One decoded NAS-5GS or RRC OTA packet from a signaling capture, in arrival order.
+     *
+     * Unlike [Snapshot]/[ScellSnapshot], signaling is inherently a *sequence* -- the point of a
+     * capture is the order of messages (Service Accept, then a Deregistration Request, ...), not
+     * just the latest one -- so this accumulates in [signalingEvents] rather than overwriting a
+     * single field the way ML1/RRC-scell readings do.
+     */
+    data class SignalingEvent(
+        val atElapsedMs: Long,
+        val nas: Nas5gsOtaParser.Result? = null,
+        val rrc: RrcOtaParser.Result? = null,
+    )
 
     private val appContext = context.applicationContext
     private val running = AtomicBoolean(false)
@@ -97,8 +123,26 @@ class ModemNrStream(context: Context) {
     @Volatile private var latestScellAtElapsed = 0L
     @Volatile private var lastError: String? = null
 
+    /** Whether the next (or current) window should also subscribe to the signaling log codes.
+     *  Toggling takes effect within one [WINDOW_SECONDS] relaunch, not instantly. */
+    @Volatile private var captureSignaling: Boolean = false
+    private val signalingEvents = Collections.synchronizedList(mutableListOf<SignalingEvent>())
+
     /** Why NR neighbours are unavailable, or null once packets are arriving. */
     val unavailableReason: String? get() = lastError
+
+    /**
+     * Starts or stops including NAS-5GS/RRC OTA in the subscription. Starting clears any events
+     * from a previous capture; stopping leaves [signalingEvents] alone, since inspecting what was
+     * captured is the entire point of having stopped.
+     */
+    fun setSignalingCapture(capture: Boolean) {
+        if (capture) signalingEvents.clear()
+        captureSignaling = capture
+    }
+
+    /** Every signaling event captured since the last [setSignalingCapture]`(true)`, in order. */
+    fun signalingEvents(): List<SignalingEvent> = signalingEvents.toList()
 
     /** The most recent measurement, or null if none has arrived or the last one has gone stale. */
     fun snapshot(): Snapshot? {
@@ -163,9 +207,14 @@ class ModemNrStream(context: Context) {
         // the copy, not to skip the run: a busy file means a good copy is already in place. A
         // wiped tmp still heals, because then the copy simply succeeds.
         val staged = stagedPath(helper)
+        val logCodes = if (captureSignaling) {
+            "$LOG_CODE_NR_ML1 $LOG_CODE_NR_RRC_SCELL $LOG_CODE_NAS5GS_IN $LOG_CODE_NAS5GS_OUT $LOG_CODE_NR_RRC_OTA"
+        } else {
+            "$LOG_CODE_NR_ML1 $LOG_CODE_NR_RRC_SCELL"
+        }
         val command = "cp -f ${helper.absolutePath} $staged 2>/dev/null" +
             " ; chmod 755 $staged 2>/dev/null" +
-            " ; $staged $WINDOW_SECONDS $LOG_CODE_NR_ML1 $LOG_CODE_NR_RRC_SCELL"
+            " ; $staged $WINDOW_SECONDS $logCodes"
         Log.i(TAG, "window starting: $command")
         val p = ProcessBuilder("su", "-c", command)
             .redirectErrorStream(true).start()
@@ -215,9 +264,22 @@ class ModemNrStream(context: Context) {
                                         Log.w(TAG, "discarded RRC scell packet: ${parsed.notes.firstOrNull()}")
                                     }
                                 }
+                                Nas5gsOtaParser.LOG_CODE_INCOMING, Nas5gsOtaParser.LOG_CODE_OUTGOING -> {
+                                    Nas5gsOtaParser.parseLogLine(line)?.takeIf { it.looksValid }?.let {
+                                        addSignalingEvent(SignalingEvent(SystemClock.elapsedRealtime(), nas = it))
+                                    }
+                                }
+                                RrcOtaParser.LOG_CODE -> {
+                                    RrcOtaParser.parseLogLine(line)?.takeIf { it.looksValid }?.let {
+                                        addSignalingEvent(SignalingEvent(SystemClock.elapsedRealtime(), rrc = it))
+                                    }
+                                }
                             }
                         }
-                        line.startsWith("ERR ") -> lastError = line.removePrefix("ERR ").take(160)
+                        line.startsWith("ERR ") -> lastError = ModemFailureMessages.decorateHelperError(
+                            line.removePrefix("ERR ").take(160),
+                            ModemChipset.classify(),
+                        )
                         line.startsWith("READY") -> lastError = null
                     }
                 }
@@ -230,6 +292,14 @@ class ModemNrStream(context: Context) {
             )
             runCatching { p.destroy() }
             process = null
+        }
+    }
+
+    /** Appends to [signalingEvents], dropping the oldest once [MAX_SIGNALING_EVENTS] is exceeded. */
+    private fun addSignalingEvent(event: SignalingEvent) {
+        signalingEvents.add(event)
+        while (signalingEvents.size > MAX_SIGNALING_EVENTS) {
+            runCatching { signalingEvents.removeAt(0) }
         }
     }
 

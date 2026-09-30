@@ -45,15 +45,20 @@ class QmiNasClient(context: Context) {
         data class Failed(val reason: String) : Snapshot
     }
 
-    private fun resolveNas(): QrtrServices.Address? = runCatching {
-        val p = ProcessBuilder("su", "-c", "/vendor/bin/qrtr-lookup")
-            .redirectErrorStream(true).start()
-        val out = p.inputStream.bufferedReader().use { it.readText() }
-        if (!p.waitFor(TIMEOUT_MS, TimeUnit.MILLISECONDS)) p.destroyForcibly()
-        QrtrServices.find(out, QrtrServices.SERVICE_NAS)
-    }.getOrElse {
-        Log.i(TAG, "could not resolve NAS: ${it.message}")
-        null
+    private fun resolveNas(): QrtrServices.Resolution {
+        var threw = false
+        val out = runCatching {
+            val p = ProcessBuilder("su", "-c", "/vendor/bin/qrtr-lookup")
+                .redirectErrorStream(true).start()
+            val text = p.inputStream.bufferedReader().use { it.readText() }
+            if (!p.waitFor(TIMEOUT_MS, TimeUnit.MILLISECONDS)) p.destroyForcibly()
+            text
+        }.getOrElse {
+            threw = true
+            Log.i(TAG, "could not resolve NAS: ${it.message}")
+            null
+        }
+        return QrtrServices.resolutionOf(out, threw, QrtrServices.SERVICE_NAS)
     }
 
     /**
@@ -74,10 +79,15 @@ class QmiNasClient(context: Context) {
 
     /** Sends [msgId] with [args] (`id:hexbytes` TLVs). */
     fun request(msgId: Int, args: List<String> = emptyList()): Response {
-        val addr = resolveNas() ?: return Response.Failed(
-            "The Network Access Service is not reachable over QRTR, so the modem cannot be " +
-                "asked. This needs a rooted handset; everything else in the app works without it.",
-        )
+        val addr = when (val res = resolveNas()) {
+            is QrtrServices.Resolution.Found -> res.address
+            QrtrServices.Resolution.SuUnavailable -> return Response.Failed(
+                ModemFailureMessages.nasUnreachable(rooted = false, vendor = ModemChipset.classify()),
+            )
+            QrtrServices.Resolution.NotListed -> return Response.Failed(
+                ModemFailureMessages.nasUnreachable(rooted = true, vendor = ModemChipset.classify()),
+            )
+        }
         val helper = helperFile()
             ?: return Response.Failed("The modem helper is missing from this build.")
         val cmd = (
@@ -92,9 +102,10 @@ class QmiNasClient(context: Context) {
             }
             first
         }.getOrElse {
-            // An IOException here means su is absent, i.e. not rooted. Not an error.
+            // resolveNas() above already proved su works, so this is root lost mid-request
+            // (a revoked Magisk grant, most likely) -- not the ordinary "no root" case.
             Log.i(TAG, "qmilock unavailable: ${it.message}")
-            return Response.Failed("No root. Talking to the modem needs a rooted handset.")
+            return Response.Failed(ModemFailureMessages.rootLostMidRequest())
         } ?: return Response.Failed("The modem helper produced no output.")
 
         if (!line.startsWith("OK ")) {

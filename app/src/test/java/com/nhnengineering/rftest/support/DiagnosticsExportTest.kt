@@ -1,5 +1,8 @@
 package com.nhnengineering.rftest.support
 
+import com.nhnengineering.rftest.modem.ModemNrStream
+import com.nhnengineering.rftest.modem.Nas5gsOtaParser
+import com.nhnengineering.rftest.modem.RrcOtaParser
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -47,6 +50,7 @@ class DiagnosticsExportTest {
             fingerprint = "OnePlus/instantnoodlep/OnePlus9:14/...",
             androidRelease = "14",
             sdkInt = 34,
+            chipsetVendor = "Qualcomm",
         ),
         root = RootInfo(suAvailable = true, idOutput = "uid=0(root) gid=0(root)"),
         qmi = QmiProbe(
@@ -66,6 +70,7 @@ class DiagnosticsExportTest {
         val text = renderDiagnosticsText(okBundle)
 
         assertTrue(text.contains("OnePlus / LE2115"))
+        assertTrue(text.contains("Detected modem chipset: Qualcomm"))
         assertTrue(text.contains("su available: yes"))
         assertTrue(text.contains("Mode preference: 0x005f"))
         assertTrue(text.contains("NR SA band mask present: yes"))
@@ -110,5 +115,63 @@ class DiagnosticsExportTest {
         assertTrue(text.contains("su available: no"))
         assertTrue(text.contains("su could not be run at all"))
         assertTrue(text.contains("(not available)"))
+    }
+
+    // ---- signaling capture export ---------------------------------------------------------
+
+    @Test
+    fun `a signaling log renders one line per event, NAS and RRC alike`() {
+        val events = listOf(
+            ModemNrStream.SignalingEvent(
+                atElapsedMs = 100,
+                nas = Nas5gsOtaParser.Result(
+                    looksValid = true,
+                    direction = Nas5gsOtaParser.Direction.INCOMING,
+                    securityProtected = false,
+                    messageType = 0x4E,
+                    messageTypeName = "Service accept",
+                    rawNasHex = "7e004e",
+                ),
+            ),
+            ModemNrStream.SignalingEvent(
+                atElapsedMs = 250,
+                rrc = RrcOtaParser.Result(
+                    looksValid = true,
+                    pci = 206,
+                    nrArfcn = 501390,
+                    pduType = RrcOtaParser.PduType.SIB1,
+                    rawUperHex = "0102",
+                ),
+            ),
+        )
+        val text = renderSignalingLog(events)
+
+        assertTrue(text.contains("2 event(s)"))
+        assertTrue(text.contains("NAS INCOMING: Service accept"))
+        assertTrue(text.contains("raw: 7e004e"))
+        assertTrue(text.contains("RRC OTA: pci=206 arfcn=501390 SIB1"))
+        assertTrue(text.contains("uper: 0102"))
+    }
+
+    @Test
+    fun `a security-protected NAS event is labelled, not left blank`() {
+        val events = listOf(
+            ModemNrStream.SignalingEvent(
+                atElapsedMs = 0,
+                nas = Nas5gsOtaParser.Result(
+                    looksValid = true,
+                    direction = Nas5gsOtaParser.Direction.OUTGOING,
+                    securityProtected = true,
+                    rawNasHex = "7e02",
+                ),
+            ),
+        )
+        assertTrue(renderSignalingLog(events).contains("NAS OUTGOING: security protected"))
+    }
+
+    @Test
+    fun `an empty capture still renders a valid, readable header`() {
+        val text = renderSignalingLog(emptyList())
+        assertTrue(text.contains("0 event(s)"))
     }
 }

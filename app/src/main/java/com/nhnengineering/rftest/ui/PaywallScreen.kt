@@ -95,10 +95,10 @@ fun PaywallScreen(modifier: Modifier = Modifier) {
                     productDetails = products[PRO_PRODUCT_ID],
                     features = listOf(
                         "Everything in Field",
-                        "Band lock and technology lock (rooted devices)",
-                        "VoNR control (rooted devices)",
-                        "Live SIB1/TDD decode (rooted devices)",
-                        "NR neighbour reads over QMI (rooted devices)",
+                        "Band lock and technology lock (rooted, Qualcomm devices)",
+                        "VoNR control (rooted, Qualcomm devices)",
+                        "Live SIB1/TDD decode (rooted, Qualcomm devices)",
+                        "NR neighbour reads over QMI (rooted, Qualcomm devices)",
                     ),
                 )
             }

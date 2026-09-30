@@ -67,6 +67,7 @@ fun SetupPanel(
     liveView: Boolean,
     onLiveViewChange: (Boolean) -> Unit,
     liveViewError: String?,
+    onOpenSignalingCapture: () -> Unit,
 ) {
     var showHelp by remember { mutableStateOf(false) }
 
@@ -153,6 +154,12 @@ fun SetupPanel(
                 busy = techLockBusy,
                 status = techLockStatus,
                 onSelect = onTechnologyLock,
+            )
+            Text(
+                text = "Signaling capture (NAS/RRC) ▸",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable { onOpenSignalingCapture() },
             )
 
             HorizontalDivider()

@@ -628,6 +628,54 @@ symbols (p2) 0  UL slots (p2) 0  UL symbols (p2) 0  SSB position 2  SSB in burst
 30 kHz`. 466 tests passing (was 460).
 
 
+## NAS-5GS / RRC OTA signaling capture built in-app, validated against a live capture (2026-09-30)
+
+Turned the 2026-09-27 one-off manual investigation above ("The runtime decision...") into a
+repeatable in-app tool: `modem/Nas5gsOtaParser.kt` and `modem/RrcOtaParser.kt` decode `0xB80A`/
+`0xB80B`/`0xB821` live, wired into `ModemNrStream`'s existing subscription (capture-gated, off by
+default) and a new `SignalingCaptureDialog` reachable from Setup. Full plan and design rationale in
+that session's plan file; summarized here for the live-verification result.
+
+**Validated against a fresh capture, not just synthetic fixtures.** Staged the DCI helper directly
+(`b97f b823 b80a b80b b821`, 45 s window, mode forced to NR-only after a 10 s settle delay) and
+decoded the raw captured bytes by hand with the exact same offsets the shipped Kotlin parser uses.
+Real result, byte-for-byte matching what `Nas5gsOtaParser.parse()` produces:
+
+```
+OUTGOING: EPD=0x7e secHdr=0 msgType=0x4c -> Service request
+INCOMING: EPD=0x7e secHdr=0 msgType=0x4e -> Service accept
+OUTGOING: EPD=0x7e secHdr=0 msgType=0x41 -> Registration request
+INCOMING: EPD=0x7e secHdr=0 msgType=0x42 -> Registration accept
+```
+
+All four plain (security header type 0), all four decode to their correct standard message name.
+This is a different phase of the process than the 2026-09-27 capture (which caught the later
+voluntary deregistration) -- this run's 30 s from lock to restore only reached as far as a
+**successful full registration onto SA**, confirmed live by `dumpsys` at the same moment
+(`getRilDataRadioTechnology=20(NR_SA)` alongside LTE, both in service). The voluntary-deregistration
+phase evidently takes longer than 30 s to arrive; the restore-to-baseline write likely cut the test
+short before it did. Not re-attempted further this session to avoid repeated live service
+disruption -- the tool is validated as correctly decoding real bytes, which was the goal.
+
+**RRC OTA envelope also validated**: PCI and NR-ARFCN extracted correctly and consistently across 5
+sampled packets (PCI 929, ARFCN 427230). PDU type codes 3, 5, 6, 8 appeared alongside the two known
+ones (4 = DL-DCCH decoded correctly); those four are not in this app's `PduType` enum (only
+MIB/SIB1/DL-DCCH were ever validated, in the original 2026-09-26 investigation) and correctly came
+back as "not one this app recognises" with the raw UPER hex still preserved, rather than a guess --
+exactly the designed behavior, not a bug. RRC OTA evidently carries several more PDU types
+(UL-DCCH, UL/DL-CCCH, paging, etc. are the likely candidates) that remain undecoded envelope-wise;
+low priority to add since the raw hex export already supports offline decode of any of them.
+
+**New finding, not in the 2026-09-27 entry: forcing SA-only appears to disrupt the DIAG session
+itself.** Two earlier attempts this session (25 s and 40 s windows, lock applied 2-3 s after
+subscribing) both saw the DCI logger process exit abnormally within ~10 s of the window starting,
+well short of the requested duration, capturing zero or almost zero packets. Only the third attempt
+-- a longer 10 s settle delay between subscribing and applying the lock -- ran cleanly for its full
+window. Reproduced 2/2 on short settle, succeeded 1/1 on a longer one; not enough runs to call this
+conclusive, but a real, previously undocumented instability worth remembering: **give the DCI
+subscription time to settle before forcing SA-only**, or the capture itself may not survive long
+enough to see anything.
+
 ## Ground rules
 
 Work from the open-source references: **libqmi** for QMI NAS, and QCSuper / SCAT / MobileInsight

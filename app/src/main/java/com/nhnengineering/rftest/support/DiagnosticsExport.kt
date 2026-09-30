@@ -5,6 +5,8 @@ import android.os.Build
 import android.os.Process
 import com.nhnengineering.rftest.BuildConfig
 import com.nhnengineering.rftest.billing.EntitlementRepository
+import com.nhnengineering.rftest.modem.ModemChipset
+import com.nhnengineering.rftest.modem.ModemNrStream
 import com.nhnengineering.rftest.modem.QmiNasClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -65,6 +67,7 @@ class DiagnosticsExporter(context: Context) {
         fingerprint = Build.FINGERPRINT,
         androidRelease = Build.VERSION.RELEASE,
         sdkInt = Build.VERSION.SDK_INT,
+        chipsetVendor = ModemChipset.classify().label,
     )
 
     /**
@@ -146,6 +149,9 @@ data class DeviceInfo(
     val fingerprint: String,
     val androidRelease: String,
     val sdkInt: Int,
+    /** [ModemChipset.classify]'s best-effort label -- useful on a bug report from a phone this
+     *  project has never seen. */
+    val chipsetVendor: String,
 )
 
 data class RootInfo(
@@ -190,6 +196,7 @@ internal fun renderDiagnosticsText(bundle: DiagnosticsBundle): String {
         appendLine("  Device / board / hardware: ${bundle.device.device} / ${bundle.device.board} / ${bundle.device.hardware}")
         appendLine("  Android: ${bundle.device.androidRelease} (SDK ${bundle.device.sdkInt})")
         appendLine("  Build fingerprint: ${bundle.device.fingerprint}")
+        appendLine("  Detected modem chipset: ${bundle.device.chipsetVendor}")
         appendLine()
         appendLine("Root")
         appendLine("  su available: ${if (bundle.root.suAvailable) "yes" else "no"}")
@@ -220,4 +227,39 @@ private fun Boolean?.label(): String = when (this) {
     true -> "yes"
     false -> "no"
     null -> "—"
+}
+
+/**
+ * Renders a captured NAS-5GS/RRC OTA signaling sequence as plain text, one line per event --
+ * pure, like [renderDiagnosticsText], so the format is pinned by a test rather than only ever
+ * eyeballed after a real capture. [ModemNrStream.SignalingEvent] is inherently a sequence (see its
+ * own doc), which is why this is a separate export rather than a section folded into
+ * [DiagnosticsBundle]: that bundle is a single-shot "state right now" snapshot, and a signaling
+ * capture is a timeline.
+ */
+internal fun renderSignalingLog(events: List<ModemNrStream.SignalingEvent>): String = buildString {
+    appendLine("RF Test App -- Signaling capture (NAS-5GS / RRC OTA)")
+    appendLine("${events.size} event(s)")
+    appendLine()
+    for (e in events) {
+        val t = "%6d ms".format(e.atElapsedMs)
+        when {
+            e.nas != null -> {
+                val dir = e.nas.direction?.name ?: "?"
+                val summary = when {
+                    e.nas.securityProtected == true -> "security protected"
+                    e.nas.messageTypeName != null -> e.nas.messageTypeName
+                    else -> "unrecognised (0x%02x)".format(e.nas.messageType ?: -1)
+                }
+                appendLine("[$t] NAS $dir: $summary")
+                appendLine("    raw: ${e.nas.rawNasHex ?: "(none)"}")
+            }
+            e.rrc != null -> {
+                val pduLabel = e.rrc.pduType?.label ?: "unrecognised PDU type"
+                appendLine("[$t] RRC OTA: pci=${e.rrc.pci ?: "—"} arfcn=${e.rrc.nrArfcn ?: "—"} $pduLabel")
+                appendLine("    uper: ${e.rrc.rawUperHex ?: "(none)"}")
+            }
+            else -> appendLine("[$t] (empty event)")
+        }
+    }
 }

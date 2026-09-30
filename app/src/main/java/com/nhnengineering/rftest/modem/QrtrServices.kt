@@ -60,4 +60,25 @@ object QrtrServices {
             }
             .minByOrNull { it.node.toLong() * 100_000 + it.port }
     }
+
+    /**
+     * What trying to resolve a service on QRTR actually established, kept as three distinct
+     * outcomes rather than collapsing to null -- `SuUnavailable` and `NotListed` look identical
+     * from the caller's side (both "nothing came back") but mean opposite things for the message a
+     * user should see: no root at all, versus root that works fine on a phone with no QRTR/QMI
+     * subsystem to ask in the first place (see [com.nhnengineering.rftest.modem.ModemChipset]).
+     */
+    sealed interface Resolution {
+        data class Found(val address: Address) : Resolution
+        object SuUnavailable : Resolution
+        object NotListed : Resolution
+    }
+
+    /** Combines whether the `su` call threw with what `qrtr-lookup` printed, if anything. */
+    fun resolutionOf(lookupOutput: String?, threw: Boolean, service: Int = SERVICE_NAS): Resolution =
+        if (threw) {
+            Resolution.SuUnavailable
+        } else {
+            find(lookupOutput.orEmpty(), service)?.let { Resolution.Found(it) } ?: Resolution.NotListed
+        }
 }

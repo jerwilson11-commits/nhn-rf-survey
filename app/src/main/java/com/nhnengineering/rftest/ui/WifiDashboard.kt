@@ -136,6 +136,8 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     var localWifi by remember { mutableStateOf<WifiSample?>(null) }
     var localFix by remember { mutableStateOf<GeoPoint?>(null) }
     var localCell by remember { mutableStateOf<CellularSample?>(null) }
+    var showSignalingCapture by remember { mutableStateOf(false) }
+    var signalingCapturing by remember { mutableStateOf(false) }
 
     // Checked once per visit to this screen, off the composition thread: the check shells out
     // (qrtr-lookup, then the helper), and calling that from a bare `remember {}` initializer --
@@ -508,6 +510,7 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 liveView = liveView,
                 onLiveViewChange = { com.nhnengineering.rftest.live.LiveView.set(context, it) },
                 liveViewError = liveViewError,
+                onOpenSignalingCapture = { showSignalingCapture = true },
             )
         }
 
@@ -676,6 +679,30 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 NeighborRow(neighbor, isServing = neighbor.bssid == wifi.bssid)
             }
         }
+    }
+
+    if (showSignalingCapture) {
+        SignalingCaptureDialog(
+            capturing = signalingCapturing,
+            fetchEvents = { cellular.signalingEvents() },
+            onStart = {
+                cellular.setSignalingCapture(true)
+                signalingCapturing = true
+            },
+            onStop = {
+                cellular.setSignalingCapture(false)
+                signalingCapturing = false
+            },
+            onExport = { events ->
+                scope.launch {
+                    val text = withContext(Dispatchers.IO) {
+                        com.nhnengineering.rftest.support.renderSignalingLog(events)
+                    }
+                    shareDiagnosticsText(context, text, filePrefix = "signaling_capture")
+                }
+            },
+            onDismiss = { showSignalingCapture = false },
+        )
     }
 }
 

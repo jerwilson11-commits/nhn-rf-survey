@@ -2,6 +2,7 @@ package com.nhnengineering.rftest.modem
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -74,5 +75,33 @@ class QrtrServicesTest {
         assertNull(QrtrServices.find(""))
         assertNull(QrtrServices.find("qrtr-lookup: command not found"))
         assertNull(QrtrServices.find("Service Version Instance Node  Port"))
+    }
+
+    // ---- resolutionOf: distinguishing "su threw" from "su ran, nothing matched" ----------
+
+    @Test
+    fun `resolutionOf when su threw is SuUnavailable regardless of output`() {
+        val res = QrtrServices.resolutionOf(lookupOutput = null, threw = true)
+        assertTrue(res is QrtrServices.Resolution.SuUnavailable)
+    }
+
+    @Test
+    fun `resolutionOf when su ran and a matching row exists is Found`() {
+        val res = QrtrServices.resolutionOf(lookupOutput = listing, threw = false, service = QrtrServices.SERVICE_NAS)
+        assertTrue(res is QrtrServices.Resolution.Found)
+        assertEquals(QrtrServices.Address(0, 88), (res as QrtrServices.Resolution.Found).address)
+    }
+
+    @Test
+    fun `resolutionOf when su ran but nothing matches is NotListed`() {
+        val empty = QrtrServices.resolutionOf(lookupOutput = "", threw = false)
+        assertTrue(empty is QrtrServices.Resolution.NotListed)
+
+        val noMatch = QrtrServices.resolutionOf(
+            lookupOutput = "Service Version Instance Node  Port\n      7       1        0    0    12 Other Service",
+            threw = false,
+            service = QrtrServices.SERVICE_NAS,
+        )
+        assertTrue(noMatch is QrtrServices.Resolution.NotListed)
     }
 }
