@@ -86,8 +86,10 @@ class CsvSchemaTest {
         // 100 from 2026-09-30, when gnss_satellites_used, gnss_satellites_in_view,
         // gnss_avg_cn0_dbhz and gnss_min_cn0_dbhz were added to capture satellite-quality data
         // that might explain a GPS fix that looks fine but is not (see model/GeoPoint).
-        assertEquals(100, CSV_COLUMN_COUNT)
-        assertEquals(100, CSV_HEADER.split(",").size)
+        // 102 from 2026-10-01, when lock_watch_pci and lock_watch_arfcn were added to verify an
+        // externally-set cell lock held across a survey (see report/SessionStats.lockWatch).
+        assertEquals(102, CSV_COLUMN_COUNT)
+        assertEquals(102, CSV_HEADER.split(",").size)
     }
 
     @Test

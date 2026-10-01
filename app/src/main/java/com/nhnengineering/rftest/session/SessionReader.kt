@@ -149,6 +149,19 @@ data class TrackPoint(
     val gnssSatellitesInView: Int? = null,
     val gnssAvgCn0DbHz: Float? = null,
     val gnssMinCn0DbHz: Float? = null,
+    /** The cell-lock target the operator was watching on this sample (PCI + ARFCN), or null on a
+     *  free-running walk or a session recorded before this column existed. Compared against the
+     *  serving cell to tell whether the lock held -- see [com.nhnengineering.rftest.report.SessionStats.lockWatch]. */
+    val lockWatchPci: Int? = null,
+    val lockWatchArfcn: Int? = null,
+    /** The NR and LTE serving-cell identities kept separate (rather than the NR-first [servingPci]),
+     *  so lock-watch can tell whether the locked cell is held on either radio -- NR-first collapses
+     *  an LTE lock with NR aggregated alongside into a false miss. Null where that radio was not
+     *  serving on this sample. */
+    val nrServingPci: Int? = null,
+    val nrServingArfcn: Int? = null,
+    val lteServingPci: Int? = null,
+    val lteServingEarfcn: Int? = null,
 ) {
     /** True when this sample can be placed on a floorplan even though GPS could not place it. */
     val hasIndoorPosition: Boolean
@@ -255,6 +268,7 @@ object SessionReader {
             val iErrcsAreaClass = idx("errcs_area_class")
             val iGnssUsed = idx("gnss_satellites_used"); val iGnssInView = idx("gnss_satellites_in_view")
             val iGnssAvgCn0 = idx("gnss_avg_cn0_dbhz"); val iGnssMinCn0 = idx("gnss_min_cn0_dbhz")
+            val iLockPci = idx("lock_watch_pci"); val iLockArfcn = idx("lock_watch_arfcn")
             if (iLat == null || iLon == null) return@withContext null
 
             val points = mutableListOf<TrackPoint>()
@@ -357,6 +371,12 @@ object SessionReader {
                     gnssSatellitesInView = s(iGnssInView)?.toIntOrNull(),
                     gnssAvgCn0DbHz = s(iGnssAvgCn0)?.toFloatOrNull(),
                     gnssMinCn0DbHz = s(iGnssMinCn0)?.toFloatOrNull(),
+                    lockWatchPci = s(iLockPci)?.toIntOrNull(),
+                    lockWatchArfcn = s(iLockArfcn)?.toIntOrNull(),
+                    nrServingPci = s(iNrPci)?.toIntOrNull(),
+                    nrServingArfcn = s(iNrArfcn)?.toIntOrNull(),
+                    lteServingPci = s(iLtePci)?.toIntOrNull(),
+                    lteServingEarfcn = s(iEarfcn)?.toIntOrNull(),
                 )
             }
 

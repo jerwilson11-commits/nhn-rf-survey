@@ -14,6 +14,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SecondaryTabRow
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -24,6 +26,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,6 +84,12 @@ private const val SPOT_CHECK_SAMPLES = 10
 
 private const val SAMPLE_INTERVAL_MS = 1_000L
 
+/** The two halves of the Live screen: [MEASURE] is the glanceable-while-moving readout plus the
+ *  record control; [SETUP] holds configuration and the heavier test tools. Split out because the
+ *  single page had grown past one-handed use in the field, and buried controls (the cell lock watch)
+ *  were being missed. */
+private enum class LiveSubTab(val label: String) { MEASURE("Measure"), SETUP("Setup") }
+
 /**
  * Live KPI readout.
  *
@@ -117,6 +126,8 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     // moment a floorplan is chosen, and a raw .value read does not recompose when it changes.
     val indoorPosition by RecordingState.indoorPosition.collectAsState()
     val ratLock by RecordingState.ratLock.collectAsState()
+    val lockWatchPci by RecordingState.lockWatchPci.collectAsState()
+    val lockWatchArfcn by RecordingState.lockWatchArfcn.collectAsState()
     val walkThroughput by RecordingState.walkThroughputEnabled.collectAsState()
     val liveView by RecordingState.liveViewEnabled.collectAsState()
     val liveViewError by RecordingState.liveServerError.collectAsState()
@@ -351,332 +362,349 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val fix = if (recording) serviceFix else localFix
     val cell = if (recording) serviceCell else localCell
 
-    LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(horizontal = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(vertical = 12.dp),
-    ) {
-        // ---- Measurement surface, first and unscrolled --------------------
-        //
-        // Order is deliberate and reverses the original: what is being measured, then the controls
-        // used while measuring, then setup. The first version put three cards of configuration
-        // above the cellular reading, so the numbers the app exists to show sat below the fold on
-        // every screenshot taken during development.
-        item {
-            StatusStrip(
-                recording = recording,
-                elapsedMs = elapsedMs,
-                rowCount = rowCount,
-                area = areaLabel,
-                floor = floor,
-            )
-        }
-        // Re-read on every recomposition rather than remembered: these are exactly the settings
-        // an operator changes in the minute before setting off, and a cached answer would
-        // describe the state the app started in.
-        val preWalk = if (recording) {
-            emptyList()
-        } else {
-            com.nhnengineering.rftest.model.PreWalkCheck.evaluate(
-                preWalkInputs(
-                    context = context,
-                    hasGpsFix = fix != null,
-                    floorplanSelected = indoorPosition != null,
-                    simPresent = cell?.simState?.name?.contains("READY") == true,
-                ),
-            )
-        }
-        val preWalkHasFindings = preWalk.any {
-            it.status != com.nhnengineering.rftest.model.PreWalkCheck.Status.OK
-        }
+    var liveTab by rememberSaveable { mutableStateOf(LiveSubTab.MEASURE) }
 
-        if (!recording) {
-            item { NotRecordingBanner(onStart = { RecordingService.start(context, sessionName) }) }
-            // A finding outranks the reading: it is the thing that makes the walk not worth
-            // taking, and the operator needs it before they press START. A clean result does not
-            // outrank anything, so it waits below the numbers as one line.
-            if (preWalkHasFindings) item { PreWalkCard(preWalk) }
-        }
-        item { LevelBar(cell, wifi) }
-        item { HeroKpi(cell, wifi) }
-        if (!recording && !preWalkHasFindings) item { PreWalkPassLine() }
-        item {
-            // Which radio this screen is speaking about. Decided once per sample and passed
-            // explicitly, because the stabiliser keeps a window and a window that changes
-            // quantity mid-flight produces a median of two different things.
-            //
-            // The condition deliberately asks whether cellular is *present at all*, not whether
-            // this particular sample carried a level: with no SIM the serving RSRP appears and
-            // vanishes between samples, and keying off the level alone made the screen alternate
-            // between the two radios several times a second.
-            val onCellular = cell?.servingRsrpDbm != null || wifi == null
-            val steady = if (onCellular) {
-                stabiliser.update(
-                    VerdictStabiliser.Source.CELLULAR,
-                    cell?.servingRsrpDbm,
-                    cell?.nr?.ssSinrDb ?: cell?.lte?.rssnrDb,
-                )
-            } else {
-                stabiliser.update(
-                    VerdictStabiliser.Source.WIFI,
-                    wifi.rssiDbm,
-                    null,
-                    wifiCoChannel = wifi.coChannelCount,
-                )
-            }
-            VerdictLine(steady, spreadDb = stabiliser.spreadDb)
-        }
-        item { KpiGrid(cell, wifi, fix) }
-        item { ThroughputStrip(lastThroughput, throughputBusy) }
+    // Re-read on every recomposition rather than remembered: these are exactly the settings an
+    // operator changes in the minute before setting off, and a cached answer would describe the
+    // state the app started in. Consumed by the Measure view's banners below.
+    val preWalk = if (recording) {
+        emptyList()
+    } else {
+        com.nhnengineering.rftest.model.PreWalkCheck.evaluate(
+            preWalkInputs(
+                context = context,
+                hasGpsFix = fix != null,
+                floorplanSelected = indoorPosition != null,
+                simPresent = cell?.simState?.name?.contains("READY") == true,
+            ),
+        )
+    }
+    val preWalkHasFindings = preWalk.any {
+        it.status != com.nhnengineering.rftest.model.PreWalkCheck.Status.OK
+    }
 
-        if (recording) {
-            item {
-                WalkControls(
-                    area = areaLabel,
-                    onArea = { RecordingState.areaLabel.value = it },
-                    floor = floor,
-                    onFloor = { RecordingState.floor.value = it },
+    Column(modifier.fillMaxSize()) {
+        // Measure = the glanceable readout + the record control, kept lean for one-handed use in
+        // motion. Setup = configuration and the heavier test tools. Split because the single page
+        // had outgrown field use and buried controls (the cell lock watch) were being missed.
+        SecondaryTabRow(selectedTabIndex = liveTab.ordinal) {
+            LiveSubTab.entries.forEach { t ->
+                Tab(
+                    selected = liveTab == t,
+                    onClick = { liveTab = t },
+                    text = { Text(t.label) },
                 )
             }
         }
 
-        if (!recording) {
-            item {
-                SpotCheckCard(
-                    running = spotRunning,
-                    progress = spotProgress,
-                    result = spotResult,
-                    onClear = { spotResult = null },
-                    onRun = {
-                        spotResult = null
-                        spotRunning = true
-                        scope.launch {
-                            val acc = com.nhnengineering.rftest.spot.SpotCheckAccumulator()
-                            acc.start(System.currentTimeMillis())
-                            val steps = SPOT_CHECK_SAMPLES
-                            for (i in 0 until steps) {
-                                acc.add(cellular.snapshot(), collector.snapshot())
-                                spotProgress = (i + 1f) / steps
-                                delay(SAMPLE_INTERVAL_MS)
-                            }
-                            spotResult = acc.result(System.currentTimeMillis())
-                            spotRunning = false
-                            spotProgress = 0f
-                        }
-                    },
-                )
-            }
-        }
-
-        item {
-            RecordButton(
-                recording = recording,
-                onStart = { RecordingService.start(context, sessionName) },
-                onStop = { RecordingService.stop(context) },
-            )
-        }
-
-        // ---- Setup, collapsed during a session ----------------------------
-        item {
-            SetupPanel(
-                expanded = setupExpanded,
-                onToggle = { setupExpanded = !setupExpanded },
-                recording = recording,
-                sessionName = sessionName,
-                onSessionNameChange = { sessionName = it },
-                distanceM = distanceM,
-                fixesWithVelocity = withVel,
-                fixesWithoutVelocity = withoutVel,
-                lastFile = lastFile,
-                onArea = { RecordingState.areaLabel.value = it },
-                onFloor = { RecordingState.floor.value = it },
-                errcsAreaClass = errcsAreaClass,
-                onErrcsAreaClass = { RecordingState.errcsAreaClass.value = it },
-                band14Registered = serviceCell?.onFirstNetBand14,
-                bandLock = bandLock,
-                onBandLock = { RecordingState.bandLock.value = it },
-                bandLockUi = bandUi.copy(onApply = onBandApply, onRelease = onBandRelease),
-                ratLock = ratLock,
-                techLockChecking = techLockChecking,
-                techLockUnavailableReason = techLockUnavailableReason,
-                techLockPendingRestore = techLock.pendingRestore,
-                techLockBusy = techLockBusy,
-                techLockStatus = techLockStatus,
-                onTechnologyLock = onTechnologyLock,
-                walkThroughput = walkThroughput,
-                onWalkThroughputChange = { RecordingState.walkThroughputEnabled.value = it },
-                liveView = liveView,
-                onLiveViewChange = { com.nhnengineering.rftest.live.LiveView.set(context, it) },
-                liveViewError = liveViewError,
-                onOpenSignalingCapture = { showSignalingCapture = true },
-            )
-        }
-
-        serviceError?.let { err ->
-            item {
-                Card(Modifier.fillMaxWidth()) {
-                    Text(
-                        "Recording error: $err",
-                        Modifier.padding(14.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            }
-        }
-        if (breaches.isNotEmpty()) {
-            item { AlarmCard(breaches.map { it.label }) }
-        }
-        item {
-            ThresholdsCard(
-                thresholds = thresholds,
-                onChange = { RecordingState.thresholds.value = it },
-            )
-        }
-        item {
-            SpeedTestCard(
-                running = speedRunning,
-                stage = speedStage,
-                liveMbps = speedLiveMbps,
-                result = speedResult,
-                backend = speedBackend,
-                onBackendChange = { speedBackend = it },
-                serverUrl = speedServer,
-                onServerUrlChange = { speedServer = it },
-                onRun = {
-                    scope.launch {
-                        speedRunning = true
-                        speedResult = null
-                        speedLiveMbps = null
-                        val r = if (speedBackend == SpeedTestBackend.NDT7) {
-                            Ndt7Tester(Ndt7Config()).runAll { st, mbps ->
-                                speedStage = st
-                                speedLiveMbps = mbps
-                            }
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(vertical = 12.dp),
+        ) {
+            when (liveTab) {
+                LiveSubTab.MEASURE -> {
+                    // ---- Measurement surface: what is being measured, the walk controls, the
+                    // record button, then the detail cards. Order puts the numbers first.
+                    item {
+                        StatusStrip(
+                            recording = recording,
+                            elapsedMs = elapsedMs,
+                            rowCount = rowCount,
+                            area = areaLabel,
+                            floor = floor,
+                        )
+                    }
+                    if (!recording) {
+                        item { NotRecordingBanner(onStart = { RecordingService.start(context, sessionName) }) }
+                        // A finding outranks the reading: it is the thing that makes the walk not
+                        // worth taking, and the operator needs it before they press START. A clean
+                        // result does not outrank anything, so it waits below as one line.
+                        if (preWalkHasFindings) item { PreWalkCard(preWalk) }
+                    }
+                    item { LevelBar(cell, wifi) }
+                    item { HeroKpi(cell, wifi) }
+                    if (!recording && !preWalkHasFindings) item { PreWalkPassLine() }
+                    item {
+                        // Which radio this screen is speaking about. Decided once per sample and
+                        // passed explicitly, because the stabiliser keeps a window and a window that
+                        // changes quantity mid-flight produces a median of two different things.
+                        val onCellular = cell?.servingRsrpDbm != null || wifi == null
+                        val steady = if (onCellular) {
+                            stabiliser.update(
+                                VerdictStabiliser.Source.CELLULAR,
+                                cell?.servingRsrpDbm,
+                                cell?.nr?.ssSinrDb ?: cell?.lte?.rssnrDb,
+                            )
                         } else {
-                            val cfg = SpeedTestConfig.fromDownloadUrl(speedServer)
-                            SpeedTester(cfg).runAll { st, mbps ->
-                                speedStage = st
-                                speedLiveMbps = mbps
+                            stabiliser.update(
+                                VerdictStabiliser.Source.WIFI,
+                                wifi.rssiDbm,
+                                null,
+                                wifiCoChannel = wifi.coChannelCount,
+                            )
+                        }
+                        VerdictLine(steady, spreadDb = stabiliser.spreadDb)
+                    }
+                    item { KpiGrid(cell, wifi, fix) }
+                    // Lock-watch status, surfaced here so it is seen at a glance while moving. The
+                    // entry that sets the target lives in the Setup sub-tab; this renders nothing
+                    // until a target is set.
+                    item { LockWatchStatus(cell, lockWatchPci, lockWatchArfcn) }
+                    item { ThroughputStrip(lastThroughput, throughputBusy) }
+                    if (recording) {
+                        item {
+                            WalkControls(
+                                area = areaLabel,
+                                onArea = { RecordingState.areaLabel.value = it },
+                                floor = floor,
+                                onFloor = { RecordingState.floor.value = it },
+                            )
+                        }
+                    }
+                    item {
+                        RecordButton(
+                            recording = recording,
+                            onStart = { RecordingService.start(context, sessionName) },
+                            onStop = { RecordingService.stop(context) },
+                        )
+                    }
+                    serviceError?.let { err ->
+                        item {
+                            Card(Modifier.fillMaxWidth()) {
+                                Text(
+                                    "Recording error: $err",
+                                    Modifier.padding(14.dp),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
                             }
                         }
-                        speedResult = r
-                        // Handed to the service so the file keeps a single writer.
-                        RecordingState.pendingThroughput.value = r
-                        speedRunning = false
-                        speedStage = null
-                        speedLiveMbps = null
                     }
-                },
-            )
-        }
-        item {
-            DiagnosticsCard(
-                running = diagRunning,
-                resultMessage = diagResult,
-                onExport = {
-                    scope.launch {
-                        diagRunning = true
-                        diagResult = null
-                        val bundle = DiagnosticsExporter(context).collect()
-                        val text = renderDiagnosticsText(bundle)
-                        val file = shareDiagnosticsText(context, text)
-                        diagResult = "Saved and shared: ${file.name}"
-                        diagRunning = false
+                    if (breaches.isNotEmpty()) {
+                        item { AlarmCard(breaches.map { it.label }) }
                     }
-                },
-            )
-        }
-        item {
-            AutomationCard(
-                running = automationRunning,
-                config = automationConfig,
-                onConfigChange = { automationConfig = it },
-                results = automationResults,
-                onRun = {
-                    val script = buildAutomationScript(automationConfig, speedServer)
-                    if (automationConfig.loop) {
-                        automationRunning = true
-                        automationRunner.start(scope, script) { results ->
-                            automationResults = results
-                        }
-                    } else {
-                        scope.launch {
-                            automationRunning = true
-                            automationResults = automationRunner.runOnce(script)
-                            automationRunning = false
-                        }
-                    }
-                },
-                onStop = {
-                    automationRunner.stop()
-                    automationRunning = false
-                },
-            )
-        }
-        item {
-            VideoStreamingCard(
-                running = videoQoeRunning,
-                stage = videoQoeStage,
-                url = videoQoeUrl,
-                onUrlChange = { videoQoeUrl = it },
-                result = videoQoeResult,
-                onRun = {
-                    scope.launch {
-                        videoQoeRunning = true
-                        videoQoeStage = null
-                        videoQoeResult = null
-                        videoQoeResult = VideoQoeTester(context).run(VideoQoeConfig(url = videoQoeUrl)) {
-                            videoQoeStage = it
-                        }
-                        videoQoeRunning = false
-                        videoQoeStage = null
-                    }
-                },
-            )
-        }
-        item {
-            VoiceCallCard(
-                running = voiceCallRunning,
-                stage = voiceCallStage,
-                number = voiceCallNumber,
-                onNumberChange = { voiceCallNumber = it },
-                result = voiceCallResult,
-                onRun = {
-                    scope.launch {
-                        voiceCallRunning = true
-                        voiceCallStage = null
-                        voiceCallResult = null
-                        voiceCallResult = VoiceCallTester(context).run(VoiceCallConfig(number = voiceCallNumber)) {
-                            voiceCallStage = it
-                        }
-                        voiceCallRunning = false
-                        voiceCallStage = null
-                    }
-                },
-            )
-        }
-        item { CellularCard(cell) }
-        item { GpsCard(fix, providersEnabled = locations.isAnyProviderEnabled()) }
+                    item { CellularCard(cell) }
+                    item { GpsCard(fix, providersEnabled = locations.isAnyProviderEnabled()) }
 
-        if (wifi == null) {
-            item { NoWifiCard() }
-        } else {
-            item { ServingApCard(wifi) }
-            item { InterferenceCard(wifi) }
-            item {
-                Text(
-                    text = "Neighbours (${wifi.neighbors.size})",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
-            items(
-                items = wifi.neighbors.sortedByDescending { it.rssiDbm },
-                key = { it.bssid },
-            ) { neighbor ->
-                NeighborRow(neighbor, isServing = neighbor.bssid == wifi.bssid)
+                    if (wifi == null) {
+                        item { NoWifiCard() }
+                    } else {
+                        item { ServingApCard(wifi) }
+                        item { InterferenceCard(wifi) }
+                        item {
+                            Text(
+                                text = "Neighbours (${wifi.neighbors.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                        }
+                        items(
+                            items = wifi.neighbors.sortedByDescending { it.rssiDbm },
+                            key = { it.bssid },
+                        ) { neighbor ->
+                            NeighborRow(neighbor, isServing = neighbor.bssid == wifi.bssid)
+                        }
+                    }
+                }
+
+                LiveSubTab.SETUP -> {
+                    // ---- Configuration and the heavier test tools, off the glanceable surface.
+                    item {
+                        SetupPanel(
+                            expanded = setupExpanded,
+                            onToggle = { setupExpanded = !setupExpanded },
+                            recording = recording,
+                            sessionName = sessionName,
+                            onSessionNameChange = { sessionName = it },
+                            distanceM = distanceM,
+                            fixesWithVelocity = withVel,
+                            fixesWithoutVelocity = withoutVel,
+                            lastFile = lastFile,
+                            onArea = { RecordingState.areaLabel.value = it },
+                            onFloor = { RecordingState.floor.value = it },
+                            errcsAreaClass = errcsAreaClass,
+                            onErrcsAreaClass = { RecordingState.errcsAreaClass.value = it },
+                            band14Registered = serviceCell?.onFirstNetBand14,
+                            bandLock = bandLock,
+                            onBandLock = { RecordingState.bandLock.value = it },
+                            bandLockUi = bandUi.copy(onApply = onBandApply, onRelease = onBandRelease),
+                            ratLock = ratLock,
+                            techLockChecking = techLockChecking,
+                            techLockUnavailableReason = techLockUnavailableReason,
+                            techLockPendingRestore = techLock.pendingRestore,
+                            techLockBusy = techLockBusy,
+                            techLockStatus = techLockStatus,
+                            onTechnologyLock = onTechnologyLock,
+                            walkThroughput = walkThroughput,
+                            onWalkThroughputChange = { RecordingState.walkThroughputEnabled.value = it },
+                            liveView = liveView,
+                            onLiveViewChange = { com.nhnengineering.rftest.live.LiveView.set(context, it) },
+                            liveViewError = liveViewError,
+                            onOpenSignalingCapture = { showSignalingCapture = true },
+                        )
+                    }
+
+                    if (!recording) {
+                        item {
+                            SpotCheckCard(
+                                running = spotRunning,
+                                progress = spotProgress,
+                                result = spotResult,
+                                onClear = { spotResult = null },
+                                onRun = {
+                                    spotResult = null
+                                    spotRunning = true
+                                    scope.launch {
+                                        val acc = com.nhnengineering.rftest.spot.SpotCheckAccumulator()
+                                        acc.start(System.currentTimeMillis())
+                                        val steps = SPOT_CHECK_SAMPLES
+                                        for (i in 0 until steps) {
+                                            acc.add(cellular.snapshot(), collector.snapshot())
+                                            spotProgress = (i + 1f) / steps
+                                            delay(SAMPLE_INTERVAL_MS)
+                                        }
+                                        spotResult = acc.result(System.currentTimeMillis())
+                                        spotRunning = false
+                                        spotProgress = 0f
+                                    }
+                                },
+                            )
+                        }
+                    }
+
+                    item {
+                        ThresholdsCard(
+                            thresholds = thresholds,
+                            onChange = { RecordingState.thresholds.value = it },
+                        )
+                    }
+                    item {
+                        SpeedTestCard(
+                            running = speedRunning,
+                            stage = speedStage,
+                            liveMbps = speedLiveMbps,
+                            result = speedResult,
+                            backend = speedBackend,
+                            onBackendChange = { speedBackend = it },
+                            serverUrl = speedServer,
+                            onServerUrlChange = { speedServer = it },
+                            onRun = {
+                                scope.launch {
+                                    speedRunning = true
+                                    speedResult = null
+                                    speedLiveMbps = null
+                                    val r = if (speedBackend == SpeedTestBackend.NDT7) {
+                                        Ndt7Tester(Ndt7Config()).runAll { st, mbps ->
+                                            speedStage = st
+                                            speedLiveMbps = mbps
+                                        }
+                                    } else {
+                                        val cfg = SpeedTestConfig.fromDownloadUrl(speedServer)
+                                        SpeedTester(cfg).runAll { st, mbps ->
+                                            speedStage = st
+                                            speedLiveMbps = mbps
+                                        }
+                                    }
+                                    speedResult = r
+                                    // Handed to the service so the file keeps a single writer.
+                                    RecordingState.pendingThroughput.value = r
+                                    speedRunning = false
+                                    speedStage = null
+                                    speedLiveMbps = null
+                                }
+                            },
+                        )
+                    }
+                    item {
+                        DiagnosticsCard(
+                            running = diagRunning,
+                            resultMessage = diagResult,
+                            onExport = {
+                                scope.launch {
+                                    diagRunning = true
+                                    diagResult = null
+                                    val bundle = DiagnosticsExporter(context).collect()
+                                    val text = renderDiagnosticsText(bundle)
+                                    val file = shareDiagnosticsText(context, text)
+                                    diagResult = "Saved and shared: ${file.name}"
+                                    diagRunning = false
+                                }
+                            },
+                        )
+                    }
+                    item {
+                        AutomationCard(
+                            running = automationRunning,
+                            config = automationConfig,
+                            onConfigChange = { automationConfig = it },
+                            results = automationResults,
+                            onRun = {
+                                val script = buildAutomationScript(automationConfig, speedServer)
+                                if (automationConfig.loop) {
+                                    automationRunning = true
+                                    automationRunner.start(scope, script) { results ->
+                                        automationResults = results
+                                    }
+                                } else {
+                                    scope.launch {
+                                        automationRunning = true
+                                        automationResults = automationRunner.runOnce(script)
+                                        automationRunning = false
+                                    }
+                                }
+                            },
+                            onStop = {
+                                automationRunner.stop()
+                                automationRunning = false
+                            },
+                        )
+                    }
+                    item {
+                        VideoStreamingCard(
+                            running = videoQoeRunning,
+                            stage = videoQoeStage,
+                            url = videoQoeUrl,
+                            onUrlChange = { videoQoeUrl = it },
+                            result = videoQoeResult,
+                            onRun = {
+                                scope.launch {
+                                    videoQoeRunning = true
+                                    videoQoeStage = null
+                                    videoQoeResult = null
+                                    videoQoeResult = VideoQoeTester(context).run(VideoQoeConfig(url = videoQoeUrl)) {
+                                        videoQoeStage = it
+                                    }
+                                    videoQoeRunning = false
+                                    videoQoeStage = null
+                                }
+                            },
+                        )
+                    }
+                    item {
+                        VoiceCallCard(
+                            running = voiceCallRunning,
+                            stage = voiceCallStage,
+                            number = voiceCallNumber,
+                            onNumberChange = { voiceCallNumber = it },
+                            result = voiceCallResult,
+                            onRun = {
+                                scope.launch {
+                                    voiceCallRunning = true
+                                    voiceCallStage = null
+                                    voiceCallResult = null
+                                    voiceCallResult = VoiceCallTester(context).run(VoiceCallConfig(number = voiceCallNumber)) {
+                                        voiceCallStage = it
+                                    }
+                                    voiceCallRunning = false
+                                    voiceCallStage = null
+                                }
+                            },
+                        )
+                    }
+                }
             }
         }
     }

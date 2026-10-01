@@ -1,7 +1,9 @@
 package com.nhnengineering.rftest.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -84,6 +87,8 @@ fun MapScreen(modifier: Modifier = Modifier) {
     val recording by RecordingState.active.collectAsState()
     val fix by RecordingState.fix.collectAsState()
     val liveCell by RecordingState.cellular.collectAsState()
+    val lockPci by RecordingState.lockWatchPci.collectAsState()
+    val lockArfcn by RecordingState.lockWatchArfcn.collectAsState()
 
     // RecordingState is fed by the recording service, so when idle it holds nothing. The Live tab
     // polls locally for the same reason. Only one tab composes at a time, so this does not double
@@ -213,6 +218,8 @@ fun MapScreen(modifier: Modifier = Modifier) {
                     @Suppress("UNUSED_EXPRESSION") buildingGeneration
 
                     MapKpiStrip(shownCell, shownFix)
+
+                    LockWatchStatus(shownCell, lockPci, lockArfcn)
 
                     Canvas(
                         Modifier
@@ -648,6 +655,63 @@ private const val MAX_TILES = 40L
  *
  * Two rows rather than a grid: this sits above a map that should keep most of the screen.
  */
+/**
+ * Live cell-lock status: when the operator is watching a lock target, says at a glance whether the
+ * phone is currently holding it. The app does not set the lock -- this reads the serving cell and
+ * compares, so the operator sees the moment the phone drifts off the locked cell instead of finding
+ * out only in the report afterwards. Nothing is shown when no target is set.
+ */
+@Composable
+internal fun LockWatchStatus(
+    cell: com.nhnengineering.rftest.model.CellularSample?,
+    targetPci: Int?,
+    targetArfcn: Int?,
+) {
+    if (targetPci == null || targetArfcn == null) return
+
+    // Match against whichever radio actually carries the target, not NR-first: on an LTE lock with
+    // NR aggregated alongside (NSA), NR-first would compare the NR cell to an LTE target and read a
+    // held lock as OFF. Checking both radios is correct for SA, NSA and LTE locks alike.
+    val nrMatch = cell?.nr?.pci == targetPci && cell?.nr?.nrarfcn == targetArfcn
+    val lteMatch = cell?.lte?.pci == targetPci && cell?.lte?.earfcn == targetArfcn
+    val onTarget = nrMatch || lteMatch
+    // What the phone is actually serving on, for the "off" message. NR when registered, else LTE.
+    val servingPci = cell?.nr?.pci ?: cell?.lte?.pci
+    val servingArfcn = cell?.nr?.nrarfcn ?: cell?.lte?.earfcn
+    // Unknown until a serving cell is read: neither on nor off target, so it reads as "waiting"
+    // rather than falsely green or red.
+    val known = servingPci != null
+
+    val bg = when {
+        !known -> Color(0xFF616161)
+        onTarget -> Color(0xFF2E7D32)
+        else -> Color(0xFFC62828)
+    }
+    val label = when {
+        !known -> "LOCK $targetPci/$targetArfcn · waiting for serving cell"
+        onTarget -> "LOCK $targetPci/$targetArfcn · ON TARGET"
+        else -> "LOCK $targetPci/$targetArfcn · OFF — on PCI ${servingPci}/${servingArfcn ?: "—"}"
+    }
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+            .background(bg, RoundedCornerShape(6.dp))
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+    ) {
+        Text(
+            label,
+            color = Color.White,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 @Composable
 private fun MapKpiStrip(
     cell: com.nhnengineering.rftest.model.CellularSample?,

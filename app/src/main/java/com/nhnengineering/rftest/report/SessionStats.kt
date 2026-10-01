@@ -1277,4 +1277,119 @@ object SessionStats {
      *  everywhere else in this file. Null when none of [crossings] kept the same serving cell. */
     fun medianLossDb(crossings: List<Crossing>): Int? =
         crossings.mapNotNull { it.lossDb }.sorted().let { if (it.isEmpty()) null else percentile(it, 50.0) }
+
+    // ---- Lock watch --------------------------------------------------------
+
+    /**
+     * One stretch where the serving cell drifted off the locked target -- the thing a cell-locked
+     * survey most needs flagged, because every sample in it was measured on the wrong cell.
+     */
+    data class OffTargetRun(
+        val samples: Int,
+        val startSeq: Long,
+        val endSeq: Long,
+        /** The PCI the phone actually served on during the run, when one was reported. */
+        val sawPci: Int?,
+        val durationS: Double?,
+        val lat: Double?,
+        val lon: Double?,
+    )
+
+    /**
+     * Whether a watched cell lock actually held across a survey.
+     *
+     * The app does not set the lock (an external tool does); this verifies the *outcome* from the
+     * serving-cell telemetry every sample already carries. A sample is on-target when its serving
+     * PCI **and** ARFCN both match the target -- PCI alone is unique only within a frequency, so
+     * matching it alone would pass a different cell on another channel, the same reasoning
+     * [buildingCrossings] uses for same-cell.
+     */
+    data class LockWatch(
+        val targetPci: Int,
+        val targetArfcn: Int,
+        /** Samples that carried the target and a serving cell to judge against it. */
+        val evaluated: Int,
+        val onTarget: Int,
+        val compliancePct: Double,
+        val offTargetRuns: List<OffTargetRun>,
+    )
+
+    /** Below this many consecutive off-target samples, a drift is momentary reselection noise
+     *  rather than the lock having failed -- same spirit as a coverage hole's minimum run. */
+    const val MIN_OFF_TARGET_RUN = 3
+
+    /** On target when the locked (pci, arfcn) is the serving cell on EITHER radio -- NR-first would
+     *  mislabel an LTE lock with NR aggregated alongside (NSA) as a miss. */
+    private fun TrackPoint.servesLockTarget(pci: Int, arfcn: Int): Boolean =
+        (nrServingPci == pci && nrServingArfcn == arfcn) ||
+            (lteServingPci == pci && lteServingEarfcn == arfcn)
+
+    /** Whether this sample has any serving cell to judge the lock against. */
+    private fun TrackPoint.hasServingCell(): Boolean =
+        nrServingPci != null || lteServingPci != null
+
+    /**
+     * Evaluates the watched lock across [points], or null when no sample carried a lock target.
+     *
+     * The target is the most common (PCI, ARFCN) pair the samples recorded -- sticky in practice,
+     * so this is normally the single value set before the walk; taking the mode rather than the
+     * first tolerates a target set a few samples in. Only samples that both carry the target and
+     * report a serving PCI are evaluated; a sample with no serving cell is neither on- nor
+     * off-target, it is simply unjudgeable, and is left out of the denominator rather than counted
+     * as a failure.
+     */
+    fun lockWatch(points: List<TrackPoint>, minOffTargetRun: Int = MIN_OFF_TARGET_RUN): LockWatch? {
+        val targets = points.mapNotNull { p ->
+            val pci = p.lockWatchPci ?: return@mapNotNull null
+            val arfcn = p.lockWatchArfcn ?: return@mapNotNull null
+            pci to arfcn
+        }
+        if (targets.isEmpty()) return null
+        val (targetPci, targetArfcn) = targets.groupingBy { it }.eachCount().maxByOrNull { it.value }!!.key
+
+        val judged = points.filter {
+            it.lockWatchPci == targetPci && it.lockWatchArfcn == targetArfcn && it.hasServingCell()
+        }
+        var onTarget = 0
+        val runs = mutableListOf<OffTargetRun>()
+        var run = mutableListOf<TrackPoint>()
+
+        fun closeRun() {
+            if (run.size >= minOffTargetRun) {
+                val worst = run.first()
+                val t0 = run.first().timestampUtcMillis
+                val t1 = run.last().timestampUtcMillis
+                runs += OffTargetRun(
+                    samples = run.size,
+                    startSeq = run.first().sequence,
+                    endSeq = run.last().sequence,
+                    sawPci = run.mapNotNull { it.servingPci }.firstOrNull(),
+                    durationS = if (t0 > 0 && t1 > 0) (t1 - t0) / 1000.0 else null,
+                    lat = worst.latitudeDeg,
+                    lon = worst.longitudeDeg,
+                )
+            }
+            run = mutableListOf()
+        }
+
+        for (p in judged) {
+            val onIt = p.servesLockTarget(targetPci, targetArfcn)
+            if (onIt) {
+                onTarget++
+                closeRun()
+            } else {
+                run += p
+            }
+        }
+        closeRun()
+
+        return LockWatch(
+            targetPci = targetPci,
+            targetArfcn = targetArfcn,
+            evaluated = judged.size,
+            onTarget = onTarget,
+            compliancePct = if (judged.isEmpty()) 0.0 else 100.0 * onTarget / judged.size,
+            offTargetRuns = runs.sortedByDescending { it.samples },
+        )
+    }
 }

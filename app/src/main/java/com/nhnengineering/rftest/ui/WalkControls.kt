@@ -17,6 +17,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.nhnengineering.rftest.service.RecordingState
 
 /**
  * The controls an operator touches **while walking**, and nothing else.
@@ -551,6 +553,77 @@ fun LabelEntry(onArea: (String?) -> Unit, onFloor: (String?) -> Unit) {
             OutlinedButton(onClick = { onFloor(null) }, modifier = Modifier.weight(1f)) {
                 Text("Clear floor", maxLines = 1)
             }
+        }
+    }
+}
+
+/**
+ * Sets the cell-lock target the app watches for — the PCI and ARFCN of a lock set in an external
+ * tool (the handset's RF toolkit, Cellular-Pro, etc.). The app does not set the lock; this only
+ * tells it what to verify the serving cell against, so a locked survey can be proven to have held.
+ *
+ * Reads and writes [RecordingState] directly rather than threading callbacks through the setup
+ * panel: the target is process-scoped session state like the other sticky fields, and keeping it
+ * self-contained avoids growing [SetupPanel]'s already-large signature for a two-field control.
+ */
+@Composable
+fun LockWatchEntry() {
+    val currentPci by RecordingState.lockWatchPci.collectAsState()
+    val currentArfcn by RecordingState.lockWatchArfcn.collectAsState()
+    var pciText by remember { mutableStateOf("") }
+    var arfcnText by remember { mutableStateOf("") }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            if (currentPci != null && currentArfcn != null) {
+                "Watching lock: PCI $currentPci / ARFCN $currentArfcn"
+            } else {
+                "No lock target set. Enter the PCI and ARFCN you locked to externally to verify it holds."
+            },
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = pciText,
+                onValueChange = { pciText = it.filter { c -> c.isDigit() } },
+                label = { Text("Target PCI") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = arfcnText,
+                onValueChange = { arfcnText = it.filter { c -> c.isDigit() } },
+                label = { Text("Target ARFCN") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Button(
+                onClick = {
+                    val pci = pciText.trim().toIntOrNull()
+                    val arfcn = arfcnText.trim().toIntOrNull()
+                    // Both are required: a PCI is unique only within a frequency, so a target
+                    // without its ARFCN cannot be checked against the serving cell unambiguously.
+                    if (pci != null && arfcn != null) {
+                        RecordingState.lockWatchPci.value = pci
+                        RecordingState.lockWatchArfcn.value = arfcn
+                        pciText = ""; arfcnText = ""
+                    }
+                },
+                modifier = Modifier.weight(1f),
+            ) { Text("Watch", maxLines = 1) }
+            OutlinedButton(
+                onClick = {
+                    RecordingState.lockWatchPci.value = null
+                    RecordingState.lockWatchArfcn.value = null
+                },
+                modifier = Modifier.weight(1f),
+            ) { Text("Clear lock watch", maxLines = 1) }
         }
     }
 }

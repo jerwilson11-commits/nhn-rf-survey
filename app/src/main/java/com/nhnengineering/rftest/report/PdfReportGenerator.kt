@@ -486,6 +486,68 @@ object PdfReportGenerator {
             c.gap(); c.rule()
         }
 
+        // ---- Cell lock compliance -------------------------------------------
+        //
+        // Proves whether a watched external cell lock actually held across the walk. The app did
+        // not set the lock; this verifies the outcome from serving-cell telemetry -- see
+        // SessionStats.lockWatch.
+        val lockWatch = SessionStats.lockWatch(points)
+        if (lockWatch != null) {
+            c.ensure(150f)
+            c.text("Cell lock compliance", c.h2)
+            c.para(
+                "The handset was locked to PCI ${lockWatch.targetPci} on ARFCN " +
+                    "${lockWatch.targetArfcn} (set in an external tool, not by this app). Each sample's " +
+                    "serving cell was checked against that target; a sample counts as on-target only " +
+                    "when both its PCI and ARFCN match. Samples with no serving cell to judge are " +
+                    "excluded rather than counted as failures.",
+            )
+            c.gap()
+            c.text(
+                "Lock held on ${lockWatch.onTarget} of ${lockWatch.evaluated} evaluable samples " +
+                    "(${String.format(Locale.US, "%.1f", lockWatch.compliancePct)}%).",
+                c.paint(10f, bold = true),
+            )
+            if (lockWatch.offTargetRuns.isEmpty()) {
+                c.gap(4f)
+                c.text(
+                    if (lockWatch.compliancePct >= 100.0) {
+                        "No off-target stretch: the phone stayed on the locked cell throughout."
+                    } else {
+                        "Off-target samples were scattered, with no sustained run of " +
+                            "${SessionStats.MIN_OFF_TARGET_RUN}+ -- momentary reselection rather than the lock failing."
+                    },
+                    c.body,
+                )
+            } else {
+                c.gap()
+                c.text(
+                    "Sustained off-target stretches (${SessionStats.MIN_OFF_TARGET_RUN}+ samples), worst first:",
+                    c.body,
+                )
+                c.gap(4f)
+                c.text(
+                    String.format(Locale.US, "%-6s %-9s %-10s %-8s %s", "#", "Samples", "Saw PCI", "Secs", "Location"),
+                    c.monoBold,
+                )
+                lockWatch.offTargetRuns.take(20).forEachIndexed { i, r ->
+                    val where = if (r.lat != null && r.lon != null) {
+                        String.format(Locale.US, "%.5f,%.5f", r.lat, r.lon)
+                    } else "not located"
+                    c.text(
+                        String.format(
+                            Locale.US, "%-6d %-9d %-10s %-8s %s",
+                            i + 1, r.samples, r.sawPci?.toString() ?: "—",
+                            r.durationS?.let { String.format(Locale.US, "%.0f", it) } ?: "—",
+                            where.take(32),
+                        ),
+                        c.mono,
+                    )
+                }
+            }
+            c.gap(); c.rule()
+        }
+
         // ---- Public Safety Coverage -----------------------------------------
         //
         // Track A (manual LMR entry) and Track B (FirstNet Band 14/n14, auto-measured) never

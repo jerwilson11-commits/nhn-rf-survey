@@ -173,6 +173,8 @@ class RecordingService : Service() {
                             errcsAreaClass = RecordingState.errcsAreaClass.value,
                             bandLock = RecordingState.bandLock.value,
                             ratLock = RecordingState.ratLock.value,
+                            lockWatchPci = RecordingState.lockWatchPci.value,
+                            lockWatchArfcn = RecordingState.lockWatchArfcn.value,
                             throughput = throughput,
                             note = if (throughput != null) "speedtest" else null,
                         )

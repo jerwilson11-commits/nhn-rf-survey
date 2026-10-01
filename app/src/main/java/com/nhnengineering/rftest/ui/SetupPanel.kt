@@ -126,6 +126,10 @@ fun SetupPanel(
 
             Text("Labels", style = MaterialTheme.typography.titleSmall)
             LabelEntry(onArea = onArea, onFloor = onFloor)
+
+            HorizontalDivider()
+            Text("Cell lock watch", style = MaterialTheme.typography.titleSmall)
+            LockWatchEntry()
             ErrcsAreaClassControl(
                 current = errcsAreaClass,
                 onChange = onErrcsAreaClass,

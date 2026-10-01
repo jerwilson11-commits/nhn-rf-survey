@@ -633,4 +633,129 @@ class SessionStatsTest {
         )
         assertEquals(17, SessionStats.medianLossDb(one))
     }
+
+    // ---- Lock watch --------------------------------------------------------
+
+    /** A sample serving on a single NR cell (SA), carrying a lock target. */
+    private fun lwPt(
+        seq: Long,
+        servingPci: Int?,
+        servingArfcn: Int?,
+        targetPci: Int?,
+        targetArfcn: Int?,
+    ) = TrackPoint(
+        sequence = seq, timestampUtcMillis = 1_756_000_000_000 + seq * 1000,
+        latitudeDeg = 26.0, longitudeDeg = -80.0, accuracyM = null, speedMps = null,
+        rssiDbm = null, ssid = null, bssid = null, channel = null, band = null,
+        coChannel = null, adjacentChannel = null,
+        rsrpDbm = -90, sinrDb = null, rsrqDb = null, cellBand = "n66", rat = "5G SA",
+        floorplanId = null, floorplanX = null, floorplanY = null, waypoint = null,
+        servingPci = servingPci,
+        lockWatchPci = targetPci,
+        lockWatchArfcn = targetArfcn,
+        nrServingPci = servingPci,
+        nrServingArfcn = servingArfcn,
+    )
+
+    /** A sample serving on an LTE cell with an NR cell aggregated alongside (NSA) -- the case that
+     *  caught the NR-first precedence bug. */
+    private fun lwNsaPt(
+        seq: Long,
+        lteServingPci: Int?,
+        lteServingEarfcn: Int?,
+        nrServingPci: Int?,
+        nrServingArfcn: Int?,
+        targetPci: Int?,
+        targetArfcn: Int?,
+    ) = TrackPoint(
+        sequence = seq, timestampUtcMillis = 1_756_000_000_000 + seq * 1000,
+        latitudeDeg = 26.0, longitudeDeg = -80.0, accuracyM = null, speedMps = null,
+        rssiDbm = null, ssid = null, bssid = null, channel = null, band = null,
+        coChannel = null, adjacentChannel = null,
+        rsrpDbm = -90, sinrDb = null, rsrqDb = null, cellBand = "B66", rat = "5G NSA",
+        floorplanId = null, floorplanX = null, floorplanY = null, waypoint = null,
+        servingPci = nrServingPci ?: lteServingPci,
+        lockWatchPci = targetPci,
+        lockWatchArfcn = targetArfcn,
+        nrServingPci = nrServingPci,
+        nrServingArfcn = nrServingArfcn,
+        lteServingPci = lteServingPci,
+        lteServingEarfcn = lteServingEarfcn,
+    )
+
+    @Test
+    fun `no lock target yields null`() {
+        val pts = listOf(lwPt(0, 929, 427230, null, null), lwPt(1, 929, 427230, null, null))
+        assertNull(SessionStats.lockWatch(pts))
+    }
+
+    @Test
+    fun `a held lock reports full compliance and no off-target runs`() {
+        val pts = (0L until 5L).map { lwPt(it, 929, 427230, 929, 427230) }
+        val lw = SessionStats.lockWatch(pts)!!
+        assertEquals(929, lw.targetPci)
+        assertEquals(427230, lw.targetArfcn)
+        assertEquals(5, lw.evaluated)
+        assertEquals(5, lw.onTarget)
+        assertEquals(100.0, lw.compliancePct, 0.001)
+        assertTrue(lw.offTargetRuns.isEmpty())
+    }
+
+    @Test
+    fun `matching PCI on the wrong ARFCN is off-target`() {
+        // Same PCI, different frequency -- a different physical cell, must not count as on-target.
+        val pts = (0L until 4L).map { lwPt(it, 929, 999999, 929, 427230) }
+        val lw = SessionStats.lockWatch(pts)!!
+        assertEquals(0, lw.onTarget)
+        assertEquals(4, lw.evaluated)
+    }
+
+    @Test
+    fun `a sustained off-target stretch is flagged, a momentary one is not`() {
+        val pts = listOf(
+            lwPt(0, 929, 427230, 929, 427230),   // on
+            lwPt(1, 517, 500000, 929, 427230),   // off (momentary, 1 sample)
+            lwPt(2, 929, 427230, 929, 427230),   // on
+            lwPt(3, 517, 500000, 929, 427230),   // off run of 3 begins
+            lwPt(4, 517, 500000, 929, 427230),
+            lwPt(5, 517, 500000, 929, 427230),
+            lwPt(6, 929, 427230, 929, 427230),   // back on
+        )
+        val lw = SessionStats.lockWatch(pts)!!
+        assertEquals(7, lw.evaluated)
+        assertEquals(3, lw.onTarget)
+        assertEquals(1, lw.offTargetRuns.size)
+        val run = lw.offTargetRuns.first()
+        assertEquals(3, run.samples)
+        assertEquals(517, run.sawPci)
+    }
+
+    @Test
+    fun `samples with no serving cell are excluded from the denominator, not counted as failures`() {
+        val pts = listOf(
+            lwPt(0, 929, 427230, 929, 427230),   // on
+            lwPt(1, null, null, 929, 427230),    // unjudgeable -- no serving cell
+            lwPt(2, 929, 427230, 929, 427230),   // on
+        )
+        val lw = SessionStats.lockWatch(pts)!!
+        assertEquals(2, lw.evaluated)
+        assertEquals(2, lw.onTarget)
+        assertEquals(100.0, lw.compliancePct, 0.001)
+    }
+
+    @Test
+    fun `an LTE lock held under NSA counts as on-target despite an NR cell aggregated alongside`() {
+        // The bug this guards: serving on LTE B66 114/66836 (the locked cell) with NR n25 929/396250
+        // aggregated. NR-first precedence would compare 929 to the 114 target and read a held lock
+        // as a miss. Checking both radios, the LTE match wins.
+        val pts = (0L until 4L).map {
+            lwNsaPt(it, lteServingPci = 114, lteServingEarfcn = 66836, nrServingPci = 929, nrServingArfcn = 396250, targetPci = 114, targetArfcn = 66836)
+        }
+        val lw = SessionStats.lockWatch(pts)!!
+        assertEquals(114, lw.targetPci)
+        assertEquals(66836, lw.targetArfcn)
+        assertEquals(4, lw.evaluated)
+        assertEquals(4, lw.onTarget)
+        assertEquals(100.0, lw.compliancePct, 0.001)
+    }
 }

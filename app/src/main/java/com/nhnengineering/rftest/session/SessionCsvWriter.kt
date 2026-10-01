@@ -180,6 +180,10 @@ private val INDOOR_COLUMNS = listOf(
     // FirstNet Band 14/n14 rows -- everything downstream that reads this column must filter on
     // band too, never trust the classification alone.
     "errcs_area_class",
+    // Lock watch: the externally-set cell lock the operator is verifying, PCI + ARFCN. Checked
+    // per-sample against the serving cell so a locked survey can be proven to have held the lock --
+    // see report/SessionStats.lockWatch. Both null on a free-running walk.
+    "lock_watch_pci", "lock_watch_arfcn",
 )
 
 private val TRAILING_COLUMNS = listOf("note")
@@ -372,6 +376,8 @@ internal fun MeasurementSample.toCsvRow(): String {
     cells += bandLock
     cells += ratLock
     cells += errcsAreaClass?.name
+    cells += lockWatchPci?.toString()
+    cells += lockWatchArfcn?.toString()
 
     cells += note
 

@@ -264,6 +264,11 @@ data class MeasurementSample(
     val bandLock: String? = null,
     /** Radio technology the operator declared the handset restricted to. */
     val ratLock: String? = null,
+    /** Target cell of an externally-set lock being watched (PCI + ARFCN), null when not watching.
+     *  Unlike [bandLock]/[ratLock] these are checked against the live serving cell per sample, so a
+     *  locked survey can be proven to have held -- see `report/SessionStats.lockWatch`. */
+    val lockWatchPci: Int? = null,
+    val lockWatchArfcn: Int? = null,
     /** Present only on the sample written when a speed test completes, so the throughput row
      *  carries the position and RF conditions the test actually ran under. */
     val throughput: ThroughputSample? = null,

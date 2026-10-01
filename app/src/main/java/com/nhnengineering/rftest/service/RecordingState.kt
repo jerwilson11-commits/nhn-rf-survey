@@ -117,6 +117,22 @@ object RecordingState {
     val ratLock = MutableStateFlow<String?>(null)
 
     /**
+     * The PCI the operator is watching for -- the target of a cell lock set externally (in the
+     * handset's RF toolkit or a tool like Cellular-Pro), or null when not watching a lock.
+     *
+     * Unlike [bandLock]/[ratLock] this is not a free-text declaration: it is a concrete target the
+     * app actively checks the live serving cell against, sample by sample, so a locked survey can be
+     * proven to have held the lock rather than merely asserted to. Nothing here performs the lock;
+     * this only verifies the outcome, from the same serving-cell telemetry every sample already
+     * carries. A PCI is unique only within a frequency, so it is paired with [lockWatchArfcn] --
+     * matching PCI alone would call a different cell on another channel "on target."
+     */
+    val lockWatchPci = MutableStateFlow<Int?>(null)
+
+    /** The NR-ARFCN / EARFCN the lock targets, paired with [lockWatchPci]. */
+    val lockWatchArfcn = MutableStateFlow<Int?>(null)
+
+    /**
      * Positions logged this session, paired with the serving KPI colour recorded there, for
      * drawing on the floorplan. Capped so a long session cannot grow this without bound — the
      * authoritative record is the CSV, this is only what the plan draws.
