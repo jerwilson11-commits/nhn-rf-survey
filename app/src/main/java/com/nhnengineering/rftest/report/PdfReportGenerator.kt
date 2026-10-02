@@ -1681,7 +1681,11 @@ object PdfReportGenerator {
     ) {
         val planId = summary.floorplanIds.firstOrNull()
         val indoor = points.filter { it.hasIndoorPosition }
-        val gps = points.filter { it.hasGpsPosition }
+        // A hand-placed sample on a georeferenced floor now also carries a real lat/lon (derived from
+        // the plan), so it satisfies hasGpsPosition too. It belongs on the floorplan page, not the
+        // GPS-track page -- it is not a GPS fix and must not be graded as one -- so the GPS track is
+        // the samples that were placed by GPS alone.
+        val gps = points.filter { it.hasGpsPosition && !it.hasIndoorPosition }
 
         // A floorplan session that also recorded usable GPS gets the walked GPS track on its own
         // page first, so the reader can compare the handset's ground truth against the operator's

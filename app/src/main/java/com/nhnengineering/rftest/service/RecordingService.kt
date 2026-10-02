@@ -17,8 +17,11 @@ import com.nhnengineering.rftest.MainActivity
 import com.nhnengineering.rftest.R
 import com.nhnengineering.rftest.cellular.CellularCollector
 import com.nhnengineering.rftest.location.LocationCollector
+import com.nhnengineering.rftest.map.GeoReference
+import com.nhnengineering.rftest.model.GeoPoint
 import com.nhnengineering.rftest.model.MeasurementSample
 import com.nhnengineering.rftest.ui.indoorPointColor
+import com.nhnengineering.rftest.session.BuildingStore
 import com.nhnengineering.rftest.session.SessionCsvWriter
 import com.nhnengineering.rftest.wifi.WifiCollector
 import kotlinx.coroutines.CoroutineScope
@@ -141,6 +144,17 @@ class RecordingService : Service() {
                 .getOrNull() ?: run { stopRecording(); return@launch }
             writer = w
 
+            // Resolve every georeferenced floor once for the session. A hand-placed indoor sample on
+            // a georeferenced plan is then stamped with a real lat/lon derived from its (u,v), so the
+            // indoor walk carries true coordinates into the CSV, iBwave/KML exports, and the report --
+            // which it otherwise cannot, GPS being unusable indoors. Floors without a georeference are
+            // unaffected (the sample keeps whatever GPS fix it had).
+            val georefMap: Map<String, GeoReference> = runCatching {
+                BuildingStore.load(this@RecordingService)
+                    .flatMap { it.resolve().entries.map { e -> e.key to e.value } }
+                    .toMap()
+            }.getOrDefault(emptyMap())
+
             var sequence = 0L
             var lastSpeed: Float? = null
             var lastFixTime: Long? = null
@@ -158,16 +172,32 @@ class RecordingService : Service() {
                 val throughput = RecordingState.pendingThroughput.value
                 if (throughput != null) RecordingState.pendingThroughput.value = null
 
+                // A hand-placed position on a georeferenced floor becomes the sample's location, as a
+                // real lat/lon. Provider "floorplan" marks it as derived from the plan, not a GPS fix.
+                val indoorNow = RecordingState.indoorPosition.value
+                val geo = indoorNow?.let { georefMap[it.floorplanId] }
+                val sampleLocation = if (indoorNow != null && geo != null) {
+                    val (la, lo) = geo.toLatLon(indoorNow.xNorm.toDouble(), indoorNow.yNorm.toDouble())
+                    GeoPoint(
+                        latitudeDeg = la, longitudeDeg = lo,
+                        altitudeM = null, accuracyM = null, speedMps = null, bearingDeg = null,
+                        fixTimeUtcMillis = System.currentTimeMillis(), fixAgeMs = null,
+                        provider = "floorplan",
+                    )
+                } else {
+                    fixNow
+                }
+
                 runCatching {
                     w.writeRow(
                         MeasurementSample(
                             sessionId = w.sessionId,
                             sequence = sequence++,
                             timestampUtcMillis = System.currentTimeMillis(),
-                            location = fixNow,
+                            location = sampleLocation,
                             wifi = wifiNow,
                             cellular = cellNow,
-                            indoor = RecordingState.indoorPosition.value,
+                            indoor = indoorNow,
                             areaLabel = RecordingState.areaLabel.value,
                             floor = RecordingState.floor.value,
                             errcsAreaClass = RecordingState.errcsAreaClass.value,
