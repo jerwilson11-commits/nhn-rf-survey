@@ -124,7 +124,7 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
     // Georeferencing is its own full-tab flow (satellite tie points + floor stacking); the bottom
     // nav stays so the operator can step away from it.
     if (geoMode) {
-        GeoreferenceScreen(onExit = { geoMode = false })
+        GeoreferenceScreen(modifier = modifier, onExit = { geoMode = false })
         return
     }
 
