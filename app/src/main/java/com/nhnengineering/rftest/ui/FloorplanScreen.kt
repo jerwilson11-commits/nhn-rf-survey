@@ -325,10 +325,14 @@ internal fun FloorplanCanvas(
             .pointerInput(plan.id) {
                 detectTransformGestures { _, pan, zoom, _ ->
                     scale = (scale * zoom).coerceIn(1f, 8f)
-                    // Clamp pan so the image cannot be dragged entirely off screen, which at high
-                    // zoom is easy to do and leaves the operator staring at blank space.
-                    val maxX = size.width * (scale - 1f) / 2f
-                    val maxY = size.height * (scale - 1f) / 2f
+                    // Pan clamp. For normal viewing, (scale-1)/2 keeps the image filling the viewport
+                    // so the operator never stares at blank space. For crosshair placement the limit
+                    // is scale/2 instead: that lets the centre crosshair travel to any point of the
+                    // image -- every edge and corner -- which viewing-clamp made unreachable, so a
+                    // feature on the far (east) side of the plan could not be aimed at.
+                    val panFactor = if (showCrosshair) scale else (scale - 1f)
+                    val maxX = size.width * panFactor / 2f
+                    val maxY = size.height * panFactor / 2f
                     offset = Offset(
                         (offset.x + pan.x).coerceIn(-maxX, maxX),
                         (offset.y + pan.y).coerceIn(-maxY, maxY),
