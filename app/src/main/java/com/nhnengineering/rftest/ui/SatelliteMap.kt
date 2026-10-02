@@ -120,11 +120,16 @@ fun SatelliteMap(
                 drawCircle(Color(ring), radius = 6f, center = Offset(sx, sy))
             }
 
-            // Centre crosshair, so a tap can be aimed precisely.
+            // Centre crosshair -- the aim point for confirm-at-centre placement. Red over a white
+            // halo so it reads against any imagery (matching the floorplan crosshair).
             val cxp = size.width / 2f
             val cyp = size.height / 2f
-            drawLine(Color.White, Offset(cxp - 16f, cyp), Offset(cxp + 16f, cyp), strokeWidth = 1.5f)
-            drawLine(Color.White, Offset(cxp, cyp - 16f), Offset(cxp, cyp + 16f), strokeWidth = 1.5f)
+            val red = Color(0xFFD32F2F)
+            drawLine(Color.White, Offset(cxp - 28f, cyp), Offset(cxp + 28f, cyp), strokeWidth = 5f)
+            drawLine(Color.White, Offset(cxp, cyp - 28f), Offset(cxp, cyp + 28f), strokeWidth = 5f)
+            drawLine(red, Offset(cxp - 26f, cyp), Offset(cxp + 26f, cyp), strokeWidth = 2.5f)
+            drawLine(red, Offset(cxp, cyp - 26f), Offset(cxp, cyp + 26f), strokeWidth = 2.5f)
+            drawCircle(red, radius = 4f, center = Offset(cxp, cyp))
         }
     }
 }

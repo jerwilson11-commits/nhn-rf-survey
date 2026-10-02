@@ -79,6 +79,8 @@ fun GeoreferenceScreen(modifier: Modifier = Modifier, onExit: () -> Unit) {
 
     var capture by remember { mutableStateOf(Capture.NONE) }
     var planPick by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    // The (u,v) under the plan crosshair right now, updated as the operator pans/zooms.
+    var planCenter by remember { mutableStateOf(0.5f to 0.5f) }
 
     val fix by RecordingState.fix.collectAsState()
     var satLat by remember { mutableStateOf(fix?.latitudeDeg ?: 26.05) }
@@ -110,11 +112,11 @@ fun GeoreferenceScreen(modifier: Modifier = Modifier, onExit: () -> Unit) {
     if (capture == Capture.PLAN && refPlan != null && bmp != null) {
         FullScreenCapture(
             modifier = modifier,
-            title = "Step 1 — tap the feature on ${refPlan.displayName}",
+            title = "Step 1 — pinch/drag so the crosshair sits on the feature",
             onCancel = { capture = Capture.NONE; planPick = null },
-            primaryLabel = if (planPick != null) "Next: find it on the map ▶" else "Tap a feature first",
-            primaryEnabled = planPick != null,
-            onPrimary = { capture = Capture.SATELLITE },
+            primaryLabel = "Next: find it on the map ▶",
+            primaryEnabled = true,
+            onPrimary = { planPick = planCenter; capture = Capture.SATELLITE },
         ) {
             BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 val fit = if (maxWidth.value / maxHeight.value > refPlan.aspectRatio) {
@@ -126,9 +128,11 @@ fun GeoreferenceScreen(modifier: Modifier = Modifier, onExit: () -> Unit) {
                     plan = refPlan,
                     bitmap = bmp,
                     placed = emptyList(),
-                    currentPosition = planPick?.let { IndoorPosition(refPlan.id, it.first, it.second, "tie") },
-                    onTap = { u, v -> planPick = u to v },
+                    currentPosition = null,
+                    onTap = { _, _ -> },
                     boxModifier = fit,
+                    onCenterChange = { u, v -> planCenter = u to v },
+                    showCrosshair = true,
                 )
             }
         }
@@ -139,11 +143,15 @@ fun GeoreferenceScreen(modifier: Modifier = Modifier, onExit: () -> Unit) {
     if (capture == Capture.SATELLITE) {
         FullScreenCapture(
             modifier = modifier,
-            title = "Step 2 — tap the same spot on the map",
+            title = "Step 2 — pan so the crosshair sits on the same spot",
             onCancel = { capture = Capture.NONE; planPick = null },
-            primaryLabel = "Zoom + / − and tap the feature",
-            primaryEnabled = false,
-            onPrimary = {},
+            primaryLabel = "Confirm tie point ✓",
+            primaryEnabled = true,
+            onPrimary = {
+                planPick?.let { tiePoints.add(TiePoint(it.first.toDouble(), it.second.toDouble(), satLat, satLon)) }
+                planPick = null
+                capture = Capture.NONE
+            },
             controls = {
                 FilledTonalButton(onClick = { if (satZoom > 2) satZoom-- }, modifier = Modifier.weight(1f)) { Text("Zoom −") }
                 FilledTonalButton(onClick = { if (satZoom < 21) satZoom++ }, modifier = Modifier.weight(1f)) { Text("Zoom +") }
@@ -158,11 +166,7 @@ fun GeoreferenceScreen(modifier: Modifier = Modifier, onExit: () -> Unit) {
                 centerLat = satLat, centerLon = satLon, zoom = satZoom,
                 onCenterChange = { la, lo -> satLat = la; satLon = lo },
                 onZoomChange = { satZoom = it },
-                onTapLatLon = { la, lo ->
-                    planPick?.let { tiePoints.add(TiePoint(it.first.toDouble(), it.second.toDouble(), la, lo)) }
-                    planPick = null
-                    capture = Capture.NONE
-                },
+                onTapLatLon = { _, _ -> },   // aim with the fixed crosshair; Confirm commits the centre
                 markers = tiePoints.map { it.lat to it.lon },
             )
         }
@@ -231,8 +235,9 @@ fun GeoreferenceScreen(modifier: Modifier = Modifier, onExit: () -> Unit) {
 
         val inheritCount = (includedPlans.size - 1).coerceAtLeast(0)
         Text(
-            "Add 2+ tie points to the reference floor. The other $inheritCount same-size floor(s) " +
-                "inherit it automatically — no need to tie-point them.",
+            "Add 2+ tie points to the reference floor — place them far apart, ideally opposite " +
+                "corners, for the best fit. The other $inheritCount same-size floor(s) inherit " +
+                "automatically.",
             style = MaterialTheme.typography.bodySmall,
         )
 

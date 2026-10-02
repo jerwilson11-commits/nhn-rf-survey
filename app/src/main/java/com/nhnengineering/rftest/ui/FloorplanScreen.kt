@@ -298,16 +298,27 @@ internal fun FloorplanCanvas(
     // only HOW it fits -- fill width (the scrolling screen) or fit height (walk mode in landscape) --
     // so the sizing is injected while the aspect-ratio lock lives here.
     boxModifier: Modifier = Modifier.fillMaxWidth().aspectRatio(plan.aspectRatio),
+    // When set, the normalized (u,v) currently under the box centre is reported on every pan/zoom.
+    // Paired with [showCrosshair], this drives aim-the-crosshair-then-confirm placement, which is
+    // far steadier than trying to land a precise tap (and sidesteps tap/transform gesture contention).
+    onCenterChange: ((Float, Float) -> Unit)? = null,
+    showCrosshair: Boolean = false,
 ) {
     var scale by remember(plan.id) { mutableStateOf(1f) }
     var offset by remember(plan.id) { mutableStateOf(Offset.Zero) }
     val outline = MaterialTheme.colorScheme.onSurface
-    // The tap gesture below lives in a pointerInput keyed only on plan.id, so it does NOT restart
-    // when a new onTap lambda arrives on recomposition -- it would otherwise freeze the first onTap
-    // (and the label it closed over) for the life of the plan, stamping every tap with whatever label
-    // was present when the canvas first composed. rememberUpdatedState keeps the gesture calling the
-    // current handler, so each tap reads the live waypoint label.
+    // The gestures below live in a pointerInput keyed only on plan.id, so they do NOT restart when a
+    // new lambda arrives on recomposition -- that would freeze the first lambda (and anything it
+    // closed over). rememberUpdatedState keeps them calling the current handlers.
     val currentOnTap by rememberUpdatedState(onTap)
+    val currentOnCenter by rememberUpdatedState(onCenterChange)
+
+    fun reportCentre(w: Float, h: Float) {
+        // (u,v) under the box centre given the current pan/zoom. See the inverse-transform note below.
+        val u = (0.5f - offset.x / (scale * w)).coerceIn(0f, 1f)
+        val v = (0.5f - offset.y / (scale * h)).coerceIn(0f, 1f)
+        currentOnCenter?.invoke(u, v)
+    }
 
     Box(
         boxModifier
@@ -322,6 +333,7 @@ internal fun FloorplanCanvas(
                         (offset.x + pan.x).coerceIn(-maxX, maxX),
                         (offset.y + pan.y).coerceIn(-maxY, maxY),
                     )
+                    reportCentre(size.width.toFloat(), size.height.toFloat())
                 }
             }
             .pointerInput(plan.id) {
@@ -391,6 +403,17 @@ internal fun FloorplanCanvas(
                 drawCircle(color = outline, radius = 16f, center = c, style = Stroke(width = 4f))
                 drawCircle(color = outline, radius = 4f, center = c)
                 it.label?.let { l -> drawContext.canvas.nativeCanvas.drawText(l, c.x + 20f, c.y + 4f, labelPaint) }
+            }
+
+            // Fixed centre crosshair for aim-then-confirm placement: the operator pans the plan so the
+            // feature sits under this, then confirms -- no precise tap required.
+            if (showCrosshair) {
+                val red = Color(0xFFD32F2F)
+                drawLine(Color.White, Offset(cx - 26f, cy), Offset(cx + 26f, cy), strokeWidth = 4f)
+                drawLine(Color.White, Offset(cx, cy - 26f), Offset(cx, cy + 26f), strokeWidth = 4f)
+                drawLine(red, Offset(cx - 24f, cy), Offset(cx + 24f, cy), strokeWidth = 2f)
+                drawLine(red, Offset(cx, cy - 24f), Offset(cx, cy + 24f), strokeWidth = 2f)
+                drawCircle(red, radius = 4f, center = Offset(cx, cy))
             }
         }
     }
