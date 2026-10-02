@@ -75,6 +75,7 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
     var selected by remember { mutableStateOf<Floorplan?>(null) }
     var bitmap by remember { mutableStateOf<ImageBitmap?>(null) }
     var label by remember { mutableStateOf("") }
+    var geoMode by remember { mutableStateOf(false) }
 
     val current by RecordingState.indoorPosition.collectAsState()
     val placed by RecordingState.placedPositions.collectAsState()
@@ -120,6 +121,13 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
     // canvas. Guard on bitmap too -- entering with nothing to tap would strand the user on a blank
     // screen behind a hidden nav bar. If the bitmap is somehow absent, fall through to the normal
     // layout (which carries its own loader) rather than showing an empty walk screen.
+    // Georeferencing is its own full-tab flow (satellite tie points + floor stacking); the bottom
+    // nav stays so the operator can step away from it.
+    if (geoMode) {
+        GeoreferenceScreen(onExit = { geoMode = false })
+        return
+    }
+
     val plan0 = selected
     val bmp0 = bitmap
     if (walk && plan0 != null && bmp0 != null) {
@@ -158,6 +166,11 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Load floorplan (PDF or image)") }
+
+                    OutlinedButton(
+                        onClick = { geoMode = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Georeference floors (building)") }
 
                     if (plans.isNotEmpty()) {
                         HorizontalDivider()
