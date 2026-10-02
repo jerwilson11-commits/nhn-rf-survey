@@ -121,15 +121,31 @@ class GeoReferenceTest {
     }
 
     @Test
-    fun `a floor that can be neither solved nor inherited is omitted`() {
+    fun `a floor of a different frame with no tie points or anchor is omitted`() {
         val ref = FloorGeoref(
             "f1.png", W, H, "1",
             tiePoints = listOf(tie(0.1, 0.2), tie(0.9, 0.3)),
             stackAnchorU = 0.5, stackAnchorV = 0.5,
         )
-        val orphan = FloorGeoref("f3.png", W, H, "3")  // no tie points, no anchor
+        // Different pixel frame and no anchor/tie points -> cannot be placed, must be omitted.
+        val orphan = FloorGeoref("f3.png", W / 2, H / 3, "3")
         val geos = Building("b1", "Tower", "f1.png", listOf(ref, orphan)).resolve()
         assertTrue(geos.containsKey("f1.png"))
-        assertTrue("orphan floor must not be guessed at", !geos.containsKey("f3.png"))
+        assertTrue("differently-framed orphan must not be guessed at", !geos.containsKey("f3.png"))
+    }
+
+    @Test
+    fun `floors sharing the reference frame inherit its transform directly`() {
+        // The single-multi-page-PDF case: every page is the same drawing frame, so one georeference
+        // of the reference page places them all -- no per-floor anchors.
+        val ref = FloorGeoref("f1.png", W, H, "1", tiePoints = listOf(tie(0.1, 0.2), tie(0.9, 0.3)))
+        val up = FloorGeoref("f2.png", W, H, "2")  // same size, no tie points, no anchor
+        val geos = Building("tower", "Tower", "f1.png", listOf(ref, up)).resolve()
+        val g1 = geos["f1.png"]!!
+        val g2 = geos["f2.png"]!!
+        for ((u, v) in listOf(0.3 to 0.7, 0.8 to 0.2)) {
+            assertEquals(g1.toLatLon(u, v).first, g2.toLatLon(u, v).first, 1e-12)
+            assertEquals(g1.toLatLon(u, v).second, g2.toLatLon(u, v).second, 1e-12)
+        }
     }
 }

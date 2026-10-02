@@ -99,11 +99,16 @@ object FloorplanStore {
     private const val PDF_MAX_EDGE_PX = 3000
 
     /**
-     * Rasterises the first page of a PDF into a PNG in the floorplan store.
+     * Rasterises **every page** of a PDF into its own PNG in the floorplan store, returning the first.
+     *
+     * Walk-test plan sets routinely arrive as one multi-page PDF -- a whole building's floors (the
+     * Margaritaville set is 17 pages) on a single file. Importing only page one stranded the other
+     * floors, so every page becomes a floorplan here (`<base>-p01`, `-p02`, ...); the georeference
+     * screen then groups them into a building. A single-page PDF keeps its plain base name.
      *
      * [PdfRenderer] needs a seekable file descriptor, so the content is copied to a temp file first.
-     * The page is rendered onto a white background because many PDFs are transparent and a floor
-     * plan on a transparent (-> black, on ARGB_8888) field is unreadable.
+     * Each page is rendered onto a white background because many PDFs are transparent and a floor plan
+     * on a transparent (-> black, on ARGB_8888) field is unreadable.
      */
     private fun importPdf(context: Context, uri: Uri, base: String): Floorplan? {
         val tmp = File.createTempFile("fp_import_", ".pdf", context.cacheDir)
@@ -114,25 +119,16 @@ object FloorplanStore {
 
             ParcelFileDescriptor.open(tmp, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
                 PdfRenderer(pfd).use { renderer ->
-                    if (renderer.pageCount < 1) return null
-                    renderer.openPage(0).use { page ->
-                        var w = (page.width * PDF_RENDER_SCALE).toInt().coerceAtLeast(1)
-                        var h = (page.height * PDF_RENDER_SCALE).toInt().coerceAtLeast(1)
-                        val longest = max(w, h)
-                        if (longest > PDF_MAX_EDGE_PX) {
-                            val f = PDF_MAX_EDGE_PX.toDouble() / longest
-                            w = (w * f).toInt().coerceAtLeast(1)
-                            h = (h * f).toInt().coerceAtLeast(1)
-                        }
-                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                        bmp.eraseColor(Color.WHITE)
-                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-
-                        val target = uniqueFile(context, base, "png")
-                        target.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
-                        bmp.recycle()
-                        return describe(target)
+                    val count = renderer.pageCount
+                    if (count < 1) return null
+                    val pad = count.toString().length
+                    var first: Floorplan? = null
+                    for (i in 0 until count) {
+                        val name = if (count == 1) base else "$base-p${(i + 1).toString().padStart(pad, '0')}"
+                        val fp = renderer.openPage(i).use { page -> renderPage(context, page, name) }
+                        if (first == null) first = fp
                     }
+                    return first
                 }
             }
         } catch (e: Exception) {
@@ -141,6 +137,27 @@ object FloorplanStore {
         } finally {
             tmp.delete()
         }
+    }
+
+    /** Rasterises one open [PdfRenderer.Page] to a PNG named [name] in the store, capped at
+     *  [PDF_MAX_EDGE_PX] on its longer edge, and returns its descriptor. */
+    private fun renderPage(context: Context, page: PdfRenderer.Page, name: String): Floorplan? {
+        var w = (page.width * PDF_RENDER_SCALE).toInt().coerceAtLeast(1)
+        var h = (page.height * PDF_RENDER_SCALE).toInt().coerceAtLeast(1)
+        val longest = max(w, h)
+        if (longest > PDF_MAX_EDGE_PX) {
+            val f = PDF_MAX_EDGE_PX.toDouble() / longest
+            w = (w * f).toInt().coerceAtLeast(1)
+            h = (h * f).toInt().coerceAtLeast(1)
+        }
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        bmp.eraseColor(Color.WHITE)
+        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+
+        val target = uniqueFile(context, name, "png")
+        target.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        bmp.recycle()
+        return describe(target)
     }
 
     fun file(context: Context, id: String): File = File(dir(context), id)

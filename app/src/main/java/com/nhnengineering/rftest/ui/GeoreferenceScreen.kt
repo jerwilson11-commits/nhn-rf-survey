@@ -268,8 +268,26 @@ fun GeoreferenceScreen(onExit: () -> Unit) {
                                 },
                                 markers = tiePoints.map { it.lat to it.lon },
                             )
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedButton(
+                                    onClick = { if (satZoom > 2) satZoom-- },
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("Zoom −") }
+                                OutlinedButton(
+                                    onClick = { if (satZoom < 21) satZoom++ },
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("Zoom +") }
+                                OutlinedButton(
+                                    onClick = {
+                                        fix?.let { satLat = it.latitudeDeg; satLon = it.longitudeDeg; satZoom = 20 }
+                                    },
+                                    enabled = fix != null,
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("On GPS") }
+                            }
                             Text(
-                                "Esri satellite. Drag to pan, pinch to zoom. ${tiePoints.size} tie point(s) set.",
+                                "Esri satellite (zoom $satZoom). Drag to pan, buttons or pinch to zoom, " +
+                                    "\"On GPS\" to jump to your location. ${tiePoints.size} tie point(s) set.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                             if (tiePoints.isNotEmpty()) {

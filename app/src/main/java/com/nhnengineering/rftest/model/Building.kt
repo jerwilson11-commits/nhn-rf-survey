@@ -63,7 +63,7 @@ data class Building(
             } else {
                 null
             }
-            val geo = own ?: if (refWorld != null && f.stackAnchorU != null && f.stackAnchorV != null) {
+            val anchored = if (refWorld != null && f.stackAnchorU != null && f.stackAnchorV != null) {
                 GeoReference.inherited(
                     f.widthPx, f.heightPx, refGeo,
                     f.stackAnchorU, f.stackAnchorV,
@@ -72,6 +72,12 @@ data class Building(
             } else {
                 null
             }
+            // Same drawing frame as the reference floor (the usual case for a single multi-page PDF):
+            // the identical pixel->world map applies, so the floor inherits the reference transform
+            // outright -- no per-floor anchor needed. Only floors that are cropped or scaled
+            // differently need their own anchor or tie points.
+            val sameFrame = if (f.widthPx == ref.widthPx && f.heightPx == ref.heightPx) refGeo else null
+            val geo = own ?: anchored ?: sameFrame
             if (geo != null) out[f.floorplanId] = geo
         }
         return out
