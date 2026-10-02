@@ -568,6 +568,23 @@ fun LabelEntry(onArea: (String?) -> Unit, onFloor: (String?) -> Unit) {
  */
 @Composable
 fun LockWatchEntry() {
+    // Cell lock watch is a Field feature. Free users see a short upgrade prompt instead of the
+    // target-entry fields.
+    val tier by com.nhnengineering.rftest.billing.EntitlementRepository.tier.collectAsState()
+    if (!tier.grantsField) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                "Cell lock watch is a Field feature. Upgrade to verify an external PCI/ARFCN lock " +
+                    "held across a survey.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            OutlinedButton(onClick = { com.nhnengineering.rftest.billing.UpgradePrompt.open() }) {
+                Text("See plans", maxLines = 1)
+            }
+        }
+        return
+    }
+
     val currentPci by RecordingState.lockWatchPci.collectAsState()
     val currentArfcn by RecordingState.lockWatchArfcn.collectAsState()
     var pciText by remember { mutableStateOf("") }

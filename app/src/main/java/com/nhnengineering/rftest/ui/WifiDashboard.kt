@@ -90,6 +90,24 @@ private const val SAMPLE_INTERVAL_MS = 1_000L
  *  were being missed. */
 private enum class LiveSubTab(val label: String) { MEASURE("Measure"), SETUP("Setup") }
 
+/** Compact stand-in for a Field-gated card shown to Free users: names the feature and routes to the
+ *  upgrade screen, instead of rendering the real control. */
+@Composable
+private fun PaidFeatureStub(feature: String) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(feature, style = MaterialTheme.typography.titleMedium)
+            Text(
+                "A Field feature. Upgrade to unlock it.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            androidx.compose.material3.OutlinedButton(
+                onClick = { com.nhnengineering.rftest.billing.UpgradePrompt.open() },
+            ) { Text("See plans") }
+        }
+    }
+}
+
 /**
  * Live KPI readout.
  *
@@ -575,11 +593,15 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                         }
                     }
 
-                    item {
-                        ThresholdsCard(
-                            thresholds = thresholds,
-                            onChange = { RecordingState.thresholds.value = it },
-                        )
+                    if (tier.grantsField) {
+                        item {
+                            ThresholdsCard(
+                                thresholds = thresholds,
+                                onChange = { RecordingState.thresholds.value = it },
+                            )
+                        }
+                    } else {
+                        item { PaidFeatureStub("Threshold alarms") }
                     }
                     item {
                         SpeedTestCard(
@@ -635,32 +657,36 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                             },
                         )
                     }
-                    item {
-                        AutomationCard(
-                            running = automationRunning,
-                            config = automationConfig,
-                            onConfigChange = { automationConfig = it },
-                            results = automationResults,
-                            onRun = {
-                                val script = buildAutomationScript(automationConfig, speedServer)
-                                if (automationConfig.loop) {
-                                    automationRunning = true
-                                    automationRunner.start(scope, script) { results ->
-                                        automationResults = results
-                                    }
-                                } else {
-                                    scope.launch {
+                    if (tier.grantsField) {
+                        item {
+                            AutomationCard(
+                                running = automationRunning,
+                                config = automationConfig,
+                                onConfigChange = { automationConfig = it },
+                                results = automationResults,
+                                onRun = {
+                                    val script = buildAutomationScript(automationConfig, speedServer)
+                                    if (automationConfig.loop) {
                                         automationRunning = true
-                                        automationResults = automationRunner.runOnce(script)
-                                        automationRunning = false
+                                        automationRunner.start(scope, script) { results ->
+                                            automationResults = results
+                                        }
+                                    } else {
+                                        scope.launch {
+                                            automationRunning = true
+                                            automationResults = automationRunner.runOnce(script)
+                                            automationRunning = false
+                                        }
                                     }
-                                }
-                            },
-                            onStop = {
-                                automationRunner.stop()
-                                automationRunning = false
-                            },
-                        )
+                                },
+                                onStop = {
+                                    automationRunner.stop()
+                                    automationRunning = false
+                                },
+                            )
+                        }
+                    } else {
+                        item { PaidFeatureStub("Automation (looped/scripted testing)") }
                     }
                     item {
                         VideoStreamingCard(

@@ -34,6 +34,10 @@ object IBwaveCsvExporter {
     private val HEADER = listOf(
         "longitude", "latitude", "timestamp_utc",
         "technology", "operator", "band", "freq_mhz", "pci", "metric", "value", "unit",
+        // The operator-entered landmark for this position ("Entrance", "Front desk", "AP 11"). It
+        // rides along as a reference so the RF design engineer can align the measurements to the
+        // floor plan in iBwave; it is the same value shown on the in-app floorplan pin.
+        "waypoint",
     )
 
     data class Result(val file: File, val rowsWritten: Int, val sourceRowsSkipped: Int)
@@ -57,6 +61,7 @@ object IBwaveCsvExporter {
             val iNrRsrp = idx("nr_ss_rsrp"); val iNrRsrq = idx("nr_ss_rsrq"); val iNrSinr = idx("nr_ss_sinr")
             val iWSsid = idx("wifi_ssid"); val iWBand = idx("wifi_band")
             val iWFreq = idx("wifi_freq_mhz"); val iWRssi = idx("wifi_rssi")
+            val iWp = idx("waypoint")
 
             var written = 0
             var skipped = 0
@@ -76,13 +81,14 @@ object IBwaveCsvExporter {
                     if (lon == null || lat == null) { skipped++; continue }
                     val time = s(iTime).orEmpty()
                     val op = s(iOp).orEmpty()
+                    val wp = s(iWp).orEmpty()
 
                     fun emit(
                         tech: String, operator: String, band: String, freqMhz: String,
                         pci: String, metric: String, value: String, unit: String,
                     ) {
                         w.write(
-                            row(lon, lat, time, tech, operator, band, freqMhz, pci, metric, value, unit)
+                            row(lon, lat, time, tech, operator, band, freqMhz, pci, metric, value, unit, wp)
                         )
                         w.newLine()
                         written++

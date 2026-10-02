@@ -12,6 +12,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -31,16 +32,17 @@ import com.nhnengineering.rftest.billing.PRO_PRODUCT_ID
 import com.nhnengineering.rftest.billing.PurchaseFlow
 
 /**
- * Shown full-screen when there is no active subscription -- see `MainActivity`'s gate, which
- * treats this the same way it already treats a missing permission. There is no free tier, so this
- * is the first thing a new install sees, not a locked-feature interstitial.
+ * The upgrade screen, shown as an overlay when a Free user taps a paid feature (via
+ * [com.nhnengineering.rftest.billing.UpgradePrompt], observed in `MainActivity`). The app is fully
+ * usable at the Free tier, so this is a "here's what each paid tier adds" interstitial with a way
+ * back, not a wall blocking the whole app.
  *
  * Prices and trial terms are never hardcoded here -- they come from [ProductDetails], fetched
  * fresh from Play Console each time this screen is shown, so a price change in Console needs no
  * app update to take effect.
  */
 @Composable
-fun PaywallScreen(modifier: Modifier = Modifier) {
+fun PaywallScreen(modifier: Modifier = Modifier, onClose: (() -> Unit)? = null) {
     val context = LocalContext.current
     var products by remember { mutableStateOf<Map<String, ProductDetails>>(emptyMap()) }
     var loaded by remember { mutableStateOf(false) }
@@ -57,7 +59,7 @@ fun PaywallScreen(modifier: Modifier = Modifier) {
     ) {
         item {
             Text(
-                text = "Subscribe to use Site Survey Pro",
+                text = "Upgrade Site Survey Pro",
                 style = MaterialTheme.typography.headlineSmall,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
@@ -65,7 +67,9 @@ fun PaywallScreen(modifier: Modifier = Modifier) {
         }
         item {
             Text(
-                text = "Every feature requires an active subscription -- there is no free tier.",
+                text = "You're on the free plan: live measurement, recording, raw-CSV export, " +
+                    "speed tests and video/voice QoE. Upgrade for the paid features below. " +
+                    "Cancel anytime.",
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
@@ -81,11 +85,11 @@ fun PaywallScreen(modifier: Modifier = Modifier) {
                     title = "Field",
                     productDetails = products[FIELD_PRODUCT_ID],
                     features = listOf(
-                        "Full Wi-Fi and cellular capture, including SINR and channel utilization",
-                        "CSV, KML, GeoJSON and GeoPackage export",
-                        "PDF client report",
-                        "Floorplan mode and threshold alarms",
-                        "Report templates by engagement type",
+                        "PDF client acceptance report",
+                        "KML, GeoJSON, GeoPackage and iBwave export",
+                        "Floorplan survey mode",
+                        "Cell lock watch",
+                        "Automation (looped/scripted testing) and threshold alarms",
                     ),
                 )
             }
@@ -110,6 +114,13 @@ fun PaywallScreen(modifier: Modifier = Modifier) {
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
+        }
+        if (onClose != null) {
+            item {
+                OutlinedButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
+                    Text("Keep using the free plan")
+                }
+            }
         }
     }
 }

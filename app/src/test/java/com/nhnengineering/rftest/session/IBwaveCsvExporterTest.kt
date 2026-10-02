@@ -18,12 +18,12 @@ class IBwaveCsvExporterTest {
         "timestamp_utc", "seq", "lat", "lon", "operator",
         "lte_band", "lte_earfcn", "lte_pci", "lte_rsrp", "lte_rsrq", "lte_rssnr",
         "nr_band", "nr_arfcn", "nr_pci", "nr_ss_rsrp", "nr_ss_rsrq", "nr_ss_sinr",
-        "wifi_ssid", "wifi_band", "wifi_freq_mhz", "wifi_rssi",
+        "wifi_ssid", "wifi_band", "wifi_freq_mhz", "wifi_rssi", "waypoint",
     )
 
     private val outHeader = listOf(
         "longitude", "latitude", "timestamp_utc",
-        "technology", "operator", "band", "freq_mhz", "pci", "metric", "value", "unit",
+        "technology", "operator", "band", "freq_mhz", "pci", "metric", "value", "unit", "waypoint",
     )
 
     /** Builds a row aligned to [inHeader]; unspecified columns are left empty. */
@@ -63,7 +63,7 @@ class IBwaveCsvExporterTest {
             rowOf(
                 "timestamp_utc" to time, "seq" to "1", "lat" to lat, "lon" to lon, "operator" to "AT&T",
                 "lte_band" to "B2", "lte_earfcn" to "900", "lte_pci" to "177",
-                "lte_rsrp" to "-98", "lte_rsrq" to "-11", "lte_rssnr" to "12",
+                "lte_rsrp" to "-98", "lte_rsrq" to "-11", "lte_rssnr" to "12", "waypoint" to "Entrance",
             ),
             rowOf(
                 "timestamp_utc" to time, "seq" to "2", "lat" to lat, "lon" to lon, "operator" to "T-Mobile",
@@ -94,6 +94,9 @@ class IBwaveCsvExporterTest {
         assertEquals("177", lteRsrp["pci"])
         assertEquals("-98", lteRsrp["value"])
         assertEquals("dBm", lteRsrp["unit"])
+        assertEquals("Entrance", lteRsrp["waypoint"])   // landmark reference rides along
+        // A sample with no waypoint leaves the column empty, not defaulted.
+        assertEquals("", rows.pick("NR", "SS-RSRP")["waypoint"])
 
         // Quality metrics are dB, not dBm — the label must reflect that.
         assertEquals("dB", rows.pick("LTE", "RSRQ")["unit"])

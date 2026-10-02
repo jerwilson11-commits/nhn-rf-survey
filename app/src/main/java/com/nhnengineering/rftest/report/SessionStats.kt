@@ -1392,4 +1392,129 @@ object SessionStats {
             offTargetRuns = runs.sortedByDescending { it.samples },
         )
     }
+
+    // ---- GPS fix quality ---------------------------------------------------
+
+    enum class GpsQualityGrade { GOOD, MARGINAL, POOR }
+
+    /**
+     * A plain-language verdict on how trustworthy a session's GPS track is, with the numbers behind
+     * it and tester-facing guidance when it is not good.
+     *
+     * The GPS satellite page renders for every mixed session regardless of fix quality -- a page
+     * that silently disappears on a bad walk trains testers to report a software bug where there is
+     * none, so the page stays and explains itself instead. This carries that explanation.
+     *
+     * Graded from the fix telemetry every GPS sample carries, not [TrackPoint.accuracyM] alone:
+     * [com.nhnengineering.rftest.model.GeoPoint.gnssSatellitesUsed] documents a real 2026-09-30
+     * session whose reported accuracy sat at a flat, plausible value while the positions were
+     * visibly wrong. Satellites actually used and carrier-to-noise density are the harder-to-fool
+     * signals, so the grade is the worst verdict across whichever of the three a session recorded.
+     */
+    data class GpsQuality(
+        val grade: GpsQualityGrade,
+        val samples: Int,
+        val medianAccuracyM: Double?,
+        val medianAvgCn0: Double?,
+        val medianSatsUsed: Int?,
+        val medianSatsInView: Int?,
+        /** Why the fix was degraded, tester-facing; usually empty when [grade] is GOOD, though a
+         *  cold-start first fix is called out even on a good walk. */
+        val reasons: List<String>,
+        /** What to do differently next walk, tester-facing; usually empty when [grade] is GOOD. */
+        val advice: List<String>,
+    )
+
+    private fun medianDouble(sorted: List<Double>): Double? = when {
+        sorted.isEmpty() -> null
+        sorted.size % 2 == 1 -> sorted[sorted.size / 2]
+        else -> (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2.0
+    }
+
+    /**
+     * Grades the GPS track in [gps] (samples already filtered to those with a fix, in walk order).
+     *
+     * Per-metric cutoffs, worst wins: accuracy <=10 m / <=20 m, avg C/N0 >=30 / >=22 dB-Hz,
+     * satellites used >=7 / >=5 are GOOD / MARGINAL, below is POOR. With no quality telemetry at
+     * all the grade is MARGINAL rather than a false GOOD -- absence of evidence is not good GPS.
+     */
+    fun gpsQuality(gps: List<TrackPoint>): GpsQuality {
+        val accSorted = gps.mapNotNull { it.accuracyM?.toDouble() }.sorted()
+        val cn0Sorted = gps.mapNotNull { it.gnssAvgCn0DbHz?.toDouble() }.sorted()
+        val usedSorted = gps.mapNotNull { it.gnssSatellitesUsed }.sorted()
+        val inViewSorted = gps.mapNotNull { it.gnssSatellitesInView }.sorted()
+
+        val mAcc = medianDouble(accSorted)
+        val mCn0 = medianDouble(cn0Sorted)
+        val mUsed = if (usedSorted.isEmpty()) null else usedSorted[usedSorted.size / 2]
+        val mInView = if (inViewSorted.isEmpty()) null else inViewSorted[inViewSorted.size / 2]
+
+        val perMetric = buildList {
+            mAcc?.let { add(if (it <= 10) GpsQualityGrade.GOOD else if (it <= 20) GpsQualityGrade.MARGINAL else GpsQualityGrade.POOR) }
+            mCn0?.let { add(if (it >= 30) GpsQualityGrade.GOOD else if (it >= 22) GpsQualityGrade.MARGINAL else GpsQualityGrade.POOR) }
+            mUsed?.let { add(if (it >= 7) GpsQualityGrade.GOOD else if (it >= 5) GpsQualityGrade.MARGINAL else GpsQualityGrade.POOR) }
+        }
+        val grade = when {
+            perMetric.isEmpty() -> GpsQualityGrade.MARGINAL
+            perMetric.any { it == GpsQualityGrade.POOR } -> GpsQualityGrade.POOR
+            perMetric.any { it == GpsQualityGrade.MARGINAL } -> GpsQualityGrade.MARGINAL
+            else -> GpsQualityGrade.GOOD
+        }
+
+        val reasons = mutableListOf<String>()
+        val advice = mutableListOf<String>()
+
+        // A cold-start first fix is flagged even on an otherwise-good walk: it is the single most
+        // common reason the S marker lands away from where the tester actually started, which is
+        // exactly the confusion this note exists to pre-empt.
+        val firstAcc = gps.firstOrNull()?.accuracyM?.toDouble()
+        if (firstAcc != null && mAcc != null && firstAcc > 15 && firstAcc > 2 * mAcc) {
+            reasons += "The first fix — the S marker — hadn't converged: it reported " +
+                "${firstAcc.toInt()} m against the session's ${mAcc.toInt()} m median, so the " +
+                "start point is the least reliable point on the plot."
+            advice += "Let the phone hold a fix for 30–60 seconds before starting the walk, so the " +
+                "start point settles."
+        }
+
+        if (grade != GpsQualityGrade.GOOD) {
+            val degradedBefore = reasons.size
+            // Only a genuinely LOW absolute count means a starved fix. Using 21 of 44 is normal for
+            // a multi-constellation receiver (GPS + GLONASS + Galileo + BeiDou) -- most visible
+            // satellites are low on the horizon and rightly unused -- so a used-vs-in-view ratio
+            // flags nearly every session and misreads a healthy fix as blocked.
+            if (mUsed != null && mUsed < 7 && (mInView == null || mInView >= mUsed + 4)) {
+                val seen = if (mInView != null) " (of about $mInView in view)" else ""
+                reasons += "Only about $mUsed satellites could be used in the fix$seen — too few for " +
+                    "a confident position; the rest were blocked or reflected by the roof, walls, or " +
+                    "heavy cloud."
+            }
+            if (mCn0 != null && mCn0 < 30) {
+                reasons += "Average satellite signal was ${mCn0.toInt()} dB-Hz (open sky is 35–45); " +
+                    "the satellites in the fix came in weak."
+            }
+            if (mAcc != null && mAcc > 15) {
+                reasons += "The handset's own reported accuracy was about ${mAcc.toInt()} m, so each " +
+                    "plotted point could be that far from where you actually stood."
+            }
+            if (reasons.size == degradedBefore) {
+                reasons += "The fix was weaker than an open-sky survey, as expected indoors or in " +
+                    "bad weather."
+            }
+            advice += "Where the building allows, walk nearer windows or exterior walls, or acquire " +
+                "a reference fix outdoors before entering."
+            advice += "Indoors, treat the floorplan page — your own waypoint placement — as the " +
+                "ground truth; the GPS track here is supplementary."
+        }
+
+        return GpsQuality(
+            grade = grade,
+            samples = gps.size,
+            medianAccuracyM = mAcc,
+            medianAvgCn0 = mCn0,
+            medianSatsUsed = mUsed,
+            medianSatsInView = mInView,
+            reasons = reasons,
+            advice = advice,
+        )
+    }
 }

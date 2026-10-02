@@ -25,6 +25,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -242,6 +243,10 @@ private fun SessionDetail(
     // Blank means "use the default for whichever KPI this session carries" — -75 dBm for Wi-Fi,
     // -105 dBm for cellular. Those differ by roughly 30 dB and must not share a default.
     var thresholdText by remember(summary.displayName) { mutableStateOf("") }
+    // The report and the pro exports are Field features; the raw-CSV share stays free. A Free user's
+    // tap routes to the upgrade screen instead of acting.
+    val tier by com.nhnengineering.rftest.billing.EntitlementRepository.tier.collectAsState()
+    val field = tier.grantsField
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -334,10 +339,11 @@ private fun SessionDetail(
                     )
                     Button(
                         onClick = {
-                            onGenerateReport(thresholdText.trim().toIntOrNull())
+                            if (field) onGenerateReport(thresholdText.trim().toIntOrNull())
+                            else com.nhnengineering.rftest.billing.UpgradePrompt.open()
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Generate PDF report") }
+                    ) { Text(if (field) "Generate PDF report" else "Generate PDF report (Field)") }
                 }
             }
         }
@@ -352,18 +358,23 @@ private fun SessionDetail(
                             "an iBwave design.",
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    Button(onClick = onExportKml, modifier = Modifier.fillMaxWidth()) {
-                        Text("Export KML (Google Earth)")
+                    val gate: (() -> Unit) -> () -> Unit = { action ->
+                        { if (field) action() else com.nhnengineering.rftest.billing.UpgradePrompt.open() }
                     }
-                    Button(onClick = onExportGeoPackage, modifier = Modifier.fillMaxWidth()) {
-                        Text("Export GeoPackage (QGIS)")
+                    val sfx = if (field) "" else " (Field)"
+                    Button(onClick = gate(onExportKml), modifier = Modifier.fillMaxWidth()) {
+                        Text("Export KML (Google Earth)$sfx")
                     }
-                    Button(onClick = onExportGeoJson, modifier = Modifier.fillMaxWidth()) {
-                        Text("Export GeoJSON")
+                    Button(onClick = gate(onExportGeoPackage), modifier = Modifier.fillMaxWidth()) {
+                        Text("Export GeoPackage (QGIS)$sfx")
                     }
-                    Button(onClick = onExportIBwave, modifier = Modifier.fillMaxWidth()) {
-                        Text("Export iBwave CSV")
+                    Button(onClick = gate(onExportGeoJson), modifier = Modifier.fillMaxWidth()) {
+                        Text("Export GeoJSON$sfx")
                     }
+                    Button(onClick = gate(onExportIBwave), modifier = Modifier.fillMaxWidth()) {
+                        Text("Export iBwave CSV$sfx")
+                    }
+                    // Raw CSV stays free -- it's the "get your data out" floor of the free tier.
                     OutlinedButton(onClick = onShareCsv, modifier = Modifier.fillMaxWidth()) {
                         Text("Share raw CSV")
                     }

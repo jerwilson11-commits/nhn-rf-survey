@@ -145,12 +145,17 @@ private fun RfTestApp() {
 
     var tab by remember { mutableStateOf(Tab.LIVE) }
     val tier by EntitlementRepository.tier.collectAsState()
-    val entitlementChecking by EntitlementRepository.checking.collectAsState()
+    val showUpgrade by com.nhnengineering.rftest.billing.UpgradePrompt.show.collectAsState()
+    // Walk mode takes over the whole screen for floorplan tapping, so the bottom nav gets out of the
+    // way; the walk screen carries its own Exit control to come back.
+    val walkMode by com.nhnengineering.rftest.ui.WalkMode.active.collectAsState()
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         bottomBar = {
-            if (granted && tier.grantsField) {
+            // The app is usable at the Free floor, so the nav shows as soon as permissions are
+            // granted -- paid features are gated individually, not by hiding the whole app.
+            if (granted && !walkMode) {
                 NavigationBar {
                     Tab.entries.forEach { t ->
                         NavigationBarItem(
@@ -169,18 +174,26 @@ private fun RfTestApp() {
                 modifier = Modifier.padding(innerPadding),
                 onRequest = { launcher.launch(REQUIRED_PERMISSIONS + OPTIONAL_PERMISSIONS) },
             )
-            // A real third state, not a loading gloss on top of the other two -- showing the
-            // paywall before the first BillingClient round-trip has actually completed would be
-            // its own wrong answer for anyone who already has an active subscription.
-            entitlementChecking && tier == SubscriptionTier.NONE -> CenteredProgress(
+            // The upgrade screen is an overlay reached by tapping a paid feature (UpgradePrompt),
+            // not a gate on the whole app -- a Free user can always get back to using it.
+            showUpgrade -> PaywallScreen(
                 modifier = Modifier.padding(innerPadding),
+                onClose = { com.nhnengineering.rftest.billing.UpgradePrompt.dismiss() },
             )
-            !tier.grantsField -> PaywallScreen(modifier = Modifier.padding(innerPadding))
             // Safe to switch tabs mid-session since Phase 6: the recording lives in
             // RecordingService, not in this composition.
             tab == Tab.LIVE -> WifiDashboard(modifier = Modifier.padding(innerPadding))
             tab == Tab.MAP -> MapScreen(modifier = Modifier.padding(innerPadding))
-            tab == Tab.FLOORPLAN -> FloorplanScreen(modifier = Modifier.padding(innerPadding))
+            // Floorplan mode is a Field feature; a Free user gets the upgrade panel instead.
+            tab == Tab.FLOORPLAN ->
+                if (tier.grantsField) {
+                    FloorplanScreen(modifier = Modifier.padding(innerPadding))
+                } else {
+                    UpgradeFeaturePanel(
+                        modifier = Modifier.padding(innerPadding),
+                        feature = "Floorplan mode",
+                    )
+                }
             tab == Tab.SAFETY -> ErrcsGridScreen(modifier = Modifier.padding(innerPadding))
             tab == Tab.PROFILES -> ProfileScreen(modifier = Modifier.padding(innerPadding))
             else -> SessionsScreen(modifier = Modifier.padding(innerPadding))
@@ -189,9 +202,28 @@ private fun RfTestApp() {
 }
 
 @Composable
-private fun CenteredProgress(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator()
+private fun UpgradeFeaturePanel(modifier: Modifier = Modifier, feature: String) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "$feature is a Field feature",
+            style = MaterialTheme.typography.headlineSmall,
+            textAlign = TextAlign.Center,
+        )
+        Text(
+            text = "Your free plan covers live measurement, recording, raw-CSV export, speed tests " +
+                "and video/voice QoE. Upgrade to Field to unlock $feature.",
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+        )
+        Button(onClick = { com.nhnengineering.rftest.billing.UpgradePrompt.open() }) {
+            Text("See plans")
+        }
     }
 }
 

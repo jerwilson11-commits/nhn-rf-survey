@@ -2,7 +2,6 @@ package com.nhnengineering.rftest.ui
 
 import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -31,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +39,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -79,13 +81,23 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
     val recording by RecordingState.active.collectAsState()
     val wifi by RecordingState.wifi.collectAsState()
     val cellular by RecordingState.cellular.collectAsState()
+    val walk by WalkMode.active.collectAsState()
 
+    // OpenDocument rather than the photo picker: the photo picker (PickVisualMedia) cannot offer
+    // PDFs, and walk-test floor plans ship as vendor PDFs far more often than as PNG/JPEG. This
+    // accepts both; FloorplanStore rasterises a PDF's first page on import.
     val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
+        ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
             scope.launch {
-                val imported = FloorplanStore.import(context, uri, uri.lastPathSegment)
+                val name = runCatching {
+                    context.contentResolver.query(
+                        uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                        null, null, null,
+                    )?.use { if (it.moveToFirst()) it.getString(0) else null }
+                }.getOrNull() ?: uri.lastPathSegment
+                val imported = FloorplanStore.import(context, uri, name)
                 plans = FloorplanStore.list(context)
                 imported?.let { selected = it }
             }
@@ -102,6 +114,23 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                     ?.asImageBitmap()
             }.getOrNull()
         }
+    }
+
+    // Full-screen walk mode: when it is on and a plan is loaded, the whole tab becomes the immersive
+    // canvas. Guard on bitmap too -- entering with nothing to tap would strand the user on a blank
+    // screen behind a hidden nav bar. If the bitmap is somehow absent, fall through to the normal
+    // layout (which carries its own loader) rather than showing an empty walk screen.
+    val plan0 = selected
+    val bmp0 = bitmap
+    if (walk && plan0 != null && bmp0 != null) {
+        FloorplanWalkScreen(
+            plan = plan0,
+            bitmap = bmp0,
+            label = label,
+            onLabelChange = { label = it },
+            onExit = { WalkMode.exit() },
+        )
+        return
     }
 
     LazyColumn(
@@ -121,13 +150,14 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                     Button(
                         onClick = {
                             picker.launch(
-                                PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly
-                                )
+                                arrayOf(
+                                    "application/pdf",
+                                    "image/png", "image/jpeg", "image/webp",
+                                ),
                             )
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Load floorplan image") }
+                    ) { Text("Load floorplan (PDF or image)") }
 
                     if (plans.isNotEmpty()) {
                         HorizontalDivider()
@@ -174,17 +204,25 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                                     yNorm = y,
                                     label = label.trim().ifBlank { null },
                                 )
+                                // Per-landmark reference, not a sticky zone: clear after placing so
+                                // the next waypoint starts fresh.
+                                label = ""
                             },
                         )
                         OutlinedTextField(
                             value = label,
                             onValueChange = { label = it },
-                            label = { Text("Waypoint label (optional)") },
+                            label = { Text("Waypoint — type a name, then tap (optional)") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                         )
+                        Button(
+                            onClick = { WalkMode.enter() },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Walk mode (full screen)") }
                         Text(
-                            "Pinch to zoom, drag to pan, tap to place. " +
+                            "Pinch to zoom, drag to pan, tap to place. To name a landmark, type the " +
+                                "label first, then tap — it stamps that point and the field clears. " +
                                 if (recording) {
                                     "Recording — every sample carries this position until moved."
                                 } else {
@@ -213,8 +251,9 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Text(
-                        "No floorplan loaded. Load an image above — a PNG or JPEG of the venue " +
-                            "layout, a fire-evacuation plan, or a screenshot of a CAD drawing.",
+                        "No floorplan loaded. Load one above — a vendor PDF (the first page is " +
+                            "used), or a PNG/JPEG of the venue layout, a fire-evacuation plan, or a " +
+                            "screenshot of a CAD drawing.",
                         Modifier.padding(14.dp),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -241,15 +280,24 @@ internal fun FloorplanCanvas(
     placed: List<Pair<IndoorPosition, Int?>>,
     currentPosition: IndoorPosition?,
     onTap: (Float, Float) -> Unit,
+    // The box MUST stay exactly the image's aspect ratio (no letterboxing inside it) or the tap-to-
+    // image coordinate math below diverges and every placed point is slightly wrong. Callers vary
+    // only HOW it fits -- fill width (the scrolling screen) or fit height (walk mode in landscape) --
+    // so the sizing is injected while the aspect-ratio lock lives here.
+    boxModifier: Modifier = Modifier.fillMaxWidth().aspectRatio(plan.aspectRatio),
 ) {
     var scale by remember(plan.id) { mutableStateOf(1f) }
     var offset by remember(plan.id) { mutableStateOf(Offset.Zero) }
     val outline = MaterialTheme.colorScheme.onSurface
+    // The tap gesture below lives in a pointerInput keyed only on plan.id, so it does NOT restart
+    // when a new onTap lambda arrives on recomposition -- it would otherwise freeze the first onTap
+    // (and the label it closed over) for the life of the plan, stamping every tap with whatever label
+    // was present when the canvas first composed. rememberUpdatedState keeps the gesture calling the
+    // current handler, so each tap reads the live waypoint label.
+    val currentOnTap by rememberUpdatedState(onTap)
 
     Box(
-        Modifier
-            .fillMaxWidth()
-            .aspectRatio(plan.aspectRatio)
+        boxModifier
             .pointerInput(plan.id) {
                 detectTransformGestures { _, pan, zoom, _ ->
                     scale = (scale * zoom).coerceIn(1f, 8f)
@@ -276,7 +324,7 @@ internal fun FloorplanCanvas(
                     val contentY = (tap.y - cy - offset.y) / scale + cy
                     val xNorm = (contentX / size.width).coerceIn(0f, 1f)
                     val yNorm = (contentY / size.height).coerceIn(0f, 1f)
-                    onTap(xNorm, yNorm)
+                    currentOnTap(xNorm, yNorm)
                 }
             }
     ) {
@@ -302,13 +350,26 @@ internal fun FloorplanCanvas(
                 )
             }
 
-            // Placed points, coloured by the KPI recorded there.
+            // A native text paint for waypoint labels: a dark glyph with a white halo so a named
+            // landmark ("Entrance", "AP 11") stays legible over either a light or dark floor plan.
+            // Drawn in screen space (not under the image transform) so it keeps a constant size as
+            // the plan is zoomed.
+            val labelPaint = android.graphics.Paint().apply {
+                isAntiAlias = true
+                color = outline.toArgb()
+                textSize = 28f
+                setShadowLayer(4f, 0f, 0f, android.graphics.Color.WHITE)
+            }
+
+            // Placed points, coloured by the KPI recorded there, each tagged with its waypoint label.
             placed.forEach { (pos, argb) ->
+                val sc = toScreen(pos.xNorm, pos.yNorm)
                 drawCircle(
                     color = argb?.let { Color(it) } ?: Color.Gray,
                     radius = 7f,
-                    center = toScreen(pos.xNorm, pos.yNorm),
+                    center = sc,
                 )
+                pos.label?.let { drawContext.canvas.nativeCanvas.drawText(it, sc.x + 10f, sc.y + 4f, labelPaint) }
             }
 
             // Current position, drawn last so it is never hidden under a logged point.
@@ -316,6 +377,7 @@ internal fun FloorplanCanvas(
                 val c = toScreen(it.xNorm, it.yNorm)
                 drawCircle(color = outline, radius = 16f, center = c, style = Stroke(width = 4f))
                 drawCircle(color = outline, radius = 4f, center = c)
+                it.label?.let { l -> drawContext.canvas.nativeCanvas.drawText(l, c.x + 20f, c.y + 4f, labelPaint) }
             }
         }
     }

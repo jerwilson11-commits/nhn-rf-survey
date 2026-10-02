@@ -3,18 +3,18 @@ package com.nhnengineering.rftest.billing
 /**
  * What the current subscription grants. Ordered so `tier >= FIELD` reads naturally at a call site.
  *
- * There is no FREE tier -- every feature in this app requires at least [FIELD]. See
- * `docs/play-billing.md` for why: a deliberate departure from the "generous free tier" strategy in
- * this project's earlier roadmap, made once the roadmap's own paid-tier feature set (ERRCS mode,
- * multi-device, cloud sync, scanner ingest) turned out not to be built yet, leaving nothing for a
- * mid-priced tier to sell except what this project's own competitive research already identified as
- * the professional market's real paid/free line: root-gated diagnostics.
+ * [FREE] is the floor -- no subscription grants it, and the whole app is usable at that level minus
+ * the paid features, so the public can install and try it. See `docs/play-billing.md` for the split.
+ * This restores the "free tier is the acquisition wedge" strategy after the v1 "everything paywalled"
+ * decision proved fatal for public discovery/trial.
  */
 enum class SubscriptionTier {
-    /** No active subscription. Every screen is paywalled. */
-    NONE,
+    /** No active subscription. Live measurement, recording, raw-CSV export, manual throughput and
+     *  video/voice QoE are available; the paid features below are gated. */
+    FREE,
 
-    /** Everything in the app except the root-gated diagnostic tools. */
+    /** Free, plus the PDF report, pro exports (KML/GeoJSON/GeoPackage/iBwave), floorplan mode, cell
+     *  lock watch, automation, and threshold alarms. */
     FIELD,
 
     /** Field, plus band lock, technology lock, VoNR control, live SIB1/TDD decode, NR neighbours. */

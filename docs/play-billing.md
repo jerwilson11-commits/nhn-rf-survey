@@ -7,6 +7,37 @@ competitive research before landing here — see `docs/MASTER.md` and
 
 ## Confirmed structure
 
+**One free tier + two paid tiers, monthly, cancel anytime — no annual plan for v1.**
+Updated 2026-10-01: a **Free tier was added**, reversing the earlier "everything paywalled" v1
+decision below once it proved fatal for public discovery/trial (a new install could do nothing
+without paying). The free tier is the acquisition wedge; the paid tiers hold the professional
+deliverables.
+
+- **Free — $0.** Live measurement (cellular/Wi-Fi KPIs, verdict, map, spot check), session
+  recording, **raw-CSV** export, **manual throughput/speed test**, **manual video + voice QoE**, and
+  walk-throughput logging during a recording. Always non-rooted.
+- **Field — $9/month.** Free, plus the **PDF acceptance report**, the pro exports (**KML, GeoJSON,
+  GeoPackage, iBwave CSV**), **floorplan mode**, **cell lock watch**, **Automation**
+  (looped/scripted testing), and **threshold alarms**.
+- **Pro — $39/month.** Field, plus every root-gated tool already built.
+
+A **7-day free-trial offer on both paid base plans** (configured in Play Console, not in code) lets
+someone try Field/Pro before paying, on top of the permanent Free tier. Recommended; configure in
+Console.
+
+### Gating model (code)
+`MainActivity` no longer blocks the whole app — it renders at the **Free floor** and gates paid
+features individually. A gated control calls `billing/UpgradePrompt.open()`, which `MainActivity`
+observes to overlay the upgrade screen (`PaywallScreen`, now reachable with a "keep using free"
+close). Gated touchpoints: the Plan tab (floorplan), `SessionsScreen`'s report + four pro exports
+(raw CSV stays free), and `WifiDashboard`'s Automation card, Thresholds/alarms card, and
+lock-watch entry. `SubscriptionTier` is now `FREE | FIELD | PRO` and "no active subscription"
+resolves to `FREE`.
+
+---
+
+### Superseded: original v1 "no free tier" decision (kept for history)
+
 **Two paid tiers, monthly, cancel anytime — no free tier, no annual plan, for v1.**
 
 - **Field — $9/month.** Every feature the app has today except the root-gated diagnostic tools.

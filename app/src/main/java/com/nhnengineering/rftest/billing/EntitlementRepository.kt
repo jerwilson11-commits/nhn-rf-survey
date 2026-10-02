@@ -48,10 +48,11 @@ object EntitlementRepository {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val _tier = MutableStateFlow(SubscriptionTier.NONE)
+    private val _tier = MutableStateFlow(SubscriptionTier.FREE)
 
-    /** [SubscriptionTier.NONE] until the first real answer arrives, unless [EntitlementStore]
-     *  had a cached one -- see [init]. */
+    /** [SubscriptionTier.FREE] until the first real answer arrives, unless [EntitlementStore]
+     *  had a cached one -- see [init]. The app is fully usable at FREE, so starting here means a
+     *  new install is never blocked waiting on the first BillingClient round-trip. */
     val tier: StateFlow<SubscriptionTier> = _tier.asStateFlow()
 
     /** True until the first connection attempt (success or failure) has completed, so the UI can
@@ -137,13 +138,13 @@ object EntitlementRepository {
 
     private suspend fun handlePurchases(purchases: List<Purchase>) {
         val billingClient = client
-        var resolved = SubscriptionTier.NONE
+        var resolved = SubscriptionTier.FREE
         for (purchase in purchases) {
             if (purchase.purchaseState != Purchase.PurchaseState.PURCHASED) continue
             val grants = when {
                 PRO_PRODUCT_ID in purchase.products -> SubscriptionTier.PRO
                 FIELD_PRODUCT_ID in purchase.products -> SubscriptionTier.FIELD
-                else -> SubscriptionTier.NONE
+                else -> SubscriptionTier.FREE
             }
             if (grants > resolved) resolved = grants
             if (billingClient != null) {

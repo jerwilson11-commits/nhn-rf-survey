@@ -26,7 +26,7 @@ class EntitlementStore(context: Context) {
     var cachedTier: SubscriptionTier
         get() = prefs.getString(KEY_TIER, null)?.let {
             runCatching { SubscriptionTier.valueOf(it) }.getOrNull()
-        } ?: SubscriptionTier.NONE
+        } ?: SubscriptionTier.FREE
         set(value) {
             prefs.edit().putString(KEY_TIER, value.name).apply()
         }

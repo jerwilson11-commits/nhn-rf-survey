@@ -1546,6 +1546,127 @@ object PdfReportGenerator {
         )
 
     /**
+     * An extra page for a floorplan session that also recorded GPS: the walked track on satellite
+     * imagery. The floorplan page shows where the operator *said* they were (hand-placed); this
+     * shows where the handset's GPS put them. They are complementary, and the operator asked to see
+     * both — denser, automatic GPS sampling is the better ground truth where the fix is trustworthy.
+     *
+     * Reuses the same Mercator basemap/overlay helpers as the primary GPS plot. On a tile-fetch
+     * failure (offline) it says so rather than half-drawing — this is a supplementary page, so the
+     * floorplan page still carries the positioned samples.
+     */
+    private fun drawGpsSatellitePage(
+        context: Context,
+        c: Ctx,
+        summary: SessionSummary,
+        gps: List<TrackPoint>,
+        kpi: SessionStats.Kpi,
+    ) {
+        // newPage() finishes the previous page and starts a new one, so the drawing canvas must be
+        // fetched AFTER it -- a canvas captured before newPage() belongs to a now-finished page and
+        // throws the moment it is drawn on, crashing report generation. (Original bug, fixed.)
+        c.newPage()
+        c.text("Survey plot — GPS track", c.h2)
+        c.gap()
+
+        val canvas = c.canvas ?: return
+        val availW = PAGE_W - 2 * MARGIN
+        val availH = 420f
+        val frame = Paint().apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 0.8f
+            color = Color.rgb(120, 120, 120)
+            isAntiAlias = true
+        }
+
+        val bounds = Mercator.Bounds.of(gps.map { it.latitudeDeg!! to it.longitudeDeg!! })
+            ?.expandedToAtLeast(MIN_PLOT_SPAN_M)
+        val basemap = TileProxy.Basemap.SATELLITE
+        var drew = false
+        if (bounds != null) {
+            val zoom = Mercator.fitZoom(bounds, availW.toInt(), availH.toInt(), basemap.maxZoom)
+            val proxy = TileProxy(File(context.cacheDir, "tiles"), basemap)
+            val top = c.y
+            // Clip to the plot box: satellite tiles are square and the fitted grid overruns the box
+            // edges, so without this the imagery spills past the grey boundary. Crop it to the frame.
+            canvas.save()
+            canvas.clipRect(MARGIN, top, MARGIN + availW, top + availH)
+            val tilesDrawn = drawMercatorBasemap(canvas, proxy, bounds, zoom, MARGIN, top, availW, availH)
+            val excluded = if (tilesDrawn > 0) {
+                drawMercatorTrackOverlay(c, gps, bounds, zoom, MARGIN, top, availW, availH)
+            } else 0
+            canvas.restore()
+            if (tilesDrawn > 0) {
+                // Boundary drawn after the clip is lifted, so the grey line sits crisply on top of the
+                // cropped imagery rather than under tiles that overran the box.
+                canvas.drawRect(MARGIN, top, MARGIN + availW, top + availH, frame)
+                c.y = top + availH + LINE
+                c.y += drawLegend(c, kpi, MARGIN, c.y)
+                c.gap(6f)
+                c.text(basemap.attribution, c.small)
+                val accs = gps.mapNotNull { it.accuracyM }
+                val accNote = if (accs.isNotEmpty()) {
+                    " Reported GPS accuracy ${accs.min().toInt()}–${accs.max().toInt()} m."
+                } else ""
+                c.para(
+                    "${gps.size} GPS-located samples over satellite imagery, north up. S marks the " +
+                        "start of the walk and E the end.$accNote Indoor GPS can be tens of metres " +
+                        "off even where a fix is reported, so read this alongside the floorplan " +
+                        "page, which carries the operator's own placement.",
+                )
+                drawGpsQualityNote(c, gps)
+                if (excluded > 0) {
+                    c.para(
+                        "$excluded sample(s) excluded from the trail as suspect GPS positions " +
+                            "(implied speed too high from the last trusted fix). Still counted in " +
+                            "the statistics above.",
+                    )
+                }
+                drew = true
+            }
+        }
+        if (!drew) {
+            c.text(
+                "GPS satellite imagery could not be fetched (offline, or no coverage for this " +
+                    "area). The floorplan page carries the positioned samples.",
+                c.body,
+            )
+        }
+    }
+
+    /**
+     * States how trustworthy the plotted GPS fix is, with the numbers and -- when it is not good --
+     * why, and what the tester can do next walk. Rendered for every mixed session, good or bad: the
+     * page itself is never hidden on a poor walk (that reads as a software bug), so it self-diagnoses
+     * instead. See [SessionStats.gpsQuality].
+     */
+    private fun drawGpsQualityNote(c: Ctx, gps: List<TrackPoint>) {
+        val q = SessionStats.gpsQuality(gps)
+        val word = when (q.grade) {
+            SessionStats.GpsQualityGrade.GOOD -> "GOOD"
+            SessionStats.GpsQualityGrade.MARGINAL -> "MARGINAL"
+            SessionStats.GpsQualityGrade.POOR -> "POOR"
+        }
+        val metrics = buildList {
+            q.medianAccuracyM?.let { add("median accuracy ${it.toInt()} m") }
+            q.medianAvgCn0?.let { add("avg C/N0 ${it.toInt()} dB-Hz") }
+            if (q.medianSatsUsed != null && q.medianSatsInView != null) {
+                add("${q.medianSatsUsed} of ${q.medianSatsInView} satellites used")
+            } else {
+                q.medianSatsUsed?.let { add("$it satellites used") }
+            }
+        }.joinToString(", ")
+        c.gap(4f)
+        c.text("GPS data quality: $word" + if (metrics.isNotEmpty()) "  ($metrics)" else "", c.body)
+        if (q.reasons.isNotEmpty()) {
+            c.para("Why: " + q.reasons.joinToString(" "))
+        }
+        if (q.advice.isNotEmpty()) {
+            c.para("Next walk: " + q.advice.joinToString(" "))
+        }
+    }
+
+    /**
      * Plots the survey — the floorplan where one was used, otherwise the GPS track.
      *
      * Indoor sessions are plotted on the plan because they have no geography to plot; treating a
@@ -1561,6 +1682,14 @@ object PdfReportGenerator {
         val planId = summary.floorplanIds.firstOrNull()
         val indoor = points.filter { it.hasIndoorPosition }
         val gps = points.filter { it.hasGpsPosition }
+
+        // A floorplan session that also recorded usable GPS gets the walked GPS track on its own
+        // page first, so the reader can compare the handset's ground truth against the operator's
+        // hand placement on the plan. Pure-GPS and pure-floorplan sessions are unchanged -- their
+        // single plot is drawn below.
+        if (planId != null && indoor.isNotEmpty() && gps.size >= 2) {
+            drawGpsSatellitePage(context, c, summary, gps, kpi)
+        }
 
         c.newPage()
         c.text("Survey plot", c.h2)
@@ -1652,12 +1781,19 @@ object PdfReportGenerator {
                 val zoom = Mercator.fitZoom(bounds, availW.toInt(), availH.toInt(), basemap.maxZoom)
                 val proxy = TileProxy(File(context.cacheDir, "tiles"), basemap)
                 val mercatorTop = c.y
+                // Clip to the plot box so square tiles cannot spill past the grey boundary (and over
+                // the title and captions); the boundary is stroked after the clip is lifted.
+                canvas.save()
+                canvas.clipRect(MARGIN, mercatorTop, MARGIN + availW, mercatorTop + availH)
                 val tilesDrawn = drawMercatorBasemap(
                     canvas, proxy, bounds, zoom, MARGIN, mercatorTop, availW, availH,
                 )
+                val excluded = if (tilesDrawn > 0) {
+                    drawMercatorTrackOverlay(c, gps, bounds, zoom, MARGIN, mercatorTop, availW, availH)
+                } else 0
+                canvas.restore()
                 if (tilesDrawn > 0) {
                     canvas.drawRect(MARGIN, mercatorTop, MARGIN + availW, mercatorTop + availH, frame)
-                    val excluded = drawMercatorTrackOverlay(c, gps, bounds, zoom, MARGIN, mercatorTop, availW, availH)
                     c.y = mercatorTop + availH + LINE
                     c.y += drawLegend(c, kpi, MARGIN, c.y)
                     c.gap(6f)
@@ -1666,6 +1802,7 @@ object PdfReportGenerator {
                         "${gps.size} GPS-located samples over satellite imagery, north up. S marks " +
                             "the start of the walk and E the end.",
                     )
+                    drawGpsQualityNote(c, gps)
                     if (excluded > 0) {
                         c.para(
                             "$excluded sample(s) excluded from the trail as suspect GPS positions " +
@@ -1766,6 +1903,7 @@ object PdfReportGenerator {
             "${gps.size} GPS-located samples, north up, equal scale on both axes. " +
                 "S marks the start of the walk and E the end.",
         )
+        drawGpsQualityNote(c, gps)
         val excluded = outlierFlags.count { it }
         if (excluded > 0) {
             c.para(
@@ -1797,8 +1935,17 @@ object PdfReportGenerator {
         val gw = 200
         val gh = max(1, (gw / max(aspectWH, 0.05f)).toInt())
         // aspect here is height/width, which is what Heatmap measures distance in.
-        return Heatmap.interpolate(samples, gw, gh, aspect = 1f / max(aspectWH, 0.05f))
+        return Heatmap.interpolate(samples, gw, gh, radius = HEATMAP_RADIUS, aspect = 1f / max(aspectWH, 0.05f))
     }
+
+    /**
+     * Interpolation influence radius, as a fraction of the plan width. Tightened from Heatmap's own
+     * 0.12 default: on a large plan 12% of the width is a wide circle, so a sparse arbitrary walk
+     * painted confident blobs across rooms it never reached. Smaller keeps the shaded area close to
+     * where measurements actually were -- the uncovered floor simply stays blank, which is the
+     * honest result the feature exists to produce.
+     */
+    private const val HEATMAP_RADIUS = 0.07f
 
     /** Renders the grid to a translucent bitmap, leaving unmeasured cells fully transparent. */
     private fun heatmapBitmap(grid: Heatmap.Grid, kpi: SessionStats.Kpi): Bitmap? {
