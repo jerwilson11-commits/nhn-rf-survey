@@ -5,6 +5,39 @@ users, worldwide, FR1 first (n41/n48/n77/n78 and the rest of sub-6 TDD), FR2 lat
 the development network. This document covers the **decoder** — the long pole — not the capture
 orchestration that consumes it (see "Handoff" at the end).
 
+## Spike result (2026-10-03): PROVEN
+
+Ran the asn1c spike in an Ubuntu container and decoded the real NSA n41 vector end to end.
+Confirmed feasible, with concrete findings that sharpen the implementation:
+
+- **ASN.1 source:** pycrate bundles the full **38.331 v17.4.0 (h40 = Rel-17)** ASN.1 under
+  `pycrate_asn1dir/3GPP_NR_RRC_38331/*.asn` — the exact grammar our oracle uses. Reuse it (no need
+  to hunt OAI/extract from the spec doc).
+- **asn1c version matters:** the Ubuntu-packaged **asn1c 0.9.28 cannot parse `[[ … ]]`** extension
+  groups (fails at NR-RRC-Definitions.asn:9169). Must use the modern **mouse07410/asn1c** fork (built
+  from source). Its PER flag is split — use **`-gen-UPER`** (not `-gen-PER`), and it supports `-D`.
+- **Generation:** `asn1c -fcompound-names -fno-include-deps -gen-UPER -no-gen-example -pdu=auto -D .
+  *.asn` → exit 0, **2240 types**; all key types present (RRCReconfiguration, SIB1,
+  BCCH-DL-SCH-Message, TDD-UL-DL-ConfigCommon, ServingCellConfigCommon). All 2241 `.c` compiled and
+  linked with **zero errors**.
+- **`SetupRelease` FATALs are tolerable:** asn1c prints `FATAL: Type SetupRelease expects
+  specialization` for 38.331's parameterized `SetupRelease{}`, but still emits compilable code that
+  decoded our vector fully (consumed every bit). Keep the pycrate cross-check to catch any vector
+  where a SetupRelease-wrapped field upstream of the target throws off the sequential UPER decode; a
+  known ASN.1 preprocessing patch is the fallback if one shows up.
+- **OCTET STRING CONTAINING is NOT auto-recursed by asn1c** (pycrate does it implicitly). The decoder
+  must do **nested `uper_decode_complete` calls**. Verified path for NSA:
+  `RRCReconfiguration → criticalExtensions.choice.rrcReconfiguration.secondaryCellGroup` (OCTET
+  STRING, 626 B) → decode as **CellGroupConfig** → `spCellConfig → spCellConfigCommon`
+  (ServingCellConfigCommon) → `tdd-UL-DL-ConfigCommon`. For the SIB1 root it's fewer hops
+  (`BCCH-DL-SCH → SIB1 → servingCellConfigCommon`). CHOICE member `rrcReconfiguration` is by-value.
+- **Size:** the linked test binary (with `asn_fprint` + full support) was ~12 MB; a stripped
+  decode-only `.so` will be smaller but still in the 2–5 MB range predicted.
+
+Net: nothing blocks the build. The nested-container decode is the one detail beyond the original
+plan; it's small and now mapped out. Repro recipe + the generated C live in the session scratchpad
+(`asn1spike/`), ready to lift into `tools/asn1/` and check in (Phase 2).
+
 ## Why a decoder is the long pole
 
 The capture envelope already works: `modem/RrcOtaParser.kt` decodes the `0xB821` (NR RRC OTA) DIAG
