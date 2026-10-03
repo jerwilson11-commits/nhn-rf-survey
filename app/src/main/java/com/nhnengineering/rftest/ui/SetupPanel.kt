@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -159,11 +160,17 @@ fun SetupPanel(
                 status = techLockStatus,
                 onSelect = onTechnologyLock,
             )
+            HorizontalDivider()
+            Text("Signaling capture & TDD decode", style = MaterialTheme.typography.titleSmall)
+            OutlinedButton(
+                onClick = onOpenSignalingCapture,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Capture NAS/RRC + decode TDD") }
             Text(
-                text = "Signaling capture (NAS/RRC) ▸",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.clickable { onOpenSignalingCapture() },
+                "Captures SIB1 / RRCReconfiguration and decodes the TDD pattern, bandwidth, SSB and " +
+                    "cell info — then save it as a profile. Needs root + a Qualcomm modem.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             HorizontalDivider()
