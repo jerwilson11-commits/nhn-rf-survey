@@ -10,6 +10,10 @@
 #include "SpCellConfig.h"
 #include "ReconfigurationWithSync.h"
 #include "ServingCellConfigCommon.h"
+#include "BCCH-DL-SCH-Message.h"
+#include "BCCH-DL-SCH-MessageType.h"
+#include "SIB1.h"
+#include "ServingCellConfigCommonSIB.h"
 #include "TDD-UL-DL-ConfigCommon.h"
 #include "TDD-UL-DL-Pattern.h"
 
@@ -24,7 +28,13 @@ static void sbput(struct sb *s, const char *fmt, ...) {
     s->len += ((size_t)n < room) ? (size_t)n : room;
 }
 
-static void emit_pattern(struct sb *s, const char *name, TDD_UL_DL_Pattern_t *p) {
+static void emit_hex(struct sb *s, const char *key, const BIT_STRING_t *bs) {
+    sbput(s, "\"%s\":\"", key);
+    for (int i = 0; i < bs->size; i++) sbput(s, "%02x", bs->buf[i]);
+    sbput(s, "\",");
+}
+
+static void emit_pattern(struct sb *s, const char *name, const TDD_UL_DL_Pattern_t *p) {
     sbput(s, "\"%s\":{\"periodicity\":%ld,\"dlSlots\":%ld,\"dlSymbols\":%ld,\"ulSlots\":%ld,\"ulSymbols\":%ld",
           name, p->dl_UL_TransmissionPeriodicity, p->nrofDownlinkSlots, p->nrofDownlinkSymbols,
           p->nrofUplinkSlots, p->nrofUplinkSymbols);
@@ -33,15 +43,21 @@ static void emit_pattern(struct sb *s, const char *name, TDD_UL_DL_Pattern_t *p)
     sbput(s, "}");
 }
 
-/* ServingCellConfigCommon (used by the RRCReconfiguration/NSA path). */
-static int emit_tdd_from_scc(struct sb *s, ServingCellConfigCommon_t *scc) {
-    if (!scc || !scc->tdd_UL_DL_ConfigurationCommon) return -1;
-    TDD_UL_DL_ConfigCommon_t *t = scc->tdd_UL_DL_ConfigurationCommon;
-    sbput(s, "\"refSCS\":%ld,", t->referenceSubcarrierSpacing);
+/* The shared TDD leaf (identical type from either root): refSCS + patterns. Ends with no comma. */
+static void emit_tdd_leaf(struct sb *s, const TDD_UL_DL_ConfigCommon_t *t) {
+    sbput(s, "\"refSCS\":%ld", t->referenceSubcarrierSpacing);
+    if (t->pattern1) { sbput(s, ","); emit_pattern(s, "pattern1", t->pattern1); }
+    if (t->pattern2) { sbput(s, ","); emit_pattern(s, "pattern2", t->pattern2); }
+}
+
+/* RRCReconfiguration / NSA variant of ServingCellConfigCommon. */
+static int emit_from_scc(struct sb *s, const ServingCellConfigCommon_t *scc) {
+    if (!scc || !scc->tdd_UL_DL_ConfigurationCommon) { sbput(s, "\"tddPresent\":false}"); return 0; }
+    sbput(s, "\"tddPresent\":true,");
     if (scc->ssbSubcarrierSpacing) sbput(s, "\"ssbSCS\":%ld,", *scc->ssbSubcarrierSpacing);
     if (scc->ssb_periodicityServingCell) sbput(s, "\"ssbPeriodicity\":%ld,", *scc->ssb_periodicityServingCell);
     if (scc->ssb_PositionsInBurst) {
-        const char *kind = 0; BIT_STRING_t *bs = 0;
+        const BIT_STRING_t *bs = 0; const char *kind = 0;
         switch (scc->ssb_PositionsInBurst->present) {
             case ServingCellConfigCommon__ssb_PositionsInBurst_PR_shortBitmap:
                 kind = "short"; bs = &scc->ssb_PositionsInBurst->choice.shortBitmap; break;
@@ -51,21 +67,31 @@ static int emit_tdd_from_scc(struct sb *s, ServingCellConfigCommon_t *scc) {
                 kind = "long"; bs = &scc->ssb_PositionsInBurst->choice.longBitmap; break;
             default: break;
         }
-        if (kind && bs) {
-            sbput(s, "\"ssbKind\":\"%s\",\"ssbHex\":\"", kind);
-            for (int i = 0; i < bs->size; i++) sbput(s, "%02x", bs->buf[i]);
-            sbput(s, "\",");
-        }
+        if (kind && bs) { sbput(s, "\"ssbKind\":\"%s\",", kind); emit_hex(s, "ssbHex", bs); }
     }
-    if (t->pattern1) emit_pattern(s, "pattern1", t->pattern1);
-    if (t->pattern2) { sbput(s, ","); emit_pattern(s, "pattern2", t->pattern2); }
+    emit_tdd_leaf(s, scc->tdd_UL_DL_ConfigurationCommon);
+    sbput(s, "}");
+    return 0;
+}
+
+/* SIB1 variant: ServingCellConfigCommonSIB (ssb-PositionsInBurst is a SEQUENCE, not a CHOICE;
+ * ssb periodicity is mandatory; no ssbSubcarrierSpacing field at this level). */
+static int emit_from_sccsib(struct sb *s, const ServingCellConfigCommonSIB_t *scc) {
+    if (!scc || !scc->tdd_UL_DL_ConfigurationCommon) { sbput(s, "\"tddPresent\":false}"); return 0; }
+    sbput(s, "\"tddPresent\":true,");
+    sbput(s, "\"ssbPeriodicity\":%ld,", scc->ssb_PeriodicityServingCell);
+    sbput(s, "\"ssbKind\":\"inOneGroup\",");
+    emit_hex(s, "ssbHex", &scc->ssb_PositionsInBurst.inOneGroup);
+    emit_tdd_leaf(s, scc->tdd_UL_DL_ConfigurationCommon);
+    sbput(s, "}");
     return 0;
 }
 
 char *nrrrc_decode_tdd_json(int pduKind, const unsigned char *buf, size_t n) {
-    struct sb s; s.cap = 8192; s.p = (char *)malloc(s.cap); s.len = 0; if (s.p) s.p[0] = 0; else return 0;
+    struct sb s; s.cap = 8192; s.p = (char *)malloc(s.cap); s.len = 0; if (!s.p) return 0; s.p[0] = 0;
     sbput(&s, "{");
-    if (pduKind == 0) { /* RRCReconfiguration (NSA) */
+
+    if (pduKind == 0) { /* RRCReconfiguration (NSA SCG) */
         RRCReconfiguration_t *r = 0;
         asn_dec_rval_t rc = uper_decode_complete(0, &asn_DEF_RRCReconfiguration, (void **)&r, buf, n);
         if (rc.code != RC_OK) { sbput(&s, "\"error\":\"rrcreconf_decode\"}"); return s.p; }
@@ -80,11 +106,24 @@ char *nrrrc_decode_tdd_json(int pduKind, const unsigned char *buf, size_t n) {
             !cg->spCellConfig->reconfigurationWithSync->spCellConfigCommon) {
             sbput(&s, "\"error\":\"no_spcellcommon\"}"); return s.p; }
         sbput(&s, "\"root\":\"RRCReconfiguration\",");
-        if (emit_tdd_from_scc(&s, cg->spCellConfig->reconfigurationWithSync->spCellConfigCommon) != 0) {
-            sbput(&s, "\"error\":\"no_tdd\"}"); return s.p; }
-        sbput(&s, "}");
+        emit_from_scc(&s, cg->spCellConfig->reconfigurationWithSync->spCellConfigCommon);
         return s.p;
     }
+
+    if (pduKind == 1) { /* BCCH-DL-SCH-Message / SIB1 (SA broadcast) */
+        BCCH_DL_SCH_Message_t *m = 0;
+        asn_dec_rval_t rc = uper_decode_complete(0, &asn_DEF_BCCH_DL_SCH_Message, (void **)&m, buf, n);
+        if (rc.code != RC_OK) { sbput(&s, "\"error\":\"bcch_decode\"}"); return s.p; }
+        if (!m->message || m->message->present != BCCH_DL_SCH_MessageType_PR_c1 ||
+            m->message->choice.c1.present != BCCH_DL_SCH_MessageType__c1_PR_systemInformationBlockType1) {
+            sbput(&s, "\"error\":\"not_sib1\"}"); return s.p; }
+        SIB1_t *sib1 = m->message->choice.c1.choice.systemInformationBlockType1;
+        if (!sib1 || !sib1->servingCellConfigCommon) { sbput(&s, "\"error\":\"no_scc_sib\"}"); return s.p; }
+        sbput(&s, "\"root\":\"SIB1\",");
+        emit_from_sccsib(&s, sib1->servingCellConfigCommon);
+        return s.p;
+    }
+
     sbput(&s, "\"error\":\"unsupported_pdukind\"}");
     return s.p;
 }
