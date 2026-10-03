@@ -241,6 +241,18 @@ internal fun renderSignalingLog(events: List<ModemNrStream.SignalingEvent>): Str
     appendLine("RF Test App -- Signaling capture (NAS-5GS / RRC OTA)")
     appendLine("${events.size} event(s)")
     appendLine()
+    // Decoded summary first, so the export is readable without reading raw ASN.1. The raw event
+    // timeline below is kept for debugging / offline re-decode.
+    com.nhnengineering.rftest.modem.NrRrcTdd.bestFromEvents(events)?.let { d ->
+        appendLine("===== Decoded TDD config =====")
+        for ((k, v) in com.nhnengineering.rftest.ui.sib1FoundLines(d.profile)) appendLine("  $k: $v")
+        if (d.cellInfo.isNotEmpty()) {
+            appendLine("===== Cell info =====")
+            for ((k, v) in d.cellInfo) appendLine("  $k: $v")
+        }
+        appendLine()
+    }
+    appendLine("===== Raw event timeline =====")
     for (e in events) {
         val t = "%6d ms".format(e.atElapsedMs)
         when {

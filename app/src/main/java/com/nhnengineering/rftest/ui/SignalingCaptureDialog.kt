@@ -66,7 +66,7 @@ internal fun SignalingCaptureDialog(
 
     // Decode the TDD config out of any captured SIB1 / RRCReconfiguration (libnrrrc.so). Null when
     // there is no native lib, no such PDU, or the cell is FDD -- all handled as "nothing to show".
-    val decodedTdd = remember(events) { decodeBestTdd(events) }
+    val decodedTdd = remember(events) { NrRrcTdd.bestFromEvents(events) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -139,29 +139,6 @@ internal fun SignalingCaptureDialog(
     )
 }
 
-/**
- * The best TDD config decodable from the capture, most-recent event first, with the band filled in
- * from the measured NR-ARFCN (it is not in the TDD subtree). Null when the native decoder is absent,
- * no SIB1/RRCReconfiguration was captured, or the cell is FDD.
- */
-private fun decodeBestTdd(events: List<ModemNrStream.SignalingEvent>): NrRrcTdd.Decoded? {
-    for (e in events.asReversed()) {
-        val rrc = e.rrc ?: continue
-        val hex = rrc.rawUperHex ?: continue
-        val pduKind = when (rrc.pduType) {
-            RrcOtaParser.PduType.SIB1 -> 1
-            RrcOtaParser.PduType.RRC_RECONFIG, RrcOtaParser.PduType.DL_DCCH -> 0
-            else -> continue
-        }
-        val bytes = hexToBytes(hex) ?: continue
-        val d = NrRrcTdd.decode(pduKind, bytes) ?: continue
-        // Band isn't in the TDD subtree -- fill it from the measured NR-ARFCN.
-        val band = d.profile.band ?: rrc.nrArfcn?.let { BandMapping.nrBandLabel(it.toInt()) }
-        return if (band != null) d.copy(profile = d.profile.copy(band = band)) else d
-    }
-    return null
-}
-
 @Composable
 private fun KvRow(k: String, v: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -177,14 +154,6 @@ private fun KvRow(k: String, v: String) {
                 fontWeight = FontWeight.Bold,
             ),
         )
-    }
-}
-
-private fun hexToBytes(hex: String): ByteArray? {
-    val s = hex.trim()
-    if (s.isEmpty() || s.length % 2 != 0) return null
-    return ByteArray(s.length / 2) {
-        (s.substring(it * 2, it * 2 + 2).toIntOrNull(16) ?: return null).toByte()
     }
 }
 

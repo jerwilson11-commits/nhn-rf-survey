@@ -1,5 +1,6 @@
 package com.nhnengineering.rftest.modem
 
+import com.nhnengineering.rftest.cellular.BandMapping
 import com.nhnengineering.rftest.profile.Sib1Parser
 import org.json.JSONObject
 
@@ -43,6 +44,35 @@ object NrRrcTdd {
      */
     fun decode(pduKind: Int, uper: ByteArray): Decoded? =
         NrRrcDecoder.decode(pduKind, uper)?.let { decodeJsonForTest(it) }
+
+    /**
+     * The best TDD config decodable from a signaling capture, most-recent event first, with the band
+     * filled from the measured NR-ARFCN. Shared by the capture dialog and the export so both agree.
+     */
+    fun bestFromEvents(events: List<ModemNrStream.SignalingEvent>): Decoded? {
+        for (e in events.asReversed()) {
+            val rrc = e.rrc ?: continue
+            val hex = rrc.rawUperHex ?: continue
+            val pduKind = when (rrc.pduType) {
+                RrcOtaParser.PduType.SIB1 -> 1
+                RrcOtaParser.PduType.RRC_RECONFIG, RrcOtaParser.PduType.DL_DCCH -> 0
+                else -> continue
+            }
+            val bytes = hexToBytes(hex) ?: continue
+            val d = decode(pduKind, bytes) ?: continue
+            val band = d.profile.band ?: rrc.nrArfcn?.let { BandMapping.nrBandLabel(it.toInt()) }
+            return if (band != null) d.copy(profile = d.profile.copy(band = band)) else d
+        }
+        return null
+    }
+
+    private fun hexToBytes(hex: String): ByteArray? {
+        val s = hex.trim()
+        if (s.isEmpty() || s.length % 2 != 0) return null
+        return ByteArray(s.length / 2) {
+            (s.substring(it * 2, it * 2 + 2).toIntOrNull(16) ?: return null).toByte()
+        }
+    }
 
     /** Visible for testing: build a [Decoded] from a native JSON string (no native call). */
     internal fun decodeJsonForTest(json: String): Decoded? {
