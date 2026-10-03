@@ -93,34 +93,28 @@ internal fun SignalingCaptureDialog(
                     }
                 }
                 item { HorizontalDivider() }
-                decodedTdd?.let { r ->
+                decodedTdd?.let { d ->
                     item {
                         Text(
                             "TDD config decoded from capture",
                             style = MaterialTheme.typography.titleSmall,
                         )
                     }
-                    items(sib1FoundLines(r)) { (k, v) ->
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    items(sib1FoundLines(d.profile)) { (k, v) -> KvRow(k, v) }
+                    if (d.cellInfo.isNotEmpty()) {
+                        item {
                             Text(
-                                k,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.weight(1f, fill = false),
-                            )
-                            Text(
-                                v,
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                ),
+                                "Cell info",
+                                style = MaterialTheme.typography.titleSmall,
                             )
                         }
+                        items(d.cellInfo) { (k, v) -> KvRow(k, v) }
                     }
                     item {
                         Button(onClick = {
-                            val profile = blankProfile(null, r.mcc, r.mnc, r.band)
+                            val profile = blankProfile(null, d.profile.mcc, d.profile.mnc, d.profile.band)
                                 .copy(source = "Signaling capture")
-                                .withSib1(r, System.currentTimeMillis())
+                                .withSib1(d.profile, System.currentTimeMillis())
                             onSaveProfile(profile)
                         }) { Text("Save as profile") }
                     }
@@ -150,7 +144,7 @@ internal fun SignalingCaptureDialog(
  * from the measured NR-ARFCN (it is not in the TDD subtree). Null when the native decoder is absent,
  * no SIB1/RRCReconfiguration was captured, or the cell is FDD.
  */
-private fun decodeBestTdd(events: List<ModemNrStream.SignalingEvent>): Sib1Parser.Result? {
+private fun decodeBestTdd(events: List<ModemNrStream.SignalingEvent>): NrRrcTdd.Decoded? {
     for (e in events.asReversed()) {
         val rrc = e.rrc ?: continue
         val hex = rrc.rawUperHex ?: continue
@@ -160,11 +154,30 @@ private fun decodeBestTdd(events: List<ModemNrStream.SignalingEvent>): Sib1Parse
             else -> continue
         }
         val bytes = hexToBytes(hex) ?: continue
-        val r = NrRrcTdd.fromCapture(pduKind, bytes) ?: continue
-        val band = r.band ?: rrc.nrArfcn?.let { BandMapping.nrBandLabel(it.toInt()) }
-        return if (band != null) r.copy(band = band) else r
+        val d = NrRrcTdd.decode(pduKind, bytes) ?: continue
+        // Band isn't in the TDD subtree -- fill it from the measured NR-ARFCN.
+        val band = d.profile.band ?: rrc.nrArfcn?.let { BandMapping.nrBandLabel(it.toInt()) }
+        return if (band != null) d.copy(profile = d.profile.copy(band = band)) else d
     }
     return null
+}
+
+@Composable
+private fun KvRow(k: String, v: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(
+            k,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        Text(
+            v,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+            ),
+        )
+    }
 }
 
 private fun hexToBytes(hex: String): ByteArray? {

@@ -14,8 +14,9 @@ class NrRrcTddTest {
 
     // Verbatim from the on-device decode of the real n41 NSA RRCReconfiguration.
     private val n41Nsa = """
-        {"root":"RRCReconfiguration","tddPresent":true,"ssbSCS":1,"ssbPeriodicity":2,
-         "ssbKind":"medium","ssbHex":"20","refSCS":1,
+        {"root":"RRCReconfiguration","pci":206,"tddPresent":true,"ssPBCHBlockPower":20,"ssbSCS":1,
+         "ssbPeriodicity":2,"ssbArfcn":501390,"pointAArfcn":499422,"carrierBandwidthRb":273,
+         "carrierSCS":1,"offsetToCarrier":0,"ssbKind":"medium","ssbHex":"20","refSCS":1,
          "pattern1":{"periodicity":0,"dlSlots":3,"dlSymbols":6,"ulSlots":2,"ulSymbols":4,"periodicityV1530":0},
          "pattern2":{"periodicity":4,"dlSlots":4,"dlSymbols":0,"ulSlots":0,"ulSymbols":0}}
     """.trimIndent().replace("\n", "")
@@ -42,6 +43,19 @@ class NrRrcTddTest {
         // SSB: medium bitmap 0x20 = 00100000 (position 2), 20 ms period
         assertEquals(20, r.ssbPeriodicityMs)
         assertEquals("00100000", r.ssbPositionsInBurst)
+        // Enriched fields that flow into the profile
+        assertEquals(206, r.pci)
+        assertEquals(273, r.carrierBandwidthRb)
+    }
+
+    @Test
+    fun cellInfoLinesSurfaceRfFields() {
+        val d = NrRrcTdd.decodeJsonForTest(n41Nsa)
+        requireNotNull(d) { "expected a decoded result" }
+        val info = d.cellInfo.toMap()
+        assertEquals("20 dBm", info["SS-PBCH block power"])
+        assertEquals("273 RB (≈100 MHz)", info["Channel bandwidth"])
+        assertEquals("501390", info["SSB ARFCN"])
     }
 
     @Test
