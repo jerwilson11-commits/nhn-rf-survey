@@ -43,7 +43,9 @@ object NrRrcTdd {
         val o = runCatching { JSONObject(json) }.getOrNull() ?: return null
         if (!o.optBoolean("tddPresent", false)) return null
         val text = renderCanonical(o) ?: return null
-        return Sib1Parser.parse(text)
+        // Defence in depth: a parser exception must never take down the capture UI (this runs on the
+        // Compose main thread during polling). Degrade to "nothing decoded" instead.
+        return runCatching { Sib1Parser.parse(text) }.getOrNull()
     }
 
     private fun renderCanonical(o: JSONObject): String? {

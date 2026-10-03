@@ -427,7 +427,10 @@ object Sib1Parser {
 
     /** `mcc { 3, 1, 0 }` to "310"; also accepts `mcc 310`. */
     private fun digitsGroup(text: String, name: String): String? {
-        Regex("""\b${Regex.escape(name)}\b\s*[:=]?\s*\{([^}]*)}""", RegexOption.IGNORE_CASE)
+        // The closing brace is escaped deliberately: Android's ICU regex engine rejects a bare `}`
+        // (it reads it as a stray quantifier close) and throws PatternSyntaxException, where the
+        // desktop JVM's java.util.regex tolerates it -- so the unit tests pass but the device throws.
+        Regex("""\b${Regex.escape(name)}\b\s*[:=]?\s*\{([^}]*)\}""", RegexOption.IGNORE_CASE)
             .find(text)?.let { m ->
                 val digits = Regex("""\d""").findAll(m.groupValues[1]).joinToString("") { it.value }
                 if (digits.isNotEmpty()) return digits
