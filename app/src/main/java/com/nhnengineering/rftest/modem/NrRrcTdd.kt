@@ -67,11 +67,21 @@ object NrRrcTdd {
     }
 
     private fun hexToBytes(hex: String): ByteArray? {
-        val s = hex.trim()
+        val s = hex.trim().replace(Regex("\\s"), "")
         if (s.isEmpty() || s.length % 2 != 0) return null
         return ByteArray(s.length / 2) {
             (s.substring(it * 2, it * 2 + 2).toIntOrNull(16) ?: return null).toByte()
         }
+    }
+
+    /**
+     * Decode a raw NR RRC UPER body supplied as a hex string (the import path -- works on any arm64
+     * device, no root or Qualcomm modem needed, since the decode is pure computation). The PDU kind
+     * is not known up front, so this tries SIB1 then RRCReconfiguration and keeps whichever decodes.
+     */
+    fun decodeHex(hex: String): Decoded? {
+        val bytes = hexToBytes(hex) ?: return null
+        return decode(1, bytes) ?: decode(0, bytes)
     }
 
     /** Visible for testing: build a [Decoded] from a native JSON string (no native call). */

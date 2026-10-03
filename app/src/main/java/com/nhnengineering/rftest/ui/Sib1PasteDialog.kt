@@ -46,7 +46,19 @@ internal fun Sib1PasteDialog(
 ) {
     val clipboard = LocalClipboardManager.current
     var text by remember { mutableStateOf("") }
-    val result = remember(text) { Sib1Parser.parse(text) }
+    // Raw-hex import: if the pasted text is UPER hex, decode it on-device (works on any arm64 device,
+    // no root needed). Otherwise fall back to parsing a decoded ASN.1 tree.
+    val decodedHex = remember(text) {
+        val hex = text.trim().replace(Regex("\\s"), "")
+        if (hex.length >= 8 && hex.length % 2 == 0 &&
+            hex.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }
+        ) {
+            com.nhnengineering.rftest.modem.NrRrcTdd.decodeHex(hex)
+        } else {
+            null
+        }
+    }
+    val result = remember(text, decodedHex) { decodedHex?.profile ?: Sib1Parser.parse(text) }
 
     AlertDialog(
         onDismissRequest = onCancel,
@@ -55,9 +67,9 @@ internal fun Sib1PasteDialog(
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 item {
                     Text(
-                        "This app cannot reach SIB1 — it sits below Android's RIL boundary. A " +
-                            "diagnostic tool on a rooted handset can, so paste what it printed and " +
-                            "the configuration will be read out of it.",
+                        "Paste a decoded SIB1 tree from a diagnostic tool, or paste the raw SIB1 / " +
+                            "RRCReconfiguration bytes (hex) from a capture — the app decodes the hex " +
+                            "on-device (no root needed) and reads the configuration out of it.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -144,6 +156,29 @@ internal fun Sib1PasteDialog(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                    if (decodedHex != null && decodedHex.cellInfo.isNotEmpty()) {
+                        item { HorizontalDivider() }
+                        item { Text("Cell info", style = MaterialTheme.typography.titleSmall) }
+                        items(decodedHex.cellInfo) { (k, v) ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(
+                                    k,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                Text(
+                                    v,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                    ),
+                                )
+                            }
+                        }
                     }
                 }
             }
