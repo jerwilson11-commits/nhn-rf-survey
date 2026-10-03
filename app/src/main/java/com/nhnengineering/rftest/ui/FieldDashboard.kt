@@ -181,6 +181,12 @@ fun HeroKpi(cell: CellularSample?, wifi: WifiSample?) {
         else -> "dBm RSSI"
     }
     val context = when {
+        // Observed-but-not-registered (e.g. a present-but-deactivated SIM): the big number is a real
+        // measurement of the strongest cell in view, but the device is NOT on it. Say so instead of
+        // labelling it a serving RAT/band, which read as normal service.
+        cell != null && !cell.isRegistered && (cell.lte != null || cell.nr != null) ->
+            listOfNotNull("Not registered", cell.servingBandLabel?.let { "observed $it" })
+                .joinToString(" · ")
         cell != null -> listOfNotNull(cell.rat.label, cell.servingBandLabel).joinToString("  ")
         wifi != null -> wifi.ssid ?: "Wi-Fi"
         else -> "no signal"

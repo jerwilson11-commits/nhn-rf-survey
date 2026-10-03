@@ -354,6 +354,13 @@ class CellularCollector(context: Context) {
         val lte = servingLte?.let { toLte(it) }
         val nr = servingNr?.let { toNr(it) }
 
+        // Registered means camped on a cell, not merely observing one. A present-but-deactivated
+        // SIM leaves [lte]/[nr] holding the strongest *observed* cell (registered=false) so the RF
+        // is not thrown away -- but roaming is only meaningful against a cell we are actually on, so
+        // isNetworkRoaming must not be trusted when nothing is registered (it reports true for an
+        // out-of-service SIM and that surfaced a bogus "Roam" on a deactivated Verizon SIM).
+        val registered = lte?.registered == true || nr?.registered == true
+
         val nrState = nrStateOf()
         val rat = ratOf(lte, nr, sim)
 
@@ -382,7 +389,7 @@ class CellularCollector(context: Context) {
             rat = rat,
             nrState = nrState,
             overrideNetworkType = overrideLabel(),
-            isRoaming = runCatching { tm.isNetworkRoaming }.getOrDefault(false),
+            isRoaming = registered && runCatching { tm.isNetworkRoaming }.getOrDefault(false),
             mcc = nr?.mcc ?: lte?.mcc,
             mnc = nr?.mnc ?: lte?.mnc,
             operator = nr?.operator ?: lte?.operator ?: tm.networkOperatorName?.ifBlank { null },

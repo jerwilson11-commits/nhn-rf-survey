@@ -97,6 +97,17 @@ fun CellularCard(sample: CellularSample?) {
                 )
             }
 
+            if (!sample.isRegistered && (sample.lte != null || sample.nr != null)) {
+                Text(
+                    "Observed, not registered — the SIM is present but out of service (deactivated, " +
+                        "denied, or no usable coverage). The reading above is the strongest cell in " +
+                        "view, a real measurement, but the device is not camped on it, so this is " +
+                        "not serving-cell service.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFEF6C00),
+                )
+            }
+
             if (sample.permissionLimited) {
                 Text(
                     "Phone-state permission not granted — NSA/SA cannot be distinguished and the " +
@@ -198,7 +209,16 @@ fun CellularCard(sample: CellularSample?) {
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
             KeyValue("NR state", sample.nrState.label)
             KeyValue("Status bar shows", sample.overrideNetworkType ?: "—")
-            KeyValue("Roaming", if (sample.isRoaming) "yes" else "no")
+            // Roaming only means something against a cell we are actually on. With a present-but-
+            // unregistered SIM the strongest *observed* cell is shown above (so the RF is not lost),
+            // and the framework's isNetworkRoaming reads true for an out-of-service SIM -- so report
+            // the registration state here rather than a misleading "Roaming: yes".
+            if (sample.isRegistered) {
+                KeyValue("Registration", "registered")
+                KeyValue("Roaming", if (sample.isRoaming) "yes" else "no")
+            } else {
+                KeyValue("Registration", "not registered")
+            }
             KeyValue(
                 "Neighbours",
                 if (sample.neighboursEverSeen) {

@@ -324,6 +324,18 @@ data class CellularSample(
      * together for it.
      */
     val onFirstNetBand14: Boolean get() = lte?.band == 14 || nr?.bands?.contains("n14") == true
+
+    /**
+     * Whether the serving radio reading is a cell the device is actually registered/camped on,
+     * rather than merely the strongest cell it can *observe*.
+     *
+     * When a SIM is present but out of service -- deactivated, denied, or no coverage -- Android
+     * still returns the strongest cells it can see. The collector keeps the strongest of those as
+     * [lte]/[nr] so the RF is not lost (coverage exists, the device just can't use it), but it is
+     * NOT a serving cell. This flag is the one place the UI should check before calling that reading
+     * "serving" or reporting roaming on it. False here means "observed, not registered".
+     */
+    val isRegistered: Boolean get() = lte?.registered == true || nr?.registered == true
 }
 
 /**
