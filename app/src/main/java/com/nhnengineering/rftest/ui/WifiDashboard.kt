@@ -755,6 +755,16 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                     shareDiagnosticsText(context, text, filePrefix = "signaling_capture")
                 }
             },
+            onSaveProfile = { profile ->
+                com.nhnengineering.rftest.profile.ProfileStore(
+                    java.io.File(context.filesDir, "tdd-profiles.jsonl"),
+                ).upsert(profile)
+                android.widget.Toast.makeText(
+                    context,
+                    "Saved TDD profile: ${profile.band.ifBlank { "n?" }} ${profile.tddPattern ?: ""}".trim(),
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            },
             onDismiss = { showSignalingCapture = false },
         )
     }

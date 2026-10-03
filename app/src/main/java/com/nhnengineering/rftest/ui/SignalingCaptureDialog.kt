@@ -20,9 +20,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.nhnengineering.rftest.cellular.BandMapping
 import com.nhnengineering.rftest.modem.ModemNrStream
 import com.nhnengineering.rftest.modem.Nas5gsOtaParser
+import com.nhnengineering.rftest.modem.NrRrcTdd
+import com.nhnengineering.rftest.modem.RrcOtaParser
+import com.nhnengineering.rftest.profile.Sib1Parser
+import com.nhnengineering.rftest.profile.TddProfile
 import kotlinx.coroutines.delay
 
 private const val POLL_INTERVAL_MS = 1_000L
@@ -46,6 +52,7 @@ internal fun SignalingCaptureDialog(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onExport: (List<ModemNrStream.SignalingEvent>) -> Unit,
+    onSaveProfile: (TddProfile) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var events by remember { mutableStateOf(emptyList<ModemNrStream.SignalingEvent>()) }
@@ -56,6 +63,10 @@ internal fun SignalingCaptureDialog(
             delay(POLL_INTERVAL_MS)
         }
     }
+
+    // Decode the TDD config out of any captured SIB1 / RRCReconfiguration (libnrrrc.so). Null when
+    // there is no native lib, no such PDU, or the cell is FDD -- all handled as "nothing to show".
+    val decodedTdd = remember(events) { decodeBestTdd(events) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -82,6 +93,39 @@ internal fun SignalingCaptureDialog(
                     }
                 }
                 item { HorizontalDivider() }
+                decodedTdd?.let { r ->
+                    item {
+                        Text(
+                            "TDD config decoded from capture",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                    }
+                    items(sib1FoundLines(r)) { (k, v) ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(
+                                k,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            Text(
+                                v,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                ),
+                            )
+                        }
+                    }
+                    item {
+                        Button(onClick = {
+                            val profile = blankProfile(null, r.mcc, r.mnc, r.band)
+                                .copy(source = "Signaling capture")
+                                .withSib1(r, System.currentTimeMillis())
+                            onSaveProfile(profile)
+                        }) { Text("Save as profile") }
+                    }
+                    item { HorizontalDivider() }
+                }
                 if (events.isEmpty()) {
                     item {
                         Text(
@@ -99,6 +143,36 @@ internal fun SignalingCaptureDialog(
         },
         modifier = Modifier.heightIn(max = 560.dp),
     )
+}
+
+/**
+ * The best TDD config decodable from the capture, most-recent event first, with the band filled in
+ * from the measured NR-ARFCN (it is not in the TDD subtree). Null when the native decoder is absent,
+ * no SIB1/RRCReconfiguration was captured, or the cell is FDD.
+ */
+private fun decodeBestTdd(events: List<ModemNrStream.SignalingEvent>): Sib1Parser.Result? {
+    for (e in events.asReversed()) {
+        val rrc = e.rrc ?: continue
+        val hex = rrc.rawUperHex ?: continue
+        val pduKind = when (rrc.pduType) {
+            RrcOtaParser.PduType.SIB1 -> 1
+            RrcOtaParser.PduType.RRC_RECONFIG, RrcOtaParser.PduType.DL_DCCH -> 0
+            else -> continue
+        }
+        val bytes = hexToBytes(hex) ?: continue
+        val r = NrRrcTdd.fromCapture(pduKind, bytes) ?: continue
+        val band = r.band ?: rrc.nrArfcn?.let { BandMapping.nrBandLabel(it.toInt()) }
+        return if (band != null) r.copy(band = band) else r
+    }
+    return null
+}
+
+private fun hexToBytes(hex: String): ByteArray? {
+    val s = hex.trim()
+    if (s.isEmpty() || s.length % 2 != 0) return null
+    return ByteArray(s.length / 2) {
+        (s.substring(it * 2, it * 2 + 2).toIntOrNull(16) ?: return null).toByte()
+    }
 }
 
 @Composable

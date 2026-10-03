@@ -507,7 +507,7 @@ private fun Field(label: String, value: String, onChange: (String) -> Unit) {
     )
 }
 
-private fun blankProfile(operator: String?, mcc: String?, mnc: String?, band: String?) = TddProfile(
+internal fun blankProfile(operator: String?, mcc: String?, mnc: String?, band: String?) = TddProfile(
     id = UUID.randomUUID().toString(),
     vendor = "",
     operator = operator ?: "",
