@@ -39,6 +39,11 @@ object RrcOtaParser {
         MIB(1, "MIB"),
         SIB1(2, "SIB1"),
         DL_DCCH(4, "DL-DCCH"),
+        // Some modem log versions emit the NR RRCReconfiguration (the NSA SCG-add) under PDU type 9
+        // rather than 4 -- observed on the OnePlus 9 / X60 for the n41 secondary-cell-group add. The
+        // type byte's meaning is version-specific, so this is only a hint: a decoder confirms by
+        // actually decoding the body (see NrRrcDecoder / tools/asn1), never by trusting the code.
+        RRC_RECONFIG(9, "RRCReconfiguration"),
         ;
 
         companion object {
