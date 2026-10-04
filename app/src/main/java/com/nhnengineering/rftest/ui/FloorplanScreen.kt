@@ -252,6 +252,23 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Georeference floors (optional — adds real lat/long)") }
 
+                    // Safe bulk cleanup: removes only the plans with NO georeference, so a
+                    // georeferenced floor can never be lost this way (the concern with a blanket
+                    // "remove all"). Mirrors deleting the throwaway floors by hand, in one tap.
+                    val nonGeoref = plans.filter { it.id !in georefIds }
+                    if (nonGeoref.size >= 2) {
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    nonGeoref.forEach { FloorplanStore.delete(context, it.id) }
+                                    plans = FloorplanStore.list(context)
+                                    selected?.let { s -> if (plans.none { it.id == s.id }) selected = null }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Delete non-georeferenced (${nonGeoref.size}) — keeps georeferenced") }
+                    }
+
                     if (plans.isNotEmpty()) {
                         HorizontalDivider()
                         plans.forEach { p ->
