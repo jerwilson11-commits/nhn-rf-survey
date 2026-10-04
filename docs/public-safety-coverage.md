@@ -82,3 +82,50 @@ recording. Track A needs no live radio state at all and is fully testable now �
 Unit-tested: both tracks' compliance math against synthetic data (`PublicSafetyCoverageTest.kt` for
 Track A, `PublicSafetyCoverageStatsTest.kt` for Track B), including the Band-14-exclusion
 regression test and a null-percentage-not-zero test for an untested area class.
+
+## 2026-10-04 enhancements
+
+Four enhancements, all offline-testable (no live radio needed), built after confirming the original
+feature above was already shipped. Order and scope agreed with Jeremy.
+
+1. **Live "FirstNet · Band 14" badge.** `CellularSample.onFirstNetBand14` was only surfaced in the
+   Setup area-class control and the report. A shared `FirstNetBand14Badge` composable
+   (`ui/CellularCard.kt`) now shows it at a glance in the FieldDashboard hero and the cellular card
+   whenever the serving or strongest-observed cell is Band 14 (LTE) or n14 (NR). It identifies the
+   band only — it does not assert an AHJ accepts the Band 14 substitution (that stays here, in the
+   Safety-tab reporting).
+
+2. **Grid method (NFPA "20-square").** `errcsGridCompliance()` / `errcsGridCell()` grade occupied
+   grid *squares* rather than individual readings: a square passes only if every reading in it passes
+   (worst-case), and compliance is passing squares over tested squares. The by-point figure is kept
+   alongside it — neither is assumed, because AHJs differ on which they require. `FloorplanCanvas`
+   gained an optional `GridOverlay` drawn in the plan's own pan/zoom space (squares lock to the floor
+   as it zooms); the Safety tab has a grid on/off switch and per-floorplan rows/cols steppers, and
+   squares shade green/red/unshaded by verdict. Dimensions persist per floorplan in
+   `session/ErrcsGridConfigStore.kt` (4×5 default = 20 squares), and the PDF report aggregates
+   grid-method compliance across the session's floors (each floor on its own saved grid).
+
+3. **Two-way (inbound/outbound).** `ErrcsGridPoint.signalDbm` is now explicitly the outbound/downlink
+   (talk-out) reading, and an optional `inboundDbm` carries the uplink/talk-in reading. ERRCS
+   requires two-way coverage, so a point with an inbound reading passes only if BOTH directions clear
+   the dBm floor. A missing inbound is "not measured", never a failure.
+
+4. **DAQ.** `ErrcsGridPoint.daq` (TSB-88 1.0–5.0) is recorded optionally, and
+   `PublicSafetyThresholds.minDaq` (null by default) grades it. A point fails on DAQ only when a
+   threshold is set AND a DAQ value was recorded — recording DAQ without a threshold keeps it as
+   documentation without changing pass/fail. Common objectives surfaced in the UI: DAQ 3.0 (ERRCS
+   acceptance), DAQ 3.4 (TSB-88 wide-area P25).
+
+**Backward compatibility:** the new `ErrcsGridPoint` fields are optional and the store's parser reads
+a missing key as null, so grid points written before this change load unchanged (covered by a
+regression test in `ErrcsGridStoreTest.kt`).
+
+**Testing status unchanged for Track B.** These enhancements are all Track A (manual ingestion) plus
+the band badge; none required a live Band 14/n14 signal. Track B's live-signal validation is still
+open and still blocked on an active FirstNet (or commercial AT&T, which also uses Band 14) SIM —
+that remains the one outstanding verification for the public-safety feature as a whole.
+
+Unit-tested additions: inbound two-way grading, DAQ grading (threshold-and-value gating),
+grid-cell bucketing with far-edge clamp, worst-case square pass/fail, null-not-zero for an untested
+class under the grid method, and round-trips for both `ErrcsGridStore` (incl. old-format records) and
+`ErrcsGridConfigStore`.
