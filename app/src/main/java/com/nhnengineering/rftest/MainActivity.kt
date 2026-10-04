@@ -90,7 +90,7 @@ private enum class Tab(val label: String) {
     LIVE("Live"),
     MAP("Map"),
     FLOORPLAN("Plan"),
-    SAFETY("Safety"),
+    SAFETY("P. Safety"),
     SESSIONS("Saved"),
     PROFILES("Config"),
 }
