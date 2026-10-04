@@ -35,7 +35,9 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -375,6 +377,10 @@ internal fun FloorplanCanvas(
     // Optional NFPA grid-method overlay (Safety tab). Drawn in the same pan/zoom space as the plan so
     // the squares stay locked to the floor as the operator zooms. Null everywhere else.
     gridOverlay: GridOverlay? = null,
+    // Optional AHJ-designated critical-area rectangles in normalised (0..1) plan coordinates (Safety
+    // tab). Drawn as blue outlines locked to the plan, independent of the sampling grid, so a small
+    // feature like a stairwell can be marked precisely. Empty everywhere else.
+    criticalRegions: List<Rect> = emptyList(),
 ) {
     var scale by remember(plan.id) { mutableStateOf(1f) }
     var offset by remember(plan.id) { mutableStateOf(Offset.Zero) }
@@ -394,6 +400,10 @@ internal fun FloorplanCanvas(
 
     Box(
         boxModifier
+            // Clip the zoomed/panned image to the box. Without this the scaled bitmap and its overlays
+            // paint outside the canvas rectangle and cover whatever composables sit below it (observed
+            // on both the Plan and Safety pages when zoomed in).
+            .clipToBounds()
             .pointerInput(plan.id) {
                 detectTransformGestures { _, pan, zoom, _ ->
                     scale = (scale * zoom).coerceIn(1f, 8f)
@@ -484,21 +494,19 @@ internal fun FloorplanCanvas(
                 for (r in 0..rows) {
                     drawLine(lineColor, toScreen(0f, r.toFloat() / rows), toScreen(1f, r.toFloat() / rows), strokeWidth = 2f)
                 }
-                // AHJ-designated critical squares: a distinct blue outline, drawn over the grid lines
-                // so they read as "this area is held to the 99% requirement" at a glance.
-                g.criticalCell?.let { isCritical ->
-                    val critical = Color(0xFF1565C0)
-                    for (r in 0 until rows) for (col in 0 until cols) {
-                        if (!isCritical(r, col)) continue
-                        val tl = toScreen(col.toFloat() / cols, r.toFloat() / rows)
-                        val br = toScreen((col + 1f) / cols, (r + 1f) / rows)
-                        drawRect(
-                            color = critical,
-                            topLeft = tl,
-                            size = androidx.compose.ui.geometry.Size(br.x - tl.x, br.y - tl.y),
-                            style = Stroke(width = 4f),
-                        )
-                    }
+            }
+
+            // AHJ-designated critical-area rectangles, drawn precisely in plan space (not snapped to
+            // the sampling grid) so a small feature like a stairwell can be outlined tightly. A faint
+            // fill plus a blue outline so the area reads as "held to the 99% requirement" at a glance.
+            if (criticalRegions.isNotEmpty()) {
+                val critical = Color(0xFF1565C0)
+                for (rr in criticalRegions) {
+                    val tl = toScreen(rr.left, rr.top)
+                    val br = toScreen(rr.right, rr.bottom)
+                    val sz = androidx.compose.ui.geometry.Size(br.x - tl.x, br.y - tl.y)
+                    drawRect(color = critical.copy(alpha = 0.15f), topLeft = tl, size = sz)
+                    drawRect(color = critical, topLeft = tl, size = sz, style = Stroke(width = 4f))
                 }
             }
 
@@ -543,8 +551,6 @@ internal data class GridOverlay(
     val rows: Int,
     val cols: Int,
     val cellArgb: (row: Int, col: Int) -> Int?,
-    /** When set and true for a square, that square is outlined as an AHJ-designated critical area. */
-    val criticalCell: ((row: Int, col: Int) -> Boolean)? = null,
 )
 
 /** Colour a placed point by whichever radio was serving, so the plan reads at a glance. */

@@ -30,6 +30,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -80,6 +81,8 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
     var gridCols by remember { mutableStateOf(ERRCS_DEFAULT_GRID_COLS) }
     var markMode by remember { mutableStateOf(false) }
     var criticalAreas by remember { mutableStateOf<List<ErrcsCriticalArea>>(emptyList()) }
+    // First corner of a critical-area rectangle being drawn (normalised); the second tap closes it.
+    var pendingCorner by remember { mutableStateOf<Pair<Float, Float>?>(null) }
 
     val store = remember { ErrcsGridStore(File(context.filesDir, "errcs_grid.jsonl")) }
     val configStore = remember { ErrcsGridConfigStore(File(context.filesDir, "errcs_grid_config.jsonl")) }
@@ -257,20 +260,21 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                 }
-                                // Tap target: add a reading, or mark the square as an AHJ-designated
-                                // critical area. Mark mode needs the grid, so it forces the overlay on.
-                                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                                    SegmentedButton(
-                                        selected = !markMode,
-                                        onClick = { markMode = false },
-                                        shape = SegmentedButtonDefaults.itemShape(0, 2),
-                                    ) { Text("Add reading") }
-                                    SegmentedButton(
-                                        selected = markMode,
-                                        onClick = { markMode = true; showGrid = true },
-                                        shape = SegmentedButtonDefaults.itemShape(1, 2),
-                                    ) { Text("Mark critical") }
-                                }
+                            }
+                            // Tap target: add a reading, or draw an AHJ-designated critical-area
+                            // rectangle. Independent of the sampling grid, so a stairwell can be
+                            // outlined precisely at any zoom.
+                            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                                SegmentedButton(
+                                    selected = !markMode,
+                                    onClick = { markMode = false; pendingCorner = null },
+                                    shape = SegmentedButtonDefaults.itemShape(0, 2),
+                                ) { Text("Add reading") }
+                                SegmentedButton(
+                                    selected = markMode,
+                                    onClick = { markMode = true },
+                                    shape = SegmentedButtonDefaults.itemShape(1, 2),
+                                ) { Text("Mark critical") }
                             }
                             FloorplanCanvas(
                                 plan = plan,
@@ -280,24 +284,39 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                     IndoorPosition(plan.id, pt.xNorm, pt.yNorm, pt.systemLabel) to
                                         (if (pass) PASS_ARGB else FAIL_ARGB)
                                 },
-                                currentPosition = null,
+                                // While drawing a rectangle, show the first corner so the operator can
+                                // line up the second. Reuses the canvas's existing marker.
+                                currentPosition = pendingCorner?.let { (x, y) ->
+                                    IndoorPosition(plan.id, x, y, "corner 1")
+                                },
                                 onTap = { x, y ->
-                                    if (markMode) {
-                                        val (row, col) = errcsGridCell(x, y, gridRows, gridCols)
-                                        val cx = (col + 0.5f) / gridCols
-                                        val cy = (row + 0.5f) / gridRows
-                                        val updated = if (isInCriticalArea(cx, cy, criticalAreas)) {
-                                            criticalAreas.filterNot { it.contains(cx, cy) }
-                                        } else {
-                                            criticalAreas + ErrcsCriticalArea(
-                                                col.toFloat() / gridCols, row.toFloat() / gridRows,
-                                                (col + 1f) / gridCols, (row + 1f) / gridRows,
-                                            )
-                                        }
-                                        criticalAreas = updated
-                                        scope.launch { criticalStore.setAreas(plan.id, updated) }
-                                    } else {
+                                    if (!markMode) {
                                         pendingTap = x to y
+                                    } else {
+                                        val existing = criticalAreas.firstOrNull { it.contains(x, y) }
+                                        val corner = pendingCorner
+                                        when {
+                                            // No rectangle in progress, tapped an existing area -> remove it.
+                                            corner == null && existing != null -> {
+                                                val updated = criticalAreas - existing
+                                                criticalAreas = updated
+                                                scope.launch { criticalStore.setAreas(plan.id, updated) }
+                                            }
+                                            // No rectangle in progress -> this tap is the first corner.
+                                            corner == null -> pendingCorner = x to y
+                                            // Second corner -> close the rectangle (ignore a zero-size one).
+                                            else -> {
+                                                val rect = ErrcsCriticalArea(corner.first, corner.second, x, y)
+                                                pendingCorner = null
+                                                if (kotlin.math.abs(rect.x1 - rect.x0) > 0.003f &&
+                                                    kotlin.math.abs(rect.y1 - rect.y0) > 0.003f
+                                                ) {
+                                                    val updated = criticalAreas + rect
+                                                    criticalAreas = updated
+                                                    scope.launch { criticalStore.setAreas(plan.id, updated) }
+                                                }
+                                            }
+                                        }
                                     }
                                 },
                                 gridOverlay = if (!showGrid) null else GridOverlay(
@@ -310,21 +329,33 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                             null -> null
                                         }
                                     },
-                                    criticalCell = { row, col -> (row to col) in criticalCells },
                                 ),
+                                criticalRegions = criticalAreas.map {
+                                    Rect(it.x0, it.y0, it.x1, it.y1)
+                                },
                             )
                             Text(
                                 if (markMode) {
-                                    "Mark mode: tap a square to toggle it as a critical area (blue " +
-                                        "outline). Readings inside count toward the 99% critical " +
-                                        "requirement. Switch to \"Add reading\" to record readings."
+                                    (
+                                        if (pendingCorner == null) {
+                                            "Mark mode: tap one corner of a critical area, then the " +
+                                                "opposite corner to draw it. Zoom in first for a tight " +
+                                                "fit (e.g. a stairwell). Tap inside an existing blue " +
+                                                "area to remove it."
+                                        } else {
+                                            "Now tap the opposite corner to finish the rectangle."
+                                        }
+                                        )
                                 } else {
                                     "Pinch to zoom, drag to pan, tap to add a reading. Dots/squares: " +
-                                        "green passes, red fails, unshaded = no reading yet. Blue " +
-                                        "outline = a designated critical area."
+                                        "green passes, red fails, unshaded = no reading yet. Blue = a " +
+                                        "designated critical area."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                             )
+                            if (markMode && pendingCorner != null) {
+                                TextButton(onClick = { pendingCorner = null }) { Text("Cancel corner") }
+                            }
                             if (criticalAreas.isNotEmpty()) {
                                 Row(
                                     Modifier.fillMaxWidth(),
@@ -332,11 +363,14 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Text(
-                                        "${criticalCells.size} critical squares designated",
+                                        "${criticalAreas.size} critical area" +
+                                            (if (criticalAreas.size == 1) "" else "s") +
+                                            " · ${criticalCells.size} grid squares",
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                     TextButton(onClick = {
                                         criticalAreas = emptyList()
+                                        pendingCorner = null
                                         scope.launch { criticalStore.setAreas(plan.id, emptyList()) }
                                     }) { Text("Clear critical") }
                                 }
