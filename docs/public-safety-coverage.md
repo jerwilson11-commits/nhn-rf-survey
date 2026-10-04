@@ -116,6 +116,22 @@ feature above was already shipped. Order and scope agreed with Jeremy.
    documentation without changing pass/fail. Common objectives surfaced in the UI: DAQ 3.0 (ERRCS
    acceptance), DAQ 3.4 (TSB-88 wide-area P25).
 
+5. **Designate critical areas (paint squares).** Critical vs general is really an *area* the AHJ
+   designates (fire command center, fire pump rooms, interior exit stairs/passageways, elevators +
+   lobbies, standpipe cabinets, sprinkler sectional valves, areas of refuge, + anything else the AHJ
+   names) — not a per-reading judgement. The Safety tab now has a **Add reading / Mark critical**
+   mode switch: in Mark mode, tapping a grid square toggles it as a critical area (blue outline).
+   Readings whose location falls in a designated area are graded **critical** regardless of their own
+   tag (`ErrcsGridPoint.effectiveAreaClass` — designated areas are authoritative and never downgraded;
+   the per-point tag can still raise a reading to critical *outside* a designated area). Critical
+   areas are stored per floorplan as **normalised regions** (`session/ErrcsCriticalAreaStore.kt`), not
+   grid-cell indices, so a designation survives the tester changing the sampling grid. The add-reading
+   dialog pre-selects and locks Critical when the tap lands in a designated area, point/grid
+   compliance and the PDF report all grade by the effective class, and `passesAs(class, thresholds)`
+   applies the correct dBm floor for the effective class. Workflow fit: on a design-validation or
+   annual-certification walk the critical areas are already AHJ-approved (often marked in the iBwave
+   design / PDF), so the tester just paints the squares to match before walking.
+
 **Backward compatibility:** the new `ErrcsGridPoint` fields are optional and the store's parser reads
 a missing key as null, so grid points written before this change load unchanged (covered by a
 regression test in `ErrcsGridStoreTest.kt`).

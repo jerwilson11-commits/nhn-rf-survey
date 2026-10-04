@@ -187,6 +187,9 @@ object PdfReportGenerator {
         /** Per-floorplan grid dimensions (floorplanId → rows to cols) for the NFPA grid-method
          *  compliance table. A floorplan absent here uses the default 4×5 grid. */
         errcsGridConfigs: Map<String, Pair<Int, Int>> = emptyMap(),
+        /** Per-floorplan AHJ-designated critical areas; readings inside them are graded critical. */
+        errcsCriticalAreas: Map<String, List<com.nhnengineering.rftest.model.ErrcsCriticalArea>> =
+            emptyMap(),
     ): File = withContext(Dispatchers.IO) {
         val doc = PdfDocument()
         val c = Ctx(doc)
@@ -559,8 +562,28 @@ object PdfReportGenerator {
         // table of zeros that would read as "tested and found compliant."
         run {
             val trackA = errcsGridPoints.filter { it.floorplanId in summary.floorplanIds }
+            // Point compliance aggregated per floorplan so each floor's own critical-area designation
+            // applies (a point's coordinates only mean anything within its own plan).
             val trackAResults = if (trackA.isNotEmpty()) {
-                com.nhnengineering.rftest.model.errcsCompliance(trackA, publicSafetyThresholds)
+                val agg = LinkedHashMap<com.nhnengineering.rftest.model.ErrcsAreaClass, IntArray>()
+                trackA.groupBy { it.floorplanId }.forEach { (planId, planPoints) ->
+                    com.nhnengineering.rftest.model.errcsCompliance(
+                        planPoints, publicSafetyThresholds, errcsCriticalAreas[planId] ?: emptyList(),
+                    ).forEach { r ->
+                        val acc = agg.getOrPut(r.areaClass) { IntArray(2) }
+                        acc[0] += r.pointCount
+                        acc[1] += r.passingCount
+                    }
+                }
+                com.nhnengineering.rftest.model.ErrcsAreaClass.entries.map { ac ->
+                    val acc = agg[ac] ?: IntArray(2)
+                    com.nhnengineering.rftest.model.ErrcsAreaCompliance(
+                        areaClass = ac,
+                        pointCount = acc[0],
+                        passingCount = acc[1],
+                        requiredPct = publicSafetyThresholds.requiredPctFor(ac),
+                    )
+                }
             } else {
                 emptyList()
             }
@@ -625,6 +648,7 @@ object PdfReportGenerator {
                         val cols = cfg?.second ?: com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_COLS
                         com.nhnengineering.rftest.model.errcsGridCompliance(
                             planPoints, rows, cols, publicSafetyThresholds,
+                            errcsCriticalAreas[planId] ?: emptyList(),
                         ).forEach { gc ->
                             val acc = gridAgg.getOrPut(gc.areaClass) { IntArray(2) }
                             acc[0] += gc.testedCells

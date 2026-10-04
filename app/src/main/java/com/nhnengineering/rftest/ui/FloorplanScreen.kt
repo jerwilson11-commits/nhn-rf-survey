@@ -484,6 +484,22 @@ internal fun FloorplanCanvas(
                 for (r in 0..rows) {
                     drawLine(lineColor, toScreen(0f, r.toFloat() / rows), toScreen(1f, r.toFloat() / rows), strokeWidth = 2f)
                 }
+                // AHJ-designated critical squares: a distinct blue outline, drawn over the grid lines
+                // so they read as "this area is held to the 99% requirement" at a glance.
+                g.criticalCell?.let { isCritical ->
+                    val critical = Color(0xFF1565C0)
+                    for (r in 0 until rows) for (col in 0 until cols) {
+                        if (!isCritical(r, col)) continue
+                        val tl = toScreen(col.toFloat() / cols, r.toFloat() / rows)
+                        val br = toScreen((col + 1f) / cols, (r + 1f) / rows)
+                        drawRect(
+                            color = critical,
+                            topLeft = tl,
+                            size = androidx.compose.ui.geometry.Size(br.x - tl.x, br.y - tl.y),
+                            style = Stroke(width = 4f),
+                        )
+                    }
+                }
             }
 
             // Placed points, coloured by the KPI recorded there, each tagged with its waypoint label.
@@ -527,6 +543,8 @@ internal data class GridOverlay(
     val rows: Int,
     val cols: Int,
     val cellArgb: (row: Int, col: Int) -> Int?,
+    /** When set and true for a square, that square is outlined as an AHJ-designated critical area. */
+    val criticalCell: ((row: Int, col: Int) -> Boolean)? = null,
 )
 
 /** Colour a placed point by whichever radio was serving, so the plan reads at a glance. */

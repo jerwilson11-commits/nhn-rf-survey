@@ -107,13 +107,22 @@ data class ErrcsGridPoint(
     }
 
     /**
-     * Whether this reading meets the thresholds. Outbound must clear the dBm floor; inbound must too
-     * when it was measured; and DAQ must clear [PublicSafetyThresholds.minDaq] when both that
-     * threshold and a DAQ reading are present. A missing optional reading never fails the point on
-     * its own — only a measured value that falls short does.
+     * Whether this reading meets the thresholds for its own [areaClass]. See [passesAs] — this is
+     * the common case where the point is graded as the class it was tagged with.
      */
-    fun passes(thresholds: PublicSafetyThresholds): Boolean {
-        val floorDbm = thresholds.minDbmFor(areaClass)
+    fun passes(thresholds: PublicSafetyThresholds): Boolean = passesAs(areaClass, thresholds)
+
+    /**
+     * Whether this reading meets the thresholds when graded as [gradedAs]. Outbound must clear the
+     * dBm floor; inbound must too when it was measured; and DAQ must clear
+     * [PublicSafetyThresholds.minDaq] when both that threshold and a DAQ reading are present. A
+     * missing optional reading never fails the point on its own — only a measured value that falls
+     * short does. The class is passed in (rather than always using [areaClass]) so a point sitting
+     * in an AHJ-designated critical area is judged against the critical dBm floor even if it was
+     * tagged general — see [effectiveAreaClass].
+     */
+    fun passesAs(gradedAs: ErrcsAreaClass, thresholds: PublicSafetyThresholds): Boolean {
+        val floorDbm = thresholds.minDbmFor(gradedAs)
         if (signalDbm < floorDbm) return false
         if (inboundDbm != null && inboundDbm < floorDbm) return false
         val minDaq = thresholds.minDaq
@@ -121,6 +130,40 @@ data class ErrcsGridPoint(
         return true
     }
 }
+
+/**
+ * A normalised rectangle (0..1 in both axes) marking an AHJ-designated **critical area** on a
+ * floorplan.
+ *
+ * Stored as a *region*, not a grid cell index, deliberately: the AHJ designates critical areas by
+ * location (a stairwell, a fire pump room), and that designation must not move or vanish when the
+ * tester changes the sampling grid's rows/cols. A square of the display grid counts as critical when
+ * its centre falls inside any of these regions.
+ */
+data class ErrcsCriticalArea(val x0: Float, val y0: Float, val x1: Float, val y1: Float) {
+    fun contains(xNorm: Float, yNorm: Float): Boolean =
+        xNorm in minOf(x0, x1)..maxOf(x0, x1) && yNorm in minOf(y0, y1)..maxOf(y0, y1)
+}
+
+/** Whether a normalised point falls inside any designated critical area. */
+fun isInCriticalArea(xNorm: Float, yNorm: Float, areas: List<ErrcsCriticalArea>): Boolean =
+    areas.any { it.contains(xNorm, yNorm) }
+
+/**
+ * The class a reading is graded as: CRITICAL when it sits inside any AHJ-designated critical area,
+ * otherwise its own tagged [ErrcsGridPoint.areaClass].
+ *
+ * Designated areas are **authoritative and never downgraded** — a reading in a critical area is
+ * critical no matter what it was tagged, because the AHJ said that space is critical. The per-point
+ * tag can still raise a reading to critical *outside* a designated area (the override), which is why
+ * this is an OR of the two, not a replacement.
+ */
+fun ErrcsGridPoint.effectiveAreaClass(areas: List<ErrcsCriticalArea>): ErrcsAreaClass =
+    if (areaClass == ErrcsAreaClass.CRITICAL || isInCriticalArea(xNorm, yNorm, areas)) {
+        ErrcsAreaClass.CRITICAL
+    } else {
+        ErrcsAreaClass.GENERAL
+    }
 
 /** Compliance for one [ErrcsAreaClass] within a set of [ErrcsGridPoint]s -- see
  *  [errcsCompliance]. */
@@ -146,12 +189,13 @@ data class ErrcsAreaCompliance(
 fun errcsCompliance(
     points: List<ErrcsGridPoint>,
     thresholds: PublicSafetyThresholds,
+    criticalAreas: List<ErrcsCriticalArea> = emptyList(),
 ): List<ErrcsAreaCompliance> = ErrcsAreaClass.entries.map { areaClass ->
-    val inClass = points.filter { it.areaClass == areaClass }
+    val inClass = points.filter { it.effectiveAreaClass(criticalAreas) == areaClass }
     ErrcsAreaCompliance(
         areaClass = areaClass,
         pointCount = inClass.size,
-        passingCount = inClass.count { it.passes(thresholds) },
+        passingCount = inClass.count { it.passesAs(areaClass, thresholds) },
         requiredPct = thresholds.requiredPctFor(areaClass),
     )
 }
@@ -209,13 +253,16 @@ fun errcsGridCompliance(
     rows: Int,
     cols: Int,
     thresholds: PublicSafetyThresholds,
+    criticalAreas: List<ErrcsCriticalArea> = emptyList(),
 ): List<ErrcsGridCellCompliance> = ErrcsAreaClass.entries.map { areaClass ->
-    val byCell = points.filter { it.areaClass == areaClass }
+    val byCell = points.filter { it.effectiveAreaClass(criticalAreas) == areaClass }
         .groupBy { errcsGridCell(it.xNorm, it.yNorm, rows, cols) }
     ErrcsGridCellCompliance(
         areaClass = areaClass,
         testedCells = byCell.size,
-        passingCells = byCell.count { (_, cellPoints) -> cellPoints.all { it.passes(thresholds) } },
+        passingCells = byCell.count { (_, cellPoints) ->
+            cellPoints.all { it.passesAs(areaClass, thresholds) }
+        },
         requiredPct = thresholds.requiredPctFor(areaClass),
     )
 }

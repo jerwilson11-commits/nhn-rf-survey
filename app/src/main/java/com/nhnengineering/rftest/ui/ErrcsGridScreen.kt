@@ -37,13 +37,17 @@ import androidx.compose.ui.unit.dp
 import com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_COLS
 import com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_ROWS
 import com.nhnengineering.rftest.model.ErrcsAreaClass
+import com.nhnengineering.rftest.model.ErrcsCriticalArea
 import com.nhnengineering.rftest.model.ErrcsGridPoint
 import com.nhnengineering.rftest.model.Floorplan
 import com.nhnengineering.rftest.model.IndoorPosition
 import com.nhnengineering.rftest.model.PublicSafetyThresholds
+import com.nhnengineering.rftest.model.effectiveAreaClass
 import com.nhnengineering.rftest.model.errcsCompliance
 import com.nhnengineering.rftest.model.errcsGridCell
 import com.nhnengineering.rftest.model.errcsGridCompliance
+import com.nhnengineering.rftest.model.isInCriticalArea
+import com.nhnengineering.rftest.session.ErrcsCriticalAreaStore
 import com.nhnengineering.rftest.session.ErrcsGridConfigStore
 import com.nhnengineering.rftest.session.ErrcsGridStore
 import com.nhnengineering.rftest.session.FloorplanStore
@@ -74,9 +78,12 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
     var showGrid by remember { mutableStateOf(true) }
     var gridRows by remember { mutableStateOf(ERRCS_DEFAULT_GRID_ROWS) }
     var gridCols by remember { mutableStateOf(ERRCS_DEFAULT_GRID_COLS) }
+    var markMode by remember { mutableStateOf(false) }
+    var criticalAreas by remember { mutableStateOf<List<ErrcsCriticalArea>>(emptyList()) }
 
     val store = remember { ErrcsGridStore(File(context.filesDir, "errcs_grid.jsonl")) }
     val configStore = remember { ErrcsGridConfigStore(File(context.filesDir, "errcs_grid_config.jsonl")) }
+    val criticalStore = remember { ErrcsCriticalAreaStore(File(context.filesDir, "errcs_critical.jsonl")) }
 
     LaunchedEffect(Unit) {
         plans = FloorplanStore.list(context)
@@ -91,25 +98,40 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                     ?.asImageBitmap()
             }.getOrNull()
         }
-        // Each floorplan remembers its own grid size (floors differ in shape and size).
+        // Each floorplan remembers its own grid size (floors differ in shape and size) and its own
+        // AHJ-designated critical areas.
         plan?.let {
             val cfg = configStore.configFor(it.id)
             gridRows = cfg.rows
             gridCols = cfg.cols
+            criticalAreas = criticalStore.areasFor(it.id)
         }
     }
 
     val plan = selected
     val pointsHere = plan?.let { p -> points.filter { it.floorplanId == p.id } } ?: emptyList()
-    val compliance = errcsCompliance(pointsHere, thresholds)
-    val gridCompliance = errcsGridCompliance(pointsHere, gridRows, gridCols, thresholds)
+    val compliance = errcsCompliance(pointsHere, thresholds, criticalAreas)
+    val gridCompliance = errcsGridCompliance(pointsHere, gridRows, gridCols, thresholds, criticalAreas)
 
-    // Per-square verdict for the overlay: green when every reading in the square passes, red when any
-    // fails, unshaded when the square holds no reading. Keyed on (row, col) so the canvas lambda is a
-    // cheap lookup rather than a scan per cell per frame.
+    // Per-square verdict for the overlay: green when every reading in the square passes (graded at its
+    // effective class, so a reading in a critical area is held to the critical floor), red when any
+    // fails, unshaded when the square holds no reading. Keyed on (row, col) for cheap canvas lookup.
     val cellVerdict: Map<Pair<Int, Int>, Boolean> = pointsHere
         .groupBy { errcsGridCell(it.xNorm, it.yNorm, gridRows, gridCols) }
-        .mapValues { (_, cellPoints) -> cellPoints.all { it.passes(thresholds) } }
+        .mapValues { (_, cellPoints) ->
+            cellPoints.all { it.passesAs(it.effectiveAreaClass(criticalAreas), thresholds) }
+        }
+
+    // Which grid squares are designated critical: a square whose centre falls in a critical area.
+    val criticalCells: Set<Pair<Int, Int>> = buildSet {
+        if (criticalAreas.isNotEmpty()) {
+            for (r in 0 until gridRows) for (col in 0 until gridCols) {
+                val cx = (col + 0.5f) / gridCols
+                val cy = (r + 0.5f) / gridRows
+                if (isInCriticalArea(cx, cy, criticalAreas)) add(r to col)
+            }
+        }
+    }
 
     LazyColumn(
         modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -235,33 +257,90 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                 }
+                                // Tap target: add a reading, or mark the square as an AHJ-designated
+                                // critical area. Mark mode needs the grid, so it forces the overlay on.
+                                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                                    SegmentedButton(
+                                        selected = !markMode,
+                                        onClick = { markMode = false },
+                                        shape = SegmentedButtonDefaults.itemShape(0, 2),
+                                    ) { Text("Add reading") }
+                                    SegmentedButton(
+                                        selected = markMode,
+                                        onClick = { markMode = true; showGrid = true },
+                                        shape = SegmentedButtonDefaults.itemShape(1, 2),
+                                    ) { Text("Mark critical") }
+                                }
                             }
                             FloorplanCanvas(
                                 plan = plan,
                                 bitmap = bmp,
                                 placed = pointsHere.map { pt ->
+                                    val pass = pt.passesAs(pt.effectiveAreaClass(criticalAreas), thresholds)
                                     IndoorPosition(plan.id, pt.xNorm, pt.yNorm, pt.systemLabel) to
-                                        (if (pt.passes(thresholds)) PASS_ARGB else FAIL_ARGB)
+                                        (if (pass) PASS_ARGB else FAIL_ARGB)
                                 },
                                 currentPosition = null,
-                                onTap = { x, y -> pendingTap = x to y },
+                                onTap = { x, y ->
+                                    if (markMode) {
+                                        val (row, col) = errcsGridCell(x, y, gridRows, gridCols)
+                                        val cx = (col + 0.5f) / gridCols
+                                        val cy = (row + 0.5f) / gridRows
+                                        val updated = if (isInCriticalArea(cx, cy, criticalAreas)) {
+                                            criticalAreas.filterNot { it.contains(cx, cy) }
+                                        } else {
+                                            criticalAreas + ErrcsCriticalArea(
+                                                col.toFloat() / gridCols, row.toFloat() / gridRows,
+                                                (col + 1f) / gridCols, (row + 1f) / gridRows,
+                                            )
+                                        }
+                                        criticalAreas = updated
+                                        scope.launch { criticalStore.setAreas(plan.id, updated) }
+                                    } else {
+                                        pendingTap = x to y
+                                    }
+                                },
                                 gridOverlay = if (!showGrid) null else GridOverlay(
                                     rows = gridRows,
                                     cols = gridCols,
-                                ) { row, col ->
-                                    when (cellVerdict[row to col]) {
-                                        true -> PASS_CELL_ARGB
-                                        false -> FAIL_CELL_ARGB
-                                        null -> null
-                                    }
-                                },
+                                    cellArgb = { row, col ->
+                                        when (cellVerdict[row to col]) {
+                                            true -> PASS_CELL_ARGB
+                                            false -> FAIL_CELL_ARGB
+                                            null -> null
+                                        }
+                                    },
+                                    criticalCell = { row, col -> (row to col) in criticalCells },
+                                ),
                             )
                             Text(
-                                "Pinch to zoom, drag to pan, tap to add a grid point. Point dots and " +
-                                    "shaded squares: green passes, red fails; an unshaded square has no " +
-                                    "reading yet.",
+                                if (markMode) {
+                                    "Mark mode: tap a square to toggle it as a critical area (blue " +
+                                        "outline). Readings inside count toward the 99% critical " +
+                                        "requirement. Switch to \"Add reading\" to record readings."
+                                } else {
+                                    "Pinch to zoom, drag to pan, tap to add a reading. Dots/squares: " +
+                                        "green passes, red fails, unshaded = no reading yet. Blue " +
+                                        "outline = a designated critical area."
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                             )
+                            if (criticalAreas.isNotEmpty()) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        "${criticalCells.size} critical squares designated",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                    TextButton(onClick = {
+                                        criticalAreas = emptyList()
+                                        scope.launch { criticalStore.setAreas(plan.id, emptyList()) }
+                                    }) { Text("Clear critical") }
+                                }
+                            }
                         }
                     }
                 }
@@ -319,16 +398,20 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        val effClass = pt.effectiveAreaClass(criticalAreas)
+                        val inDesignated = effClass == ErrcsAreaClass.CRITICAL &&
+                            pt.areaClass != ErrcsAreaClass.CRITICAL
                         Column {
                             Text(
-                                "${pt.areaClass.label} · ${pt.signalDbm} dBm DL" +
+                                "${effClass.label}${if (inDesignated) " (designated)" else ""} · " +
+                                    "${pt.signalDbm} dBm DL" +
                                     (pt.inboundDbm?.let { " · $it dBm UL" } ?: "") +
                                     (pt.daq?.let { " · DAQ %.1f".format(it) } ?: "") +
                                     (pt.systemLabel?.let { " · $it" } ?: ""),
                                 style = MaterialTheme.typography.bodyMedium,
                             )
                             Text(
-                                if (pt.passes(thresholds)) "Passes" else "Fails",
+                                if (pt.passesAs(effClass, thresholds)) "Passes" else "Fails",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -344,6 +427,7 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
     val tap = pendingTap
     if (tap != null && plan != null) {
         GridPointDialog(
+            inheritedCritical = isInCriticalArea(tap.first, tap.second, criticalAreas),
             onDismiss = { pendingTap = null },
             onSave = { areaClass, dbm, inbound, daq, systemLabel, note ->
                 val point = ErrcsGridPoint(
@@ -421,10 +505,13 @@ private fun Stepper(label: String, value: Int, onChange: (Int) -> Unit) {
 
 @Composable
 private fun GridPointDialog(
+    inheritedCritical: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (ErrcsAreaClass, Double, Double?, Double?, String, String) -> Unit,
 ) {
-    var areaClass by remember { mutableStateOf(ErrcsAreaClass.GENERAL) }
+    var areaClass by remember {
+        mutableStateOf(if (inheritedCritical) ErrcsAreaClass.CRITICAL else ErrcsAreaClass.GENERAL)
+    }
     var dbmText by remember { mutableStateOf("") }
     var inboundText by remember { mutableStateOf("") }
     var daqText by remember { mutableStateOf("") }
@@ -437,13 +524,23 @@ private fun GridPointDialog(
         title = { Text("Grid point reading") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    ErrcsAreaClass.entries.forEachIndexed { index, ac ->
-                        SegmentedButton(
-                            selected = areaClass == ac,
-                            onClick = { areaClass = ac },
-                            shape = SegmentedButtonDefaults.itemShape(index, ErrcsAreaClass.entries.size),
-                        ) { Text(ac.label) }
+                if (inheritedCritical) {
+                    // The tap landed in an AHJ-designated critical area; the class is inherited and the
+                    // reading is graded critical regardless, so lock it rather than invite a confusing
+                    // override that compliance would ignore.
+                    Text(
+                        "In a designated critical area — graded at the critical requirement.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else {
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        ErrcsAreaClass.entries.forEachIndexed { index, ac ->
+                            SegmentedButton(
+                                selected = areaClass == ac,
+                                onClick = { areaClass = ac },
+                                shape = SegmentedButtonDefaults.itemShape(index, ErrcsAreaClass.entries.size),
+                            ) { Text(ac.label) }
+                        }
                     }
                 }
                 OutlinedTextField(

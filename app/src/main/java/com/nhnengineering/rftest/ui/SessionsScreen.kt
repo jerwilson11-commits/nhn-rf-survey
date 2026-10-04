@@ -169,6 +169,10 @@ fun SessionsScreen(modifier: Modifier = Modifier) {
                         errcsGridConfigs = com.nhnengineering.rftest.session.ErrcsGridConfigStore(
                             java.io.File(context.filesDir, "errcs_grid_config.jsonl"),
                         ).load().mapValues { (_, c) -> c.rows to c.cols },
+                        // Per-floorplan AHJ-designated critical areas (readings inside graded critical).
+                        errcsCriticalAreas = com.nhnengineering.rftest.session.ErrcsCriticalAreaStore(
+                            java.io.File(context.filesDir, "errcs_critical.jsonl"),
+                        ).load(),
                     )
                     // The summary CSV rides alongside for anyone who wants the numbers in a
                     // spreadsheet. Apache POI would be a very large dependency to produce

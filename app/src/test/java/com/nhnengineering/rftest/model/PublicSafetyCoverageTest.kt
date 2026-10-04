@@ -141,4 +141,41 @@ class PublicSafetyCoverageTest {
         assertEquals(0, general.testedCells)
         assertNull(general.actualPct)
     }
+
+    // ---- designated critical areas (#5) -----------------------------------
+
+    private val leftHalfCritical = listOf(ErrcsCriticalArea(0f, 0f, 0.5f, 1f))
+
+    @Test
+    fun `a designated area upgrades a general-tagged reading, and the tag can upgrade outside one`() {
+        // General-tagged reading inside the critical region -> graded critical.
+        assertEquals(
+            ErrcsAreaClass.CRITICAL,
+            point(ErrcsAreaClass.GENERAL, -90.0, xNorm = 0.2f).effectiveAreaClass(leftHalfCritical),
+        )
+        // General-tagged reading outside it -> stays general.
+        assertEquals(
+            ErrcsAreaClass.GENERAL,
+            point(ErrcsAreaClass.GENERAL, -90.0, xNorm = 0.8f).effectiveAreaClass(leftHalfCritical),
+        )
+        // Critical tag still raises a reading to critical outside any designated area (the override).
+        assertEquals(
+            ErrcsAreaClass.CRITICAL,
+            point(ErrcsAreaClass.CRITICAL, -90.0, xNorm = 0.8f).effectiveAreaClass(emptyList()),
+        )
+    }
+
+    @Test
+    fun `compliance counts a reading in a designated area under critical, not general`() {
+        // One general-TAGGED reading sitting in the critical region. With the designation, it should
+        // land in the critical bucket (graded at 99%), and the general bucket should be empty.
+        val points = listOf(point(ErrcsAreaClass.GENERAL, -90.0, xNorm = 0.2f))
+        val result = errcsCompliance(points, PublicSafetyThresholds(), leftHalfCritical)
+
+        val general = result.single { it.areaClass == ErrcsAreaClass.GENERAL }
+        val critical = result.single { it.areaClass == ErrcsAreaClass.CRITICAL }
+        assertEquals(0, general.pointCount)
+        assertEquals(1, critical.pointCount)
+        assertEquals(1, critical.passingCount)
+    }
 }
