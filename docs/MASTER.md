@@ -193,6 +193,7 @@ Resequenced 2026-08-28 so that no phase before 5 is blocked on SIM activation.
 | 7b | Reporting — statistics, PDF / XLSX | A client-ready acceptance report comes out | No |
 | 8a | ✅ **Done 2026-09-01.** MCP server, stdio transport, 5 tools over the session corpus | An agent answers an acceptance question directly from recorded sessions | No |
 | 8b | ✅ **Done 2026-09-01.** Stateless `streamable-http` transport, OAuth 2.1 Resource Server | Hosted deployment per MCP 2026-07-28 | No |
+| 9 | **Planned (research-first).** Multi-chipset modem backends — extend the root-gated deep features (band lock, RRC/SIB1/TDD capture, neighbours) beyond Qualcomm to **MediaTek** then **Exynos/Shannon** (Pixel + international Samsung; US Samsung is already Qualcomm). Per-vendor research spikes first. See **`docs/multi-chipset-roadmap.md`** | A spike establishes feasibility; a `ModemBackend` lands behind the shared ASN.1 decoder / `TddProfile` pipeline | No |
 
 The cellular collector moves to Phase 5 deliberately. By then the sampling loop, storage, export,
 and map are all validated against real Wi-Fi data, so when the SIM arrives we debug one module
