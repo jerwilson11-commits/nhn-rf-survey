@@ -26,6 +26,9 @@ import com.nhnengineering.rftest.cellular.BandMapping
 import com.nhnengineering.rftest.modem.ModemNrStream
 import com.nhnengineering.rftest.modem.Nas5gsOtaParser
 import com.nhnengineering.rftest.modem.NrRrcTdd
+import com.nhnengineering.rftest.modem.ProCapability
+import com.nhnengineering.rftest.modem.ProModem
+import com.nhnengineering.rftest.modem.ProModemCapability
 import com.nhnengineering.rftest.modem.RrcOtaParser
 import com.nhnengineering.rftest.profile.Sib1Parser
 import com.nhnengineering.rftest.profile.TddProfile
@@ -68,6 +71,12 @@ internal fun SignalingCaptureDialog(
     // there is no native lib, no such PDU, or the cell is FDD -- all handled as "nothing to show".
     val decodedTdd = remember(events) { NrRrcTdd.bestFromEvents(events) }
 
+    // Can this device actually run live capture (root + Qualcomm)? Resolved once, so a non-root or
+    // Exynos colleague gets a clear reason + the no-root alternative instead of an endless "waiting".
+    var cap by remember { mutableStateOf<ProCapability?>(null) }
+    LaunchedEffect(Unit) { cap = ProModem.capability() }
+    val captureSupported = cap == null || cap?.state == ProModemCapability.CAPABLE
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Signaling capture") },
@@ -82,9 +91,33 @@ internal fun SignalingCaptureDialog(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+                // Device-specific reason + the no-root alternative, so a non-root/Exynos colleague
+                // isn't left waiting at "waiting for the first event" with no explanation.
+                when (cap?.state) {
+                    ProModemCapability.NEEDS_ROOT -> item {
+                        Text(
+                            "Live capture needs root access, which isn't enabled on this device. " +
+                                "No root? Use the import instead: Config tab → New profile → " +
+                                "“Paste a SIB1 decode” also accepts a raw capture (hex) and decodes " +
+                                "it on-device.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    ProModemCapability.WRONG_CHIPSET -> item {
+                        Text(
+                            "Live capture needs a Qualcomm modem — this device is ${cap?.vendorLabel}, " +
+                                "so it can't run here. Use the no-root import: Config tab → New " +
+                                "profile → “Paste a SIB1 decode” accepts a raw capture (hex).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    else -> Unit
+                }
                 item {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = onStart, enabled = !capturing) { Text("Start") }
+                        Button(onClick = onStart, enabled = !capturing && captureSupported) { Text("Start") }
                         OutlinedButton(onClick = onStop, enabled = capturing) { Text("Stop") }
                         OutlinedButton(
                             onClick = { onExport(events) },
