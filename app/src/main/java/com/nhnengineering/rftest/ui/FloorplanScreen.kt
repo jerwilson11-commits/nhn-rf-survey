@@ -23,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -45,6 +46,7 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -53,6 +55,7 @@ import com.nhnengineering.rftest.model.IndoorPosition
 import com.nhnengineering.rftest.model.RsrpBucket
 import com.nhnengineering.rftest.model.RssiBucket
 import com.nhnengineering.rftest.service.RecordingState
+import com.nhnengineering.rftest.session.BuildingStore
 import com.nhnengineering.rftest.session.FloorplanStore
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -76,6 +79,7 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
     var bitmap by remember { mutableStateOf<ImageBitmap?>(null) }
     var label by remember { mutableStateOf("") }
     var geoMode by remember { mutableStateOf(false) }
+    var georefIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     val current by RecordingState.indoorPosition.collectAsState()
     val placed by RecordingState.placedPositions.collectAsState()
@@ -106,6 +110,11 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
     }
 
     LaunchedEffect(Unit) { plans = FloorplanStore.list(context) }
+
+    // Refresh which plans are georeferenced when the library changes or we return from georeferencing.
+    LaunchedEffect(plans, geoMode) {
+        georefIds = runCatching { BuildingStore.georeferencedIds(context) }.getOrElse { emptySet() }
+    }
 
     LaunchedEffect(selected) {
         val plan = selected
@@ -141,70 +150,25 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
         return
     }
 
+    val plan = selected
+    val bmp = bitmap
+
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(vertical = 12.dp),
     ) {
-        item {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Floorplan", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "GPS is unreliable or absent indoors. Load a floorplan and tap your " +
-                            "position — samples carry it until you tap again.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Button(
-                        onClick = {
-                            picker.launch(
-                                arrayOf(
-                                    "application/pdf",
-                                    "image/png", "image/jpeg", "image/webp",
-                                ),
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Load floorplan (PDF or image)") }
-
-                    OutlinedButton(
-                        onClick = { geoMode = true },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Georeference floors (building)") }
-
-                    if (plans.isNotEmpty()) {
-                        HorizontalDivider()
-                        plans.forEach { p ->
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                YieldingText(
-                                    p.displayName,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = if (p.id == selected?.id) {
-                                        FontWeight.Bold
-                                    } else {
-                                        FontWeight.Normal
-                                    },
-                                )
-                                OutlinedButton(onClick = { selected = p }) {
-                                    Text(if (p.id == selected?.id) "Selected" else "Use")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        val plan = selected
-        val bmp = bitmap
+        // Selected floor first, so the map + Walk mode are visible the moment a floor is picked --
+        // the library list below can run long for a multi-floor building.
         if (plan != null && bmp != null) {
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            plan.displayName,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                         FloorplanCanvas(
                             plan = plan,
                             bitmap = bmp,
@@ -217,8 +181,7 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                                     yNorm = y,
                                     label = label.trim().ifBlank { null },
                                 )
-                                // Per-landmark reference, not a sticky zone: clear after placing so
-                                // the next waypoint starts fresh.
+                                // Per-landmark reference, not a sticky zone: clear after placing.
                                 label = ""
                             },
                         )
@@ -232,14 +195,15 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                         Button(
                             onClick = { WalkMode.enter() },
                             modifier = Modifier.fillMaxWidth(),
-                        ) { Text("Walk mode (full screen)") }
+                        ) { Text("Walk mode (full screen) — tap your position") }
                         Text(
-                            "Pinch to zoom, drag to pan, tap to place. To name a landmark, type the " +
-                                "label first, then tap — it stamps that point and the field clears. " +
+                            "Pinch to zoom, drag to pan, tap to place. Type a landmark name first to " +
+                                "label a point. " +
                                 if (recording) {
-                                    "Recording — every sample carries this position until moved."
+                                    "Recording — each sample carries this position until you move it."
                                 } else {
-                                    "Not recording — start a session on the Live tab first."
+                                    "Tip: start recording (Live tab, or Start inside Walk mode) so " +
+                                        "points are saved."
                                 },
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -260,21 +224,109 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                     }
                 }
             }
-        } else {
-            item {
-                Card(Modifier.fillMaxWidth()) {
+        }
+
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Floorplan library", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "No floorplan loaded. Load one above — a vendor PDF (the first page is " +
-                            "used), or a PNG/JPEG of the venue layout, a fire-evacuation plan, or a " +
-                            "screenshot of a CAD drawing.",
-                        Modifier.padding(14.dp),
+                        "Load a plan, pick a floor, then open Walk mode and tap your position — GPS is " +
+                            "unreliable indoors, so the tapped spot is what carries the samples.",
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    Button(
+                        onClick = {
+                            picker.launch(
+                                arrayOf(
+                                    "application/pdf",
+                                    "image/png", "image/jpeg", "image/webp",
+                                ),
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Load floorplan (PDF or image)") }
+
+                    OutlinedButton(
+                        onClick = { geoMode = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Georeference floors (optional — adds real lat/long)") }
+
+                    if (plans.isNotEmpty()) {
+                        HorizontalDivider()
+                        plans.forEach { p ->
+                            val isSel = p.id == selected?.id
+                            val geo = p.id in georefIds
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            floorplanBaseName(p.displayName),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false),
+                                        )
+                                        floorplanFloorTag(p.displayName)?.let {
+                                            Text(
+                                                "  $it",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.primary,
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        if (geo) "✓ georeferenced" else "not georeferenced",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (geo) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                    )
+                                }
+                                OutlinedButton(onClick = { selected = p }) {
+                                    Text(if (isSel) "Selected" else "Use")
+                                }
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        FloorplanStore.delete(context, p.id)
+                                        plans = FloorplanStore.list(context)
+                                        if (selected?.id == p.id) selected = null
+                                    }
+                                }) {
+                                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                    } else {
+                        Text(
+                            "No floorplans yet. Load a vendor PDF (one floor per page) or a PNG/JPEG " +
+                                "of the layout.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+/** For a multi-page PDF floor (`Margaritaville-p01`), the floor tag (`p01`); null for a single plan. */
+private fun floorplanFloorTag(name: String): String? =
+    Regex("-p(\\d+)$").find(name)?.groupValues?.get(1)?.let { "p$it" }
+
+/** The plan name without the `-pNN` page suffix, so the distinguishing floor tag can be shown
+ *  separately instead of being truncated off the end of a long building name. */
+private fun floorplanBaseName(name: String): String =
+    name.replace(Regex("-p\\d+$"), "")
 
 /**
  * The interactive floorplan.

@@ -63,6 +63,29 @@ object BuildingStore {
         return building.resolve()[floorplanId]
     }
 
+    /** Every floorplan id that currently resolves to a georeference (own tie points or inherited),
+     *  across all buildings -- for showing a "georeferenced" marker in the floorplan library. */
+    suspend fun georeferencedIds(context: Context): Set<String> =
+        load(context).flatMap { it.resolve().keys }.toSet()
+
+    /** Drops a floorplan from any building it belongs to (used when the image is deleted). A building
+     *  left with no floors is removed; if the deleted floor was the reference, the first remaining
+     *  floor becomes the reference. */
+    suspend fun removeFloorplan(context: Context, floorplanId: String) {
+        val buildings = load(context)
+        if (buildings.none { b -> b.floors.any { it.floorplanId == floorplanId } }) return
+        val updated = buildings.mapNotNull { b ->
+            val floors = b.floors.filterNot { it.floorplanId == floorplanId }
+            when {
+                floors.isEmpty() -> null
+                b.referenceFloorId == floorplanId ->
+                    b.copy(floors = floors, referenceFloorId = floors.first().floorplanId)
+                else -> b.copy(floors = floors)
+            }
+        }
+        save(context, updated)
+    }
+
     // ---- JSON <-> model -----------------------------------------------------
 
     private fun parseBuilding(o: JSONObject): Building? {

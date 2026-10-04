@@ -68,7 +68,10 @@ object FloorplanStore {
                 val ext = safe.substringAfterLast('.', "").lowercase()
                     .takeIf { it in setOf("png", "jpg", "jpeg", "webp") } ?: "png"
 
-                val target = uniqueFile(context, base, ext)
+                // Deterministic name (overwrite): re-importing the same file refreshes it in place
+                // rather than piling up "name-1", "name-2" copies. The id is the filename, so an
+                // existing georeference for this plan survives the refresh.
+                val target = File(dir(context), "$base.$ext")
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     target.outputStream().use { output -> input.copyTo(output) }
                 } ?: return@withContext null
@@ -80,14 +83,10 @@ object FloorplanStore {
             }
         }
 
-    private fun uniqueFile(context: Context, base: String, ext: String): File {
-        var target = File(dir(context), "$base.$ext")
-        var n = 1
-        while (target.exists()) {
-            target = File(dir(context), "$base-$n.$ext")
-            n++
-        }
-        return target
+    /** Deletes a floorplan image and removes it from any building georeference. */
+    suspend fun delete(context: Context, id: String) = withContext(Dispatchers.IO) {
+        runCatching { file(context, id).delete() }
+        BuildingStore.removeFloorplan(context, id)
     }
 
     /** Resolution to rasterise a PDF page at. PDF units are points (1/72"); this is ~150 DPI, crisp
@@ -154,7 +153,7 @@ object FloorplanStore {
         bmp.eraseColor(Color.WHITE)
         page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
-        val target = uniqueFile(context, name, "png")
+        val target = File(dir(context), "$name.png")
         target.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
         bmp.recycle()
         return describe(target)
