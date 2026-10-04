@@ -213,6 +213,9 @@ fun HeroKpi(cell: CellularSample?, wifi: WifiSample?) {
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center,
         )
+        if (cell?.onFirstNetBand14 == true) {
+            FirstNetBand14Badge(Modifier.padding(top = 6.dp))
+        }
     }
 }
 

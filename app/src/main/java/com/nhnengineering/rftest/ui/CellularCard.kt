@@ -1,10 +1,12 @@
 package com.nhnengineering.rftest.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -12,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -75,6 +78,10 @@ fun CellularCard(sample: CellularSample?) {
                     it + (sample.mcc?.let { m -> "  ($m/${sample.mnc})" } ?: ""),
                     style = MaterialTheme.typography.bodySmall,
                 )
+            }
+
+            if (sample.onFirstNetBand14) {
+                FirstNetBand14Badge(Modifier.padding(top = 2.dp))
             }
 
             // Serving-cell coverage KPI, whichever radio is serving.
@@ -307,3 +314,27 @@ fun CellularCard(sample: CellularSample?) {
 /** Cellular RSRP scale. Deliberately not the Wi-Fi scale — see [RsrpBucket]. */
 internal fun rsrpColor(rsrpDbm: Int?): Color =
     RsrpBucket.of(rsrpDbm)?.let { Color(it.argb) } ?: Color.Gray
+
+/**
+ * At-a-glance public-safety marker: the serving (or strongest-observed) cell is FirstNet Band 14
+ * (LTE) or n14 (NR) — see [CellularSample.onFirstNetBand14].
+ *
+ * Surfaced in the hero and the cellular card because, under NFPA 1225's ERCES framework, Band 14 is
+ * exactly what the Safety tab's Track B grades. An operator doing a public-safety walk needs to see
+ * when the device is actually on it without drilling into the band detail. This identifies the band
+ * only; it does not assert that an AHJ accepts the Band 14 substitution for LMR — that is
+ * jurisdiction-specific and lives in the Safety tab's reporting, never here.
+ */
+@Composable
+fun FirstNetBand14Badge(modifier: Modifier = Modifier) {
+    Text(
+        text = "FirstNet · Band 14",
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Bold,
+        color = Color.White,
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xFF1565C0))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+    )
+}
