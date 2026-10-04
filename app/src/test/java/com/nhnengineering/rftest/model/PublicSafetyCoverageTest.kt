@@ -13,9 +13,14 @@ class PublicSafetyCoverageTest {
         areaClass: ErrcsAreaClass,
         dbm: Double,
         id: String = "p",
+        inbound: Double? = null,
+        daq: Double? = null,
+        xNorm: Float = 0.5f,
+        yNorm: Float = 0.5f,
     ) = ErrcsGridPoint(
-        id = id, floorplanId = "plan.png", xNorm = 0.5f, yNorm = 0.5f,
-        areaClass = areaClass, signalDbm = dbm, recordedAtUtcMillis = 0L,
+        id = id, floorplanId = "plan.png", xNorm = xNorm, yNorm = yNorm,
+        areaClass = areaClass, signalDbm = dbm, inboundDbm = inbound, daq = daq,
+        recordedAtUtcMillis = 0L,
     )
 
     @Test
@@ -64,5 +69,76 @@ class PublicSafetyCoverageTest {
         assertEquals(0, critical.pointCount)
         assertNull(critical.actualPct)
         assertFalse(critical.meetsRequirement)
+    }
+
+    // ---- inbound / two-way grading (#3) -----------------------------------
+
+    @Test
+    fun `a missing inbound reading never fails the point on its own`() {
+        // Outbound passes, inbound not measured -> passes. A null is "not measured", not a failure.
+        assertTrue(point(ErrcsAreaClass.GENERAL, -90.0, inbound = null).passes(PublicSafetyThresholds()))
+    }
+
+    @Test
+    fun `a failing inbound fails the point even when outbound passes`() {
+        val t = PublicSafetyThresholds()
+        assertTrue(point(ErrcsAreaClass.GENERAL, -90.0, inbound = -94.0).passes(t))  // both pass
+        assertFalse(point(ErrcsAreaClass.GENERAL, -90.0, inbound = -96.0).passes(t)) // UL below -95
+    }
+
+    // ---- DAQ grading (#4) -------------------------------------------------
+
+    @Test
+    fun `DAQ is graded only when a threshold is set and a value is recorded`() {
+        val noDaqThreshold = PublicSafetyThresholds()
+        // DAQ recorded but not graded (no minDaq) -> dBm decides, passes.
+        assertTrue(point(ErrcsAreaClass.GENERAL, -90.0, daq = 1.0).passes(noDaqThreshold))
+
+        val daq3 = PublicSafetyThresholds(minDaq = 3.0)
+        // minDaq set, but this point has no DAQ -> not failed on DAQ.
+        assertTrue(point(ErrcsAreaClass.GENERAL, -90.0, daq = null).passes(daq3))
+        // minDaq set and DAQ below it -> fails, even though dBm is fine.
+        assertFalse(point(ErrcsAreaClass.GENERAL, -90.0, daq = 2.9).passes(daq3))
+        assertTrue(point(ErrcsAreaClass.GENERAL, -90.0, daq = 3.0).passes(daq3))
+    }
+
+    // ---- grid method (#2) -------------------------------------------------
+
+    @Test
+    fun `grid cell buckets normalised points and clamps the far edge`() {
+        // 2x2 grid: (row,col). x,y in [0,1).
+        assertEquals(0 to 0, errcsGridCell(0.1f, 0.1f, rows = 2, cols = 2))
+        assertEquals(1 to 1, errcsGridCell(0.9f, 0.9f, rows = 2, cols = 2))
+        // Exactly on the far edge lands in the last cell, not one past it.
+        assertEquals(1 to 1, errcsGridCell(1.0f, 1.0f, rows = 2, cols = 2))
+    }
+
+    @Test
+    fun `a square fails if any reading in it fails, and compliance is per square`() {
+        // 2-column grid. Left column (x<0.5) has two readings, one failing -> square fails.
+        // Right column (x>=0.5) has one passing reading -> square passes. 1 of 2 squares = 50%.
+        val points = listOf(
+            point(ErrcsAreaClass.GENERAL, -90.0, "l1", xNorm = 0.1f),
+            point(ErrcsAreaClass.GENERAL, -110.0, "l2", xNorm = 0.2f), // fails
+            point(ErrcsAreaClass.GENERAL, -80.0, "r1", xNorm = 0.9f),
+        )
+        val general = errcsGridCompliance(points, rows = 1, cols = 2, PublicSafetyThresholds())
+            .single { it.areaClass == ErrcsAreaClass.GENERAL }
+
+        assertEquals(2, general.testedCells)
+        assertEquals(1, general.passingCells)
+        assertEquals(50.0, general.actualPct!!, 0.001)
+        assertFalse(general.meetsRequirement)
+    }
+
+    @Test
+    fun `an untested area class has a null square percentage, not zero`() {
+        val general = errcsGridCompliance(
+            listOf(point(ErrcsAreaClass.GENERAL, -80.0)),
+            rows = 4, cols = 5, PublicSafetyThresholds(),
+        ).single { it.areaClass == ErrcsAreaClass.CRITICAL }
+
+        assertEquals(0, general.testedCells)
+        assertNull(general.actualPct)
     }
 }

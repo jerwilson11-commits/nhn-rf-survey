@@ -45,6 +45,14 @@ data class PublicSafetyThresholds(
     val generalPct: Int = 95,
     val criticalMinDbm: Int = -95,
     val criticalPct: Int = 99,
+    /**
+     * Minimum Delivered Audio Quality (TSB-88 scale, 1.0–5.0) a reading must meet, or null to not
+     * grade DAQ at all. Null by default because DAQ is optional field data and most dBm-only surveys
+     * do not record it — enabling it should be a deliberate choice, not a hidden extra gate that
+     * silently fails points that never carried a DAQ value. The common public-safety objective is
+     * DAQ 3.0 (ERRCS acceptance) or DAQ 3.4 (TSB-88 wide-area P25).
+     */
+    val minDaq: Double? = null,
 ) {
     fun minDbmFor(areaClass: ErrcsAreaClass): Int = when (areaClass) {
         ErrcsAreaClass.GENERAL -> generalMinDbm
@@ -69,7 +77,24 @@ data class ErrcsGridPoint(
     val yNorm: Float,
     val floor: String? = null,
     val areaClass: ErrcsAreaClass,
+    /**
+     * Outbound / downlink (talk-out): the level the portable *receives* from the DAS/BDA at this
+     * point. This is the primary ERRCS reading and is always required — every point has it.
+     */
     val signalDbm: Double,
+    /**
+     * Inbound / uplink (talk-in): the portable's transmit as received back at the donor site or
+     * console, read off the operator's equipment. Optional — quick surveys often record outbound
+     * only. ERRCS requires *two-way* coverage, so when this is present the point passes only if
+     * BOTH directions clear the dBm floor. A null here means "not measured", never "zero".
+     */
+    val inboundDbm: Double? = null,
+    /**
+     * Delivered Audio Quality (TSB-88 scale, 1.0–5.0) read off the operator's service monitor.
+     * Optional, and only graded when [PublicSafetyThresholds.minDaq] is set — recording it without
+     * enabling the DAQ threshold keeps it as documentation without changing pass/fail.
+     */
+    val daq: Double? = null,
     /** e.g. "Fire Dept VHF", "PD 800 MHz P25" -- free text, operator-typed, unverified. */
     val systemLabel: String? = null,
     val note: String? = null,
@@ -81,7 +106,20 @@ data class ErrcsGridPoint(
         }
     }
 
-    fun passes(thresholds: PublicSafetyThresholds): Boolean = signalDbm >= thresholds.minDbmFor(areaClass)
+    /**
+     * Whether this reading meets the thresholds. Outbound must clear the dBm floor; inbound must too
+     * when it was measured; and DAQ must clear [PublicSafetyThresholds.minDaq] when both that
+     * threshold and a DAQ reading are present. A missing optional reading never fails the point on
+     * its own — only a measured value that falls short does.
+     */
+    fun passes(thresholds: PublicSafetyThresholds): Boolean {
+        val floorDbm = thresholds.minDbmFor(areaClass)
+        if (signalDbm < floorDbm) return false
+        if (inboundDbm != null && inboundDbm < floorDbm) return false
+        val minDaq = thresholds.minDaq
+        if (minDaq != null && daq != null && daq < minDaq) return false
+        return true
+    }
 }
 
 /** Compliance for one [ErrcsAreaClass] within a set of [ErrcsGridPoint]s -- see
@@ -114,6 +152,70 @@ fun errcsCompliance(
         areaClass = areaClass,
         pointCount = inClass.size,
         passingCount = inClass.count { it.passes(thresholds) },
+        requiredPct = thresholds.requiredPctFor(areaClass),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Grid method (NFPA "divide the floor into ~20 equal squares")
+// ---------------------------------------------------------------------------
+
+/** The default grid: 5 columns × 4 rows = 20 squares, the figure NFPA grid testing is built around. */
+const val ERRCS_DEFAULT_GRID_COLS = 5
+const val ERRCS_DEFAULT_GRID_ROWS = 4
+
+/**
+ * The (row, col) grid cell a normalised point falls in, for a `rows × cols` overlay.
+ *
+ * Clamped so a point exactly on the far edge (norm == 1f) lands in the last cell rather than one
+ * past it, and so a degenerate 0-dimension can never produce a negative index. Shared by the
+ * on-screen overlay and the compliance rollup so both agree on which square a reading belongs to.
+ */
+fun errcsGridCell(xNorm: Float, yNorm: Float, rows: Int, cols: Int): Pair<Int, Int> {
+    val rr = rows.coerceAtLeast(1)
+    val cc = cols.coerceAtLeast(1)
+    val row = (yNorm * rr).toInt().coerceIn(0, rr - 1)
+    val col = (xNorm * cc).toInt().coerceIn(0, cc - 1)
+    return row to col
+}
+
+/** Grid-method compliance for one [ErrcsAreaClass] — see [errcsGridCompliance]. */
+data class ErrcsGridCellCompliance(
+    val areaClass: ErrcsAreaClass,
+    val testedCells: Int,
+    val passingCells: Int,
+    val requiredPct: Int,
+) {
+    /** Null, not 0.0, when no cell of this class was tested — the same reasoning as
+     *  [ErrcsAreaCompliance.actualPct]: printing 0% would read as a measured failure. */
+    val actualPct: Double? = if (testedCells == 0) null else 100.0 * passingCells / testedCells
+    val meetsRequirement: Boolean get() = actualPct != null && actualPct >= requiredPct
+}
+
+/**
+ * Grid-method compliance (the NFPA "20-square" approach): the floor is divided into a `rows × cols`
+ * grid and each occupied square is graded, rather than each individual reading.
+ *
+ * A square is *tested* when it holds at least one reading of that area class, and *passes* only when
+ * every reading in it passes [ErrcsGridPoint.passes] — worst-case within the square, because a
+ * square with even one failing reading is not one a responder can rely on. Compliance per area class
+ * is passing squares over tested squares, against the same required percentage as the point method.
+ *
+ * Deliberately separate from [errcsCompliance]: that grades every reading, this grades squares. An
+ * AHJ that specifies the grid method wants the latter; both are reported so neither is assumed.
+ */
+fun errcsGridCompliance(
+    points: List<ErrcsGridPoint>,
+    rows: Int,
+    cols: Int,
+    thresholds: PublicSafetyThresholds,
+): List<ErrcsGridCellCompliance> = ErrcsAreaClass.entries.map { areaClass ->
+    val byCell = points.filter { it.areaClass == areaClass }
+        .groupBy { errcsGridCell(it.xNorm, it.yNorm, rows, cols) }
+    ErrcsGridCellCompliance(
+        areaClass = areaClass,
+        testedCells = byCell.size,
+        passingCells = byCell.count { (_, cellPoints) -> cellPoints.all { it.passes(thresholds) } },
         requiredPct = thresholds.requiredPctFor(areaClass),
     )
 }

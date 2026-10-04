@@ -372,6 +372,9 @@ internal fun FloorplanCanvas(
     // far steadier than trying to land a precise tap (and sidesteps tap/transform gesture contention).
     onCenterChange: ((Float, Float) -> Unit)? = null,
     showCrosshair: Boolean = false,
+    // Optional NFPA grid-method overlay (Safety tab). Drawn in the same pan/zoom space as the plan so
+    // the squares stay locked to the floor as the operator zooms. Null everywhere else.
+    gridOverlay: GridOverlay? = null,
 ) {
     var scale by remember(plan.id) { mutableStateOf(1f) }
     var offset by remember(plan.id) { mutableStateOf(Offset.Zero) }
@@ -459,6 +462,30 @@ internal fun FloorplanCanvas(
                 setShadowLayer(4f, 0f, 0f, android.graphics.Color.WHITE)
             }
 
+            // NFPA grid-method overlay, drawn before the points so readings sit on top of the shaded
+            // squares. Cell fills and lines use toScreen() so they pan and zoom with the plan.
+            gridOverlay?.let { g ->
+                val rows = g.rows.coerceAtLeast(1)
+                val cols = g.cols.coerceAtLeast(1)
+                for (r in 0 until rows) for (col in 0 until cols) {
+                    val argb = g.cellArgb(r, col) ?: continue
+                    val tl = toScreen(col.toFloat() / cols, r.toFloat() / rows)
+                    val br = toScreen((col + 1f) / cols, (r + 1f) / rows)
+                    drawRect(
+                        color = Color(argb),
+                        topLeft = tl,
+                        size = androidx.compose.ui.geometry.Size(br.x - tl.x, br.y - tl.y),
+                    )
+                }
+                val lineColor = outline.copy(alpha = 0.5f)
+                for (c in 0..cols) {
+                    drawLine(lineColor, toScreen(c.toFloat() / cols, 0f), toScreen(c.toFloat() / cols, 1f), strokeWidth = 2f)
+                }
+                for (r in 0..rows) {
+                    drawLine(lineColor, toScreen(0f, r.toFloat() / rows), toScreen(1f, r.toFloat() / rows), strokeWidth = 2f)
+                }
+            }
+
             // Placed points, coloured by the KPI recorded there, each tagged with its waypoint label.
             placed.forEach { (pos, argb) ->
                 val sc = toScreen(pos.xNorm, pos.yNorm)
@@ -491,6 +518,16 @@ internal fun FloorplanCanvas(
         }
     }
 }
+
+/**
+ * A rows × cols grid to shade over the floorplan for the NFPA grid method (Safety tab).
+ * [cellArgb] returns the fill ARGB for a square, or null to leave it unshaded (untested).
+ */
+internal data class GridOverlay(
+    val rows: Int,
+    val cols: Int,
+    val cellArgb: (row: Int, col: Int) -> Int?,
+)
 
 /** Colour a placed point by whichever radio was serving, so the plan reads at a glance. */
 internal fun indoorPointColor(rssiDbm: Int?, rsrpDbm: Int?): Int? = when {

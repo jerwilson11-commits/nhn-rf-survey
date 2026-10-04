@@ -184,6 +184,9 @@ object PdfReportGenerator {
         errcsGridPoints: List<com.nhnengineering.rftest.model.ErrcsGridPoint> = emptyList(),
         publicSafetyThresholds: com.nhnengineering.rftest.model.PublicSafetyThresholds =
             com.nhnengineering.rftest.model.PublicSafetyThresholds(),
+        /** Per-floorplan grid dimensions (floorplanId → rows to cols) for the NFPA grid-method
+         *  compliance table. A floorplan absent here uses the default 4×5 grid. */
+        errcsGridConfigs: Map<String, Pair<Int, Int>> = emptyMap(),
     ): File = withContext(Dispatchers.IO) {
         val doc = PdfDocument()
         val c = Ctx(doc)
@@ -608,6 +611,69 @@ object PdfReportGenerator {
                     if (failingA.isNotEmpty()) {
                         c.para(
                             "Below requirement: " + failingA.joinToString(", ") { it.areaClass.label },
+                        )
+                    }
+
+                    // Grid-method (NFPA "20-square") compliance, aggregated across this session's
+                    // floorplans -- each floor graded on its own saved grid, the squares summed. A
+                    // square passes only if every reading in it passes, so one weak reading fails the
+                    // square. This is the figure an AHJ specifying the grid method asks for.
+                    val gridAgg = LinkedHashMap<com.nhnengineering.rftest.model.ErrcsAreaClass, IntArray>()
+                    trackA.groupBy { it.floorplanId }.forEach { (planId, planPoints) ->
+                        val cfg = errcsGridConfigs[planId]
+                        val rows = cfg?.first ?: com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_ROWS
+                        val cols = cfg?.second ?: com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_COLS
+                        com.nhnengineering.rftest.model.errcsGridCompliance(
+                            planPoints, rows, cols, publicSafetyThresholds,
+                        ).forEach { gc ->
+                            val acc = gridAgg.getOrPut(gc.areaClass) { IntArray(2) }
+                            acc[0] += gc.testedCells
+                            acc[1] += gc.passingCells
+                        }
+                    }
+                    if (gridAgg.values.any { it[0] > 0 }) {
+                        c.gap(4f)
+                        c.text("Grid method — by square", c.body)
+                        c.text(
+                            String.format(
+                                Locale.US, "%-16s %8s %8s %7s %9s",
+                                "Area class", "Squares", "Passing", "Pass %", "Required",
+                            ),
+                            c.monoBold,
+                        )
+                        for (ac in com.nhnengineering.rftest.model.ErrcsAreaClass.entries) {
+                            val acc = gridAgg[ac] ?: continue
+                            val tested = acc[0]
+                            if (tested == 0) continue
+                            val pct = 100.0 * acc[1] / tested
+                            c.text(
+                                String.format(
+                                    Locale.US, "%-16s %8d %8d %6s %8s%%",
+                                    ac.label, tested, acc[1], String.format(Locale.US, "%.1f", pct),
+                                    publicSafetyThresholds.requiredPctFor(ac).toString(),
+                                ),
+                                c.mono,
+                            )
+                        }
+                    }
+
+                    // Two-way and DAQ grading, called out only when the data actually uses them.
+                    val anyInbound = trackA.any { it.inboundDbm != null }
+                    val daqGraded = publicSafetyThresholds.minDaq != null && trackA.any { it.daq != null }
+                    if (anyInbound || daqGraded) {
+                        c.para(
+                            buildString {
+                                append("Grading: outbound (downlink) is always required")
+                                if (anyInbound) append("; inbound (uplink), where entered, must also pass")
+                                if (daqGraded) {
+                                    append(
+                                        "; DAQ must meet %.1f where recorded"
+                                            .format(publicSafetyThresholds.minDaq),
+                                    )
+                                }
+                                append(".")
+                            },
+                            indent = 10f,
                         )
                     }
                     c.gap(6f)

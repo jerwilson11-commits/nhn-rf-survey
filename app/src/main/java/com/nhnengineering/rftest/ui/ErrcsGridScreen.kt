@@ -18,6 +18,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -33,12 +34,17 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_COLS
+import com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_ROWS
 import com.nhnengineering.rftest.model.ErrcsAreaClass
 import com.nhnengineering.rftest.model.ErrcsGridPoint
 import com.nhnengineering.rftest.model.Floorplan
 import com.nhnengineering.rftest.model.IndoorPosition
 import com.nhnengineering.rftest.model.PublicSafetyThresholds
 import com.nhnengineering.rftest.model.errcsCompliance
+import com.nhnengineering.rftest.model.errcsGridCell
+import com.nhnengineering.rftest.model.errcsGridCompliance
+import com.nhnengineering.rftest.session.ErrcsGridConfigStore
 import com.nhnengineering.rftest.session.ErrcsGridStore
 import com.nhnengineering.rftest.session.FloorplanStore
 import kotlinx.coroutines.launch
@@ -65,8 +71,12 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
     var thresholds by remember { mutableStateOf(PublicSafetyThresholds()) }
     var pendingTap by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     var thresholdsExpanded by remember { mutableStateOf(false) }
+    var showGrid by remember { mutableStateOf(true) }
+    var gridRows by remember { mutableStateOf(ERRCS_DEFAULT_GRID_ROWS) }
+    var gridCols by remember { mutableStateOf(ERRCS_DEFAULT_GRID_COLS) }
 
     val store = remember { ErrcsGridStore(File(context.filesDir, "errcs_grid.jsonl")) }
+    val configStore = remember { ErrcsGridConfigStore(File(context.filesDir, "errcs_grid_config.jsonl")) }
 
     LaunchedEffect(Unit) {
         plans = FloorplanStore.list(context)
@@ -81,11 +91,25 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                     ?.asImageBitmap()
             }.getOrNull()
         }
+        // Each floorplan remembers its own grid size (floors differ in shape and size).
+        plan?.let {
+            val cfg = configStore.configFor(it.id)
+            gridRows = cfg.rows
+            gridCols = cfg.cols
+        }
     }
 
     val plan = selected
     val pointsHere = plan?.let { p -> points.filter { it.floorplanId == p.id } } ?: emptyList()
     val compliance = errcsCompliance(pointsHere, thresholds)
+    val gridCompliance = errcsGridCompliance(pointsHere, gridRows, gridCols, thresholds)
+
+    // Per-square verdict for the overlay: green when every reading in the square passes, red when any
+    // fails, unshaded when the square holds no reading. Keyed on (row, col) so the canvas lambda is a
+    // cheap lookup rather than a scan per cell per frame.
+    val cellVerdict: Map<Pair<Int, Int>, Boolean> = pointsHere
+        .groupBy { errcsGridCell(it.xNorm, it.yNorm, gridRows, gridCols) }
+        .mapValues { (_, cellPoints) -> cellPoints.all { it.passes(thresholds) } }
 
     LazyColumn(
         modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -140,7 +164,8 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                     }
                     Text(
                         "General ${thresholds.generalMinDbm} dBm / ${thresholds.generalPct}%  ·  " +
-                            "Critical ${thresholds.criticalMinDbm} dBm / ${thresholds.criticalPct}%",
+                            "Critical ${thresholds.criticalMinDbm} dBm / ${thresholds.criticalPct}%" +
+                            (thresholds.minDaq?.let { "  ·  DAQ ≥ %.1f".format(it) } ?: ""),
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
@@ -163,6 +188,15 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                         IntField("Critical %", thresholds.criticalPct) {
                             thresholds = thresholds.copy(criticalPct = it)
                         }
+                        DoubleField(
+                            label = "Min DAQ (blank = don't grade DAQ)",
+                            value = thresholds.minDaq,
+                        ) { thresholds = thresholds.copy(minDaq = it) }
+                        Text(
+                            "DAQ grades a reading only when you also record a DAQ value for it. " +
+                                "Common objectives: 3.0 (ERRCS acceptance), 3.4 (TSB-88 wide-area P25).",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                 }
             }
@@ -174,6 +208,34 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                 item {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("Grid overlay (NFPA method)", style = MaterialTheme.typography.titleSmall)
+                                Switch(checked = showGrid, onCheckedChange = { showGrid = it })
+                            }
+                            if (showGrid) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Stepper("Cols", gridCols) {
+                                        gridCols = it
+                                        scope.launch { configStore.set(plan.id, gridRows, gridCols) }
+                                    }
+                                    Stepper("Rows", gridRows) {
+                                        gridRows = it
+                                        scope.launch { configStore.set(plan.id, gridRows, gridCols) }
+                                    }
+                                    Text(
+                                        "${gridRows * gridCols} squares",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            }
                             FloorplanCanvas(
                                 plan = plan,
                                 bitmap = bmp,
@@ -183,10 +245,21 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                 },
                                 currentPosition = null,
                                 onTap = { x, y -> pendingTap = x to y },
+                                gridOverlay = if (!showGrid) null else GridOverlay(
+                                    rows = gridRows,
+                                    cols = gridCols,
+                                ) { row, col ->
+                                    when (cellVerdict[row to col]) {
+                                        true -> PASS_CELL_ARGB
+                                        false -> FAIL_CELL_ARGB
+                                        null -> null
+                                    }
+                                },
                             )
                             Text(
-                                "Pinch to zoom, drag to pan, tap to add a grid point. Green = " +
-                                    "passes its area's threshold, red = fails.",
+                                "Pinch to zoom, drag to pan, tap to add a grid point. Point dots and " +
+                                    "shaded squares: green passes, red fails; an unshaded square has no " +
+                                    "reading yet.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
@@ -197,13 +270,34 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Compliance", style = MaterialTheme.typography.titleSmall)
+                        Text("Compliance — by point", style = MaterialTheme.typography.titleSmall)
                         compliance.forEach { c ->
                             val pct = c.actualPct
                             Text(
                                 "${c.areaClass.label}: ${c.pointCount} points" +
                                     if (pct == null) {
                                         ", none tested yet"
+                                    } else {
+                                        ", %.0f%% passing (needs %d%%) -- %s".format(
+                                            pct,
+                                            c.requiredPct,
+                                            if (c.meetsRequirement) "meets" else "does not meet",
+                                        )
+                                    },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        HorizontalDivider(Modifier.padding(vertical = 2.dp))
+                        Text(
+                            "Compliance — by grid square (${gridRows}×${gridCols})",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        gridCompliance.forEach { c ->
+                            val pct = c.actualPct
+                            Text(
+                                "${c.areaClass.label}: ${c.testedCells} squares tested" +
+                                    if (pct == null) {
+                                        ", none yet"
                                     } else {
                                         ", %.0f%% passing (needs %d%%) -- %s".format(
                                             pct,
@@ -227,7 +321,9 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                     ) {
                         Column {
                             Text(
-                                "${pt.areaClass.label} · ${pt.signalDbm} dBm" +
+                                "${pt.areaClass.label} · ${pt.signalDbm} dBm DL" +
+                                    (pt.inboundDbm?.let { " · $it dBm UL" } ?: "") +
+                                    (pt.daq?.let { " · DAQ %.1f".format(it) } ?: "") +
                                     (pt.systemLabel?.let { " · $it" } ?: ""),
                                 style = MaterialTheme.typography.bodyMedium,
                             )
@@ -249,7 +345,7 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
     if (tap != null && plan != null) {
         GridPointDialog(
             onDismiss = { pendingTap = null },
-            onSave = { areaClass, dbm, systemLabel, note ->
+            onSave = { areaClass, dbm, inbound, daq, systemLabel, note ->
                 val point = ErrcsGridPoint(
                     id = UUID.randomUUID().toString(),
                     floorplanId = plan.id,
@@ -257,6 +353,8 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                     yNorm = tap.second,
                     areaClass = areaClass,
                     signalDbm = dbm,
+                    inboundDbm = inbound,
+                    daq = daq,
                     systemLabel = systemLabel.trim().ifBlank { null },
                     note = note.trim().ifBlank { null },
                     recordedAtUtcMillis = System.currentTimeMillis(),
@@ -270,6 +368,11 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
 
 private const val PASS_ARGB = 0xFF4C7A3D.toInt()
 private const val FAIL_ARGB = 0xFFB3261E.toInt()
+
+// Semi-transparent square fills for the grid overlay -- translucent so the floorplan stays legible
+// through the shading, unlike the opaque point dots above.
+private const val PASS_CELL_ARGB = 0x554C7A3D
+private const val FAIL_CELL_ARGB = 0x55B3261E
 
 @Composable
 private fun IntField(label: String, value: Int, onChange: (Int) -> Unit) {
@@ -286,13 +389,45 @@ private fun IntField(label: String, value: Int, onChange: (Int) -> Unit) {
     )
 }
 
+/**
+ * Optional double field: an empty box means "not set" (`null`), any parseable number sets the value.
+ * Used for DAQ, which is genuinely optional — distinct from [IntField], where blank is just invalid.
+ */
+@Composable
+private fun DoubleField(label: String, value: Double?, onChange: (Double?) -> Unit) {
+    var text by remember(value) { mutableStateOf(value?.toString() ?: "") }
+    OutlinedTextField(
+        value = text,
+        onValueChange = { new ->
+            text = new
+            onChange(if (new.isBlank()) null else new.toDoubleOrNull())
+        },
+        label = { Text(label) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+/** Compact −/value/+ control for the grid dimensions, clamped to a sane 1..20 range. */
+@Composable
+private fun Stepper(label: String, value: Int, onChange: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("$label ", style = MaterialTheme.typography.bodySmall)
+        TextButton(onClick = { onChange((value - 1).coerceIn(1, 20)) }) { Text("−") }
+        Text("$value", style = MaterialTheme.typography.bodyMedium)
+        TextButton(onClick = { onChange((value + 1).coerceIn(1, 20)) }) { Text("+") }
+    }
+}
+
 @Composable
 private fun GridPointDialog(
     onDismiss: () -> Unit,
-    onSave: (ErrcsAreaClass, Double, String, String) -> Unit,
+    onSave: (ErrcsAreaClass, Double, Double?, Double?, String, String) -> Unit,
 ) {
     var areaClass by remember { mutableStateOf(ErrcsAreaClass.GENERAL) }
     var dbmText by remember { mutableStateOf("") }
+    var inboundText by remember { mutableStateOf("") }
+    var daqText by remember { mutableStateOf("") }
     var systemLabel by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     val dbm = dbmText.toDoubleOrNull()
@@ -314,7 +449,21 @@ private fun GridPointDialog(
                 OutlinedTextField(
                     value = dbmText,
                     onValueChange = { dbmText = it },
-                    label = { Text("Signal (dBm), from your meter") },
+                    label = { Text("Outbound / DL (dBm), from your meter") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = inboundText,
+                    onValueChange = { inboundText = it },
+                    label = { Text("Inbound / UL (dBm) — optional") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = daqText,
+                    onValueChange = { daqText = it },
+                    label = { Text("DAQ 1–5 — optional") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -336,7 +485,16 @@ private fun GridPointDialog(
         confirmButton = {
             TextButton(
                 enabled = dbm != null,
-                onClick = { dbm?.let { onSave(areaClass, it, systemLabel, note) } },
+                onClick = {
+                    dbm?.let {
+                        onSave(
+                            areaClass, it,
+                            inboundText.toDoubleOrNull(),
+                            daqText.toDoubleOrNull(),
+                            systemLabel, note,
+                        )
+                    }
+                },
             ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },

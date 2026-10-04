@@ -65,6 +65,8 @@ class ErrcsGridStore(private val file: File) {
         str("floor", p.floor); comma()
         str("areaClass", p.areaClass.name); comma()
         append("\"signalDbm\":").append(p.signalDbm); comma()
+        append("\"inboundDbm\":").append(p.inboundDbm?.toString() ?: "null"); comma()
+        append("\"daq\":").append(p.daq?.toString() ?: "null"); comma()
         str("systemLabel", p.systemLabel); comma()
         str("note", p.note); comma()
         append("\"recordedAtUtcMillis\":").append(p.recordedAtUtcMillis)
@@ -130,6 +132,10 @@ class ErrcsGridStore(private val file: File) {
             areaClass = map["areaClass"]?.let { runCatching { ErrcsAreaClass.valueOf(it) }.getOrNull() }
                 ?: error("no areaClass"),
             signalDbm = map["signalDbm"]?.toDoubleOrNull() ?: error("no signalDbm"),
+            // Optional and added after the first release -- absent in older records, so a missing
+            // key (or an explicit null) is a legitimate "not measured", never a parse failure.
+            inboundDbm = map["inboundDbm"]?.toDoubleOrNull(),
+            daq = map["daq"]?.toDoubleOrNull(),
             systemLabel = map["systemLabel"],
             note = map["note"],
             recordedAtUtcMillis = map["recordedAtUtcMillis"]?.toLongOrNull() ?: 0L,

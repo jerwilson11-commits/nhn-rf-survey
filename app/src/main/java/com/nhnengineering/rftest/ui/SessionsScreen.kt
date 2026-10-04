@@ -165,6 +165,10 @@ fun SessionsScreen(modifier: Modifier = Modifier) {
                         errcsGridPoints = com.nhnengineering.rftest.session.ErrcsGridStore(
                             java.io.File(context.filesDir, "errcs_grid.jsonl"),
                         ).load().points,
+                        // Per-floorplan grid dimensions for the grid-method table (default when absent).
+                        errcsGridConfigs = com.nhnengineering.rftest.session.ErrcsGridConfigStore(
+                            java.io.File(context.filesDir, "errcs_grid_config.jsonl"),
+                        ).load().mapValues { (_, c) -> c.rows to c.cols },
                     )
                     // The summary CSV rides alongside for anyone who wants the numbers in a
                     // spreadsheet. Apache POI would be a very large dependency to produce
