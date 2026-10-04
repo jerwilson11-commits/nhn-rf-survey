@@ -30,6 +30,9 @@ import com.nhnengineering.rftest.billing.EntitlementRepository
 import com.nhnengineering.rftest.billing.FIELD_PRODUCT_ID
 import com.nhnengineering.rftest.billing.PRO_PRODUCT_ID
 import com.nhnengineering.rftest.billing.PurchaseFlow
+import com.nhnengineering.rftest.modem.ProCapability
+import com.nhnengineering.rftest.modem.ProModem
+import com.nhnengineering.rftest.modem.ProModemCapability
 
 /**
  * The upgrade screen, shown as an overlay when a Free user taps a paid feature (via
@@ -46,11 +49,15 @@ fun PaywallScreen(modifier: Modifier = Modifier, onClose: (() -> Unit)? = null) 
     val context = LocalContext.current
     var products by remember { mutableStateOf<Map<String, ProductDetails>>(emptyMap()) }
     var loaded by remember { mutableStateOf(false) }
+    // Device capability for Pro's root-gated modem tools -- resolved separately (probes su) so it
+    // never delays the product/price load, and so the Pro card can caveat honestly.
+    var cap by remember { mutableStateOf<ProCapability?>(null) }
 
     LaunchedEffect(Unit) {
         products = EntitlementRepository.queryProductDetails()
         loaded = true
     }
+    LaunchedEffect(Unit) { cap = ProModem.capability() }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -94,6 +101,21 @@ fun PaywallScreen(modifier: Modifier = Modifier, onClose: (() -> Unit)? = null) 
                 )
             }
             item {
+                // Honest, device-specific caveat for Pro's root-gated modem tools -- shown before
+                // any purchase so no one buys Pro expecting tools their device can't run.
+                val proCaveat: Pair<String, Boolean>? = when (cap?.state) {
+                    ProModemCapability.WRONG_CHIPSET ->
+                        ("⚠ Pro's modem tools need a Qualcomm modem — this device is " +
+                            "${cap?.vendorLabel}, so they can't run here even with Pro. Field features " +
+                            "and the no-root capture import still work fully.") to true
+                    ProModemCapability.NEEDS_ROOT ->
+                        ("⚠ Pro's modem tools need root access, which isn't enabled on this device. " +
+                            "You can still subscribe, but they stay locked until it's rooted. Field " +
+                            "features need no root.") to true
+                    ProModemCapability.CAPABLE ->
+                        ("✓ This device supports Pro's modem tools.") to false
+                    else -> null
+                }
                 TierCard(
                     title = "Pro",
                     productDetails = products[PRO_PRODUCT_ID],
@@ -104,6 +126,8 @@ fun PaywallScreen(modifier: Modifier = Modifier, onClose: (() -> Unit)? = null) 
                         "Live SIB1/TDD decode (rooted, Qualcomm devices)",
                         "NR neighbour reads over QMI (rooted, Qualcomm devices)",
                     ),
+                    caveatText = proCaveat?.first,
+                    caveatWarning = proCaveat?.second ?: false,
                 )
             }
         }
@@ -126,7 +150,13 @@ fun PaywallScreen(modifier: Modifier = Modifier, onClose: (() -> Unit)? = null) 
 }
 
 @Composable
-private fun TierCard(title: String, productDetails: ProductDetails?, features: List<String>) {
+private fun TierCard(
+    title: String,
+    productDetails: ProductDetails?,
+    features: List<String>,
+    caveatText: String? = null,
+    caveatWarning: Boolean = false,
+) {
     val offer = productDetails?.subscriptionOfferDetails?.firstOrNull()
     val price = offer?.pricingPhases?.pricingPhaseList?.firstOrNull()?.formattedPrice
     val activity = LocalContext.current as? Activity
@@ -140,6 +170,17 @@ private fun TierCard(title: String, productDetails: ProductDetails?, features: L
             )
             features.forEach { feature ->
                 Text("• $feature", style = MaterialTheme.typography.bodyMedium)
+            }
+            caveatText?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (caveatWarning) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
             }
             Button(
                 onClick = {
