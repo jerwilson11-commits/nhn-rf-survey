@@ -74,6 +74,27 @@ data class CoverageArea(val vertices: List<CoverageVertex>) {
     }
 }
 
+/**
+ * One coverage region on a floor: a traced polygon plus **its own** grid (rows × cols).
+ *
+ * The grid is per region, not per floor, because a floor can hold more than one closed area — e.g. a
+ * main building and a detached outbuilding that are separate on this floor (connected only on another).
+ * Each area then carries its own ~20-grid sample sized to it, which a single floor-wide grid could not
+ * do without under-sampling the smaller one.
+ */
+data class CoverageRegion(
+    val polygon: CoverageArea,
+    val rows: Int = ERRCS_DEFAULT_GRID_ROWS,
+    val cols: Int = ERRCS_DEFAULT_GRID_COLS,
+)
+
+/** Whether any region's polygon encloses the point. */
+fun List<CoverageRegion>.coverageContains(x: Float, y: Float): Boolean =
+    any { it.polygon.contains(x, y) }
+
+/** True when at least one region has a real (>= 3-vertex) polygon. */
+val List<CoverageRegion>.hasCoverage: Boolean get() = any { it.polygon.isDefined }
+
 // ---------------------------------------------------------------------------
 // Real-world sizing (Phase B) — needs a georeference's pixel size + ground resolution
 // ---------------------------------------------------------------------------

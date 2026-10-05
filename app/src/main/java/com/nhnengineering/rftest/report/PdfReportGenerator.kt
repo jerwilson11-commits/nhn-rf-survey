@@ -16,6 +16,8 @@ import com.nhnengineering.rftest.cellular.TechnologyLock
 import com.nhnengineering.rftest.live.TileProxy
 import com.nhnengineering.rftest.map.GpsOutlierFilter
 import com.nhnengineering.rftest.map.Mercator
+import com.nhnengineering.rftest.model.coverageContains
+import com.nhnengineering.rftest.model.hasCoverage
 import com.nhnengineering.rftest.session.FloorplanStore
 import com.nhnengineering.rftest.session.SessionSummary
 import com.nhnengineering.rftest.session.TrackPoint
@@ -190,9 +192,11 @@ object PdfReportGenerator {
         /** Per-floorplan AHJ-designated critical areas; readings inside them are graded critical. */
         errcsCriticalAreas: Map<String, List<com.nhnengineering.rftest.model.ErrcsCriticalArea>> =
             emptyMap(),
-        /** Per-floorplan traced coverage-area polygons — the grid is laid inside them and cellular
-         *  coverage is reported against them. */
-        errcsCoverageAreas: Map<String, com.nhnengineering.rftest.model.CoverageArea> = emptyMap(),
+        /** Per-floorplan coverage regions (a floor may have several) — each region's grid is graded
+         *  and summed per floor, cellular coverage is reported against their union, and floor area is
+         *  their sum. A floorplan with no regions falls back to a whole-page grid. */
+        errcsCoverageRegions: Map<String, List<com.nhnengineering.rftest.model.CoverageRegion>> =
+            emptyMap(),
         /** Per-floorplan solved georeferences, for floor/building square footage and the 80-ft
          *  grid-dimension check. A floor absent here is simply not georeferenced. */
         errcsGeoRefs: Map<String, com.nhnengineering.rftest.map.GeoReference> = emptyMap(),
@@ -567,13 +571,13 @@ object PdfReportGenerator {
         // in x% of the defined coverage area" -- so dead space and samples outside the footprint do
         // not dilute the figure. Rendered only when an area is defined and has samples inside it.
         run {
-            val defined = errcsCoverageAreas.filterValues { it.isDefined }
+            val defined = errcsCoverageRegions.filterValues { it.hasCoverage }
             if (defined.isNotEmpty()) {
                 val kpiIsCell = report.kpi == SessionStats.Kpi.CELL_RSRP
                 val vals = points
                     .filter { p ->
                         p.hasIndoorPosition &&
-                            defined[p.floorplanId]?.contains(p.floorplanX!!, p.floorplanY!!) == true
+                            defined[p.floorplanId]?.coverageContains(p.floorplanX!!, p.floorplanY!!) == true
                     }
                     .mapNotNull { if (kpiIsCell) it.rsrpDbm else it.rssiDbm }
                 if (vals.isNotEmpty()) {
@@ -592,13 +596,16 @@ object PdfReportGenerator {
                             pct, meeting, vals.size,
                         ),
                     )
-                    // Floor/building square footage from the georeference, when available.
-                    val floorFt2 = defined.mapNotNull { (id, area) ->
+                    // Floor/building square footage from the georeference, when available (sum of a
+                    // floor's regions).
+                    val floorFt2 = defined.mapNotNull { (id, regs) ->
                         errcsGeoRefs[id]?.let { gr ->
                             com.nhnengineering.rftest.model.squareMetresToFeet(
-                                com.nhnengineering.rftest.model.coverageAreaSquareMetres(
-                                    area, gr.widthPx, gr.heightPx, gr.metresPerPixel,
-                                ),
+                                regs.sumOf {
+                                    com.nhnengineering.rftest.model.coverageAreaSquareMetres(
+                                        it.polygon, gr.widthPx, gr.heightPx, gr.metresPerPixel,
+                                    )
+                                },
                             )
                         }
                     }.filter { it > 0.0 }
@@ -713,18 +720,28 @@ object PdfReportGenerator {
                     // and the floor is the coverage polygon when one is defined, not the PDF page.
                     val gridAgg = LinkedHashMap<com.nhnengineering.rftest.model.ErrcsAreaClass, IntArray>()
                     trackA.groupBy { it.floorplanId }.forEach { (planId, planPoints) ->
-                        val cfg = errcsGridConfigs[planId]
-                        val rows = cfg?.first ?: com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_ROWS
-                        val cols = cfg?.second ?: com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_COLS
-                        com.nhnengineering.rftest.model.errcsGridCompliance(
-                            planPoints, rows, cols, publicSafetyThresholds,
-                            errcsCriticalAreas[planId] ?: emptyList(),
-                            errcsCoverageAreas[planId] ?: com.nhnengineering.rftest.model.CoverageArea.EMPTY,
-                        ).forEach { gc ->
-                            val acc = gridAgg.getOrPut(gc.areaClass) { IntArray(3) }
-                            acc[0] += gc.totalCells
-                            acc[1] += gc.testedCells
-                            acc[2] += gc.passingCells
+                        val regs = errcsCoverageRegions[planId] ?: emptyList()
+                        val gc = if (regs.hasCoverage) {
+                            // Per-region grids, summed per floor.
+                            com.nhnengineering.rftest.model.errcsFloorGridCompliance(
+                                planPoints, regs, publicSafetyThresholds,
+                                errcsCriticalAreas[planId] ?: emptyList(),
+                            )
+                        } else {
+                            // No coverage area traced: fall back to a whole-page grid.
+                            val cfg = errcsGridConfigs[planId]
+                            val rows = cfg?.first ?: com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_ROWS
+                            val cols = cfg?.second ?: com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_COLS
+                            com.nhnengineering.rftest.model.errcsGridCompliance(
+                                planPoints, rows, cols, publicSafetyThresholds,
+                                errcsCriticalAreas[planId] ?: emptyList(),
+                            )
+                        }
+                        gc.forEach { g ->
+                            val acc = gridAgg.getOrPut(g.areaClass) { IntArray(3) }
+                            acc[0] += g.totalCells
+                            acc[1] += g.testedCells
+                            acc[2] += g.passingCells
                         }
                     }
                     if (gridAgg.values.any { it[0] > 0 }) {
@@ -760,17 +777,14 @@ object PdfReportGenerator {
                                 indent = 10f,
                             )
                         }
-                        // NFPA 80-ft maximum grid dimension, checked per floor where georeferenced.
-                        val oversize = trackA.groupBy { it.floorplanId }.mapNotNull { (planId, _) ->
-                            val gr = errcsGeoRefs[planId] ?: return@mapNotNull null
-                            val cfg = errcsGridConfigs[planId]
-                            val rows = cfg?.first ?: com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_ROWS
-                            val cols = cfg?.second ?: com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_COLS
-                            val cov = errcsCoverageAreas[planId]
-                                ?: com.nhnengineering.rftest.model.CoverageArea.EMPTY
-                            com.nhnengineering.rftest.model.errcsGridCellSize(
-                                cov, rows, cols, gr.widthPx, gr.heightPx, gr.metresPerPixel,
-                            )?.takeIf { it.exceedsNfpaMax() }?.maxDimFt
+                        // NFPA 80-ft maximum grid dimension, checked per region where georeferenced.
+                        val oversize = trackA.groupBy { it.floorplanId }.flatMap { (planId, _) ->
+                            val gr = errcsGeoRefs[planId] ?: return@flatMap emptyList<Double>()
+                            (errcsCoverageRegions[planId] ?: emptyList()).mapNotNull { r ->
+                                com.nhnengineering.rftest.model.errcsGridCellSize(
+                                    r.polygon, r.rows, r.cols, gr.widthPx, gr.heightPx, gr.metresPerPixel,
+                                )?.takeIf { it.exceedsNfpaMax() }?.maxDimFt
+                            }
                         }
                         if (oversize.isNotEmpty()) {
                             c.para(

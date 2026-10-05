@@ -1,55 +1,76 @@
 package com.nhnengineering.rftest.session
 
 import com.nhnengineering.rftest.model.CoverageArea
+import com.nhnengineering.rftest.model.CoverageRegion
 import com.nhnengineering.rftest.model.CoverageVertex
+import com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_COLS
+import com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_ROWS
 import java.io.File
 
 /**
- * Per-floorplan traced coverage-area polygons, shared by the P. Safety grid method and cellular
- * coverage reporting.
+ * Per-floorplan coverage regions, shared by the P. Safety grid method and cellular coverage reporting.
  *
- * One vertex per line (floorplanId + ordinal index + normalised x,y), the same flat hand-rolled JSONL
- * discipline as the other Safety stores: no `org.json`, temp-file-then-rename, and one bad line costs
- * one vertex rather than the whole outline. The explicit index keeps the polygon's winding order
- * independent of line order after a rewrite.
+ * A floorplan can hold **several** regions (a main building plus a detached outbuilding on the same
+ * page), each with its own traced polygon and its own grid (rows × cols). One region per line:
+ * `{"floorplanId":..,"region":N,"rows":R,"cols":C,"points":[[x,y],...]}`, the same flat hand-rolled
+ * JSONL discipline as the other Safety stores (no `org.json`, temp-file-then-rename).
+ *
+ * Reads the earlier **single-polygon** format too (one `{floorplanId,i,x,y}` line per vertex), so
+ * coverage areas traced before multi-region support load as one region and migrate on the next save.
  */
 class CoverageAreaStore(private val file: File) {
 
-    /** floorplanId → its coverage polygon. A floorplan absent from the map has no area defined. */
-    fun load(): Map<String, CoverageArea> {
+    /** floorplanId → its coverage regions, in order. Absent floorplans have none. */
+    fun load(): Map<String, List<CoverageRegion>> {
         if (!file.isFile) return emptyMap()
-        val byPlan = mutableMapOf<String, MutableList<Triple<Int, Float, Float>>>()
+        val newByPlan = linkedMapOf<String, MutableMap<Int, CoverageRegion>>()
+        val oldVerts = linkedMapOf<String, MutableList<Triple<Int, Float, Float>>>()
         file.forEachLine { line ->
             if (line.isBlank()) return@forEachLine
-            val v = runCatching { parse(line) }.getOrNull() ?: return@forEachLine
-            byPlan.getOrPut(v.first) { mutableListOf() }.add(Triple(v.second, v.third, v.fourth))
+            val region = runCatching { parseRegion(line) }.getOrNull()
+            if (region != null) {
+                newByPlan.getOrPut(region.first) { sortedMapWrapper() }[region.second] = region.third
+                return@forEachLine
+            }
+            val old = runCatching { parseOldVertex(line) }.getOrNull()
+            if (old != null) {
+                oldVerts.getOrPut(old.first) { mutableListOf() }.add(Triple(old.second, old.third, old.fourth))
+            }
         }
-        return byPlan.mapValues { (_, verts) ->
-            CoverageArea(verts.sortedBy { it.first }.map { CoverageVertex(it.second, it.third) })
+        val out = linkedMapOf<String, List<CoverageRegion>>()
+        newByPlan.forEach { (plan, m) -> out[plan] = m.values.toList() }
+        oldVerts.forEach { (plan, verts) ->
+            if (plan !in out) {
+                val poly = CoverageArea(verts.sortedBy { it.first }.map { CoverageVertex(it.second, it.third) })
+                if (poly.isDefined) out[plan] = listOf(CoverageRegion(poly))
+            }
         }
+        return out
     }
 
-    fun areaFor(floorplanId: String): CoverageArea = load()[floorplanId] ?: CoverageArea.EMPTY
+    fun regionsFor(floorplanId: String): List<CoverageRegion> = load()[floorplanId] ?: emptyList()
 
-    /** Replace the polygon for one floorplan, leaving other floorplans untouched. An empty/undefined
-     *  area clears the entry. */
-    fun setArea(floorplanId: String, area: CoverageArea): CoverageArea {
+    /** Replace all regions for one floorplan (empty clears it), leaving other floorplans untouched. */
+    fun setRegions(floorplanId: String, regions: List<CoverageRegion>): List<CoverageRegion> {
         val all = load().toMutableMap()
-        if (area.vertices.isEmpty()) all.remove(floorplanId) else all[floorplanId] = area
+        val defined = regions.filter { it.polygon.isDefined }
+        if (defined.isEmpty()) all.remove(floorplanId) else all[floorplanId] = defined
         save(all)
-        return area
+        return defined
     }
 
-    private fun save(all: Map<String, CoverageArea>) {
+    private fun save(all: Map<String, List<CoverageRegion>>) {
         file.parentFile?.mkdirs()
         val body = buildString {
-            all.forEach { (id, area) ->
-                area.vertices.forEachIndexed { i, v ->
+            all.forEach { (id, regions) ->
+                regions.forEachIndexed { idx, region ->
                     append("{\"floorplanId\":").append(quote(id))
-                    append(",\"i\":").append(i)
-                    append(",\"x\":").append(v.x)
-                    append(",\"y\":").append(v.y)
-                    append("}\n")
+                    append(",\"region\":").append(idx)
+                    append(",\"rows\":").append(region.rows)
+                    append(",\"cols\":").append(region.cols)
+                    append(",\"points\":[")
+                    append(region.polygon.vertices.joinToString(",") { "[${it.x},${it.y}]" })
+                    append("]}\n")
                 }
             }
         }
@@ -64,18 +85,38 @@ class CoverageAreaStore(private val file: File) {
     private fun quote(v: String): String =
         "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
-    private data class Parsed(val first: String, val second: Int, val third: Float, val fourth: Float)
+    private fun planId(line: String): String? =
+        Regex("\"floorplanId\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").find(line)
+            ?.groupValues?.get(1)?.replace("\\\"", "\"")?.replace("\\\\", "\\")
 
-    private fun parse(line: String): Parsed? {
-        val id = Regex("\"floorplanId\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").find(line)
-            ?.groupValues?.get(1)
-            ?.replace("\\\"", "\"")?.replace("\\\\", "\\")
+    private fun parseRegion(line: String): Triple<String, Int, CoverageRegion>? {
+        val id = planId(line) ?: return null
+        val idx = Regex("\"region\"\\s*:\\s*(\\d+)").find(line)?.groupValues?.get(1)?.toIntOrNull()
             ?: return null
+        val ptsStr = Regex("\"points\"\\s*:\\s*\\[(.*)\\]").find(line)?.groupValues?.get(1) ?: return null
+        val nums = Regex("-?\\d*\\.?\\d+").findAll(ptsStr).map { it.value.toFloat() }.toList()
+        val verts = nums.chunked(2).filter { it.size == 2 }.map { CoverageVertex(it[0], it[1]) }
+        val rows = Regex("\"rows\"\\s*:\\s*(\\d+)").find(line)?.groupValues?.get(1)?.toIntOrNull()
+            ?: ERRCS_DEFAULT_GRID_ROWS
+        val cols = Regex("\"cols\"\\s*:\\s*(\\d+)").find(line)?.groupValues?.get(1)?.toIntOrNull()
+            ?: ERRCS_DEFAULT_GRID_COLS
+        return Triple(id, idx, CoverageRegion(CoverageArea(verts), rows, cols))
+    }
+
+    /** Old single-polygon format: one vertex per line, no "region"/"points" keys. */
+    private fun parseOldVertex(line: String): Quad? {
+        if (line.contains("\"points\"") || line.contains("\"region\"")) return null
+        val id = planId(line) ?: return null
         val i = Regex("\"i\"\\s*:\\s*(\\d+)").find(line)?.groupValues?.get(1)?.toIntOrNull() ?: return null
-        fun num(key: String): Float? =
-            Regex("\"$key\"\\s*:\\s*(-?\\d*\\.?\\d+)").find(line)?.groupValues?.get(1)?.toFloatOrNull()
+        fun num(k: String): Float? =
+            Regex("\"$k\"\\s*:\\s*(-?\\d*\\.?\\d+)").find(line)?.groupValues?.get(1)?.toFloatOrNull()
         val x = num("x") ?: return null
         val y = num("y") ?: return null
-        return Parsed(id, i, x, y)
+        return Quad(id, i, x, y)
     }
+
+    private data class Quad(val first: String, val second: Int, val third: Float, val fourth: Float)
+
+    // A tiny insertion-ordered map keyed by Int, kept sorted on read via values(); regions are few.
+    private fun sortedMapWrapper(): MutableMap<Int, CoverageRegion> = sortedMapOf()
 }

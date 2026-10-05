@@ -38,6 +38,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.nhnengineering.rftest.map.GeoReference
 import com.nhnengineering.rftest.model.CoverageArea
+import com.nhnengineering.rftest.model.CoverageRegion
+import com.nhnengineering.rftest.model.hasCoverage
+import com.nhnengineering.rftest.model.errcsFloorGridCompliance
 import com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_COLS
 import com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_ROWS
 import com.nhnengineering.rftest.model.ErrcsAreaClass
@@ -86,18 +89,19 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
     var pendingTap by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     var thresholdsExpanded by remember { mutableStateOf(false) }
     var showGrid by remember { mutableStateOf(true) }
-    var gridRows by remember { mutableStateOf(ERRCS_DEFAULT_GRID_ROWS) }
-    var gridCols by remember { mutableStateOf(ERRCS_DEFAULT_GRID_COLS) }
     var markMode by remember { mutableStateOf(false) }
     var criticalAreas by remember { mutableStateOf<List<ErrcsCriticalArea>>(emptyList()) }
     // First corner of a critical-area rectangle being drawn (normalised); the second tap closes it.
     var pendingCorner by remember { mutableStateOf<Pair<Float, Float>?>(null) }
-    var coverageArea by remember { mutableStateOf(CoverageArea.EMPTY) }
+    // Coverage regions for the selected floor (a floor can hold several: a main building plus a
+    // detached outbuilding). Each region carries its own grid; [selectedRegion] is the one the grid
+    // steppers/Fit act on.
+    var regions by remember { mutableStateOf<List<CoverageRegion>>(emptyList()) }
+    var selectedRegion by remember { mutableStateOf(0) }
     var editingCoverage by remember { mutableStateOf(false) }
     var geoRef by remember { mutableStateOf<GeoReference?>(null) }
 
     val store = remember { ErrcsGridStore(File(context.filesDir, "errcs_grid.jsonl")) }
-    val configStore = remember { ErrcsGridConfigStore(File(context.filesDir, "errcs_grid_config.jsonl")) }
     val criticalStore = remember { ErrcsCriticalAreaStore(File(context.filesDir, "errcs_critical.jsonl")) }
     val coverageStore = remember { CoverageAreaStore(File(context.filesDir, "coverage_area.jsonl")) }
 
@@ -117,12 +121,10 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
         // Each floorplan remembers its own grid size (floors differ in shape and size) and its own
         // AHJ-designated critical areas.
         plan?.let {
-            val cfg = configStore.configFor(it.id)
-            gridRows = cfg.rows
-            gridCols = cfg.cols
             criticalAreas = criticalStore.areasFor(it.id)
-            coverageArea = coverageStore.areaFor(it.id)
+            regions = coverageStore.regionsFor(it.id)
         }
+        selectedRegion = 0
         geoRef = plan?.let { runCatching { BuildingStore.geoReferenceFor(context, it.id) }.getOrNull() }
         editingCoverage = false
     }
@@ -130,14 +132,14 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
     val plan = selected
     val pointsHere = plan?.let { p -> points.filter { it.floorplanId == p.id } } ?: emptyList()
     val compliance = errcsCompliance(pointsHere, thresholds, criticalAreas)
-    val gridCompliance =
-        errcsGridCompliance(pointsHere, gridRows, gridCols, thresholds, criticalAreas, coverageArea)
-
-    // All grid squares laid over the coverage area (its bounding box). Drives both the overlay shading
-    // and the compliance rollup, so they can never disagree. A square's verdict: green when tested and
-    // every reading passes, red when tested and any fails, unshaded when untested or non-testable.
-    val squares = errcsGridSquares(pointsHere, gridRows, gridCols, criticalAreas, coverageArea)
-    val squareByCell = squares.associateBy { it.row to it.col }
+    // Each region graded on its own grid, summed per area class across the floor.
+    val floorGrid = errcsFloorGridCompliance(pointsHere, regions, thresholds, criticalAreas)
+    // Per-region squares, aligned to `regions` by index: drives the overlay shading and the
+    // inside-counts, so screen and compliance can never disagree.
+    val squaresByRegion = regions.map { r ->
+        errcsGridSquares(pointsHere, r.rows, r.cols, criticalAreas, r.polygon)
+    }
+    val sel = selectedRegion.coerceIn(0, (regions.size - 1).coerceAtLeast(0))
 
     LazyColumn(
         modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -236,60 +238,75 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                 item {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            // Coverage area: the traced floor outline the grids lay out inside.
+                            // Coverage areas: traced floor outlines the grids lay out inside. A floor
+                            // can hold several (main building + a detached outbuilding).
                             Row(
                                 Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text("Coverage area", style = MaterialTheme.typography.titleSmall)
-                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    OutlinedButton(onClick = { editingCoverage = true }) {
-                                        Text(if (coverageArea.isDefined) "Edit" else "Define")
-                                    }
-                                    if (coverageArea.isDefined) {
-                                        TextButton(onClick = {
-                                            coverageArea = CoverageArea.EMPTY
-                                            scope.launch { coverageStore.setArea(plan.id, CoverageArea.EMPTY) }
-                                        }) { Text("Clear") }
-                                    }
-                                }
+                                Text("Coverage areas", style = MaterialTheme.typography.titleSmall)
+                                OutlinedButton(onClick = { editingCoverage = true }) { Text("Add area") }
                             }
-                            Text(
-                                if (coverageArea.isDefined) {
-                                    "Floor outline set (${coverageArea.vertices.size} corners); the " +
-                                        "grids lay out inside it."
-                                } else {
-                                    "No coverage area yet — grids cover the whole page. Define the floor " +
-                                        "outline so the grids land on the floor, not the PDF margins."
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                            )
+                            if (!regions.hasCoverage) {
+                                Text(
+                                    "No coverage area yet — grids cover the whole page. Add the floor " +
+                                        "outline(s) so the grids land on the floor, not the PDF margins.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
 
                             if (editingCoverage) {
                                 CoverageAreaEditor(
                                     plan = plan,
                                     bitmap = bmp,
-                                    initial = coverageArea,
+                                    initial = CoverageArea.EMPTY,
                                     onSave = { area ->
-                                        coverageArea = area
                                         editingCoverage = false
-                                        // Auto-fit the grid so >= 20 squares land inside the new area
-                                        // (the NFPA minimum is per floor, not per bounding box). The
-                                        // tester can still adjust with the steppers afterward.
+                                        // Auto-fit the new region's grid to >= 20 squares inside it.
                                         val (r, c) = fitErrcsGrid(area, plan.aspectRatio)
-                                        gridRows = r
-                                        gridCols = c
-                                        scope.launch {
-                                            coverageStore.setArea(plan.id, area)
-                                            configStore.set(plan.id, r, c)
-                                        }
+                                        val updated = regions + CoverageRegion(area, r, c)
+                                        regions = updated
+                                        selectedRegion = updated.lastIndex
+                                        scope.launch { coverageStore.setRegions(plan.id, updated) }
                                     },
                                     onCancel = { editingCoverage = false },
                                 )
                             }
 
                             if (!editingCoverage) {
+                            // Region list: select one to edit its grid, or delete it.
+                            regions.forEachIndexed { i, region ->
+                                val insideN = squaresByRegion.getOrNull(i)?.count { it.testable } ?: 0
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        "Area ${i + 1}: ${region.rows}×${region.cols}, $insideN inside" +
+                                            (if (insideN < 20) " (<20)" else ""),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (i == sel) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        },
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        OutlinedButton(onClick = { selectedRegion = i }) {
+                                            Text(if (i == sel) "Editing" else "Edit")
+                                        }
+                                        TextButton(onClick = {
+                                            val updated = regions.toMutableList().also { it.removeAt(i) }
+                                            regions = updated
+                                            selectedRegion = 0
+                                            scope.launch { coverageStore.setRegions(plan.id, updated) }
+                                        }) { Text("Delete") }
+                                    }
+                                }
+                            }
+
                             Row(
                                 Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -298,55 +315,38 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                 Text("Grid overlay (NFPA method)", style = MaterialTheme.typography.titleSmall)
                                 Switch(checked = showGrid, onCheckedChange = { showGrid = it })
                             }
-                            if (showGrid) {
+                            if (showGrid && regions.isNotEmpty()) {
+                                val region = regions[sel]
+                                fun updateSel(newRegion: CoverageRegion) {
+                                    val updated = regions.toMutableList().also { it[sel] = newRegion }
+                                    regions = updated
+                                    scope.launch { coverageStore.setRegions(plan.id, updated) }
+                                }
+                                Text("Grid — Area ${sel + 1}", style = MaterialTheme.typography.labelMedium)
                                 Row(
                                     Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Stepper("Cols", gridCols) {
-                                        gridCols = it
-                                        scope.launch { configStore.set(plan.id, gridRows, gridCols) }
-                                    }
-                                    Stepper("Rows", gridRows) {
-                                        gridRows = it
-                                        scope.launch { configStore.set(plan.id, gridRows, gridCols) }
-                                    }
+                                    Stepper("Cols", region.cols) { updateSel(region.copy(cols = it)) }
+                                    Stepper("Rows", region.rows) { updateSel(region.copy(rows = it)) }
+                                    OutlinedButton(onClick = {
+                                        val (r, c) = fitErrcsGrid(region.polygon, plan.aspectRatio)
+                                        updateSel(region.copy(rows = r, cols = c))
+                                    }) { Text("Fit ~20") }
+                                }
+                                val inside = squaresByRegion.getOrNull(sel)?.count { it.testable } ?: 0
+                                if (inside < 20) {
                                     Text(
-                                        if (coverageArea.isDefined) {
-                                            "${squares.count { it.testable }} inside area"
-                                        } else {
-                                            "${gridRows * gridCols} squares"
-                                        },
+                                        "Only $inside inside Area ${sel + 1} — NFPA wants ≥ 20; Fit or add.",
                                         style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
                                     )
                                 }
-                                if (coverageArea.isDefined) {
-                                    val inside = squares.count { it.testable }
-                                    Row(
-                                        Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        OutlinedButton(onClick = {
-                                            val (r, c) = fitErrcsGrid(coverageArea, plan.aspectRatio)
-                                            gridRows = r
-                                            gridCols = c
-                                            scope.launch { configStore.set(plan.id, r, c) }
-                                        }) { Text("Fit ~20 grids") }
-                                        if (inside < 20) {
-                                            Text(
-                                                "Only $inside inside — NFPA wants ≥ 20; Fit or add grids.",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.error,
-                                            )
-                                        }
-                                    }
-                                }
                             }
+
                             // Tap target: add a reading, or draw an AHJ-designated critical-area
-                            // rectangle. Independent of the sampling grid, so a stairwell can be
-                            // outlined precisely at any zoom.
+                            // rectangle (independent of the grid, so a stairwell can be outlined tightly).
                             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                                 SegmentedButton(
                                     selected = !markMode,
@@ -367,8 +367,6 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                     IndoorPosition(plan.id, pt.xNorm, pt.yNorm, pt.systemLabel) to
                                         (if (pass) PASS_ARGB else FAIL_ARGB)
                                 },
-                                // While drawing a rectangle, show the first corner so the operator can
-                                // line up the second. Reuses the canvas's existing marker.
                                 currentPosition = pendingCorner?.let { (x, y) ->
                                     IndoorPosition(plan.id, x, y, "corner 1")
                                 },
@@ -379,15 +377,12 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                         val existing = criticalAreas.firstOrNull { it.contains(x, y) }
                                         val corner = pendingCorner
                                         when {
-                                            // No rectangle in progress, tapped an existing area -> remove it.
                                             corner == null && existing != null -> {
                                                 val updated = criticalAreas - existing
                                                 criticalAreas = updated
                                                 scope.launch { criticalStore.setAreas(plan.id, updated) }
                                             }
-                                            // No rectangle in progress -> this tap is the first corner.
                                             corner == null -> pendingCorner = x to y
-                                            // Second corner -> close the rectangle (ignore a zero-size one).
                                             else -> {
                                                 val rect = ErrcsCriticalArea(corner.first, corner.second, x, y)
                                                 pendingCorner = null
@@ -402,41 +397,46 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                         }
                                     }
                                 },
-                                gridOverlay = if (!showGrid) null else GridOverlay(
-                                    rows = gridRows,
-                                    cols = gridCols,
-                                    bounds = coverageArea.bounds().let { Rect(it[0], it[1], it[2], it[3]) },
-                                    cellArgb = { row, col ->
-                                        val sq = squareByCell[row to col]
-                                        when {
-                                            sq == null || !sq.testable || !sq.tested -> null
-                                            sq.passes(thresholds) -> PASS_CELL_ARGB
-                                            else -> FAIL_CELL_ARGB
-                                        }
-                                    },
-                                ),
+                                gridOverlays = if (!showGrid) {
+                                    emptyList()
+                                } else {
+                                    regions.mapIndexed { i, region ->
+                                        val byCell = squaresByRegion.getOrNull(i).orEmpty()
+                                            .associateBy { it.row to it.col }
+                                        GridOverlay(
+                                            rows = region.rows,
+                                            cols = region.cols,
+                                            bounds = region.polygon.bounds()
+                                                .let { Rect(it[0], it[1], it[2], it[3]) },
+                                            cellArgb = { row, col ->
+                                                val sq = byCell[row to col]
+                                                when {
+                                                    sq == null || !sq.testable || !sq.tested -> null
+                                                    sq.passes(thresholds) -> PASS_CELL_ARGB
+                                                    else -> FAIL_CELL_ARGB
+                                                }
+                                            },
+                                        )
+                                    }
+                                },
                                 criticalRegions = criticalAreas.map {
                                     Rect(it.x0, it.y0, it.x1, it.y1)
                                 },
-                                polygon = coverageArea.vertices.map { Offset(it.x, it.y) },
-                                polygonClosed = true,
+                                polygons = regions.map { r -> r.polygon.vertices.map { Offset(it.x, it.y) } },
                             )
                             Text(
                                 if (markMode) {
-                                    (
-                                        if (pendingCorner == null) {
-                                            "Mark mode: tap one corner of a critical area, then the " +
-                                                "opposite corner to draw it. Zoom in first for a tight " +
-                                                "fit (e.g. a stairwell). Tap inside an existing blue " +
-                                                "area to remove it."
-                                        } else {
-                                            "Now tap the opposite corner to finish the rectangle."
-                                        }
-                                        )
+                                    if (pendingCorner == null) {
+                                        "Mark mode: tap one corner of a critical area, then the opposite " +
+                                            "corner to draw it. Zoom in for a tight fit. Tap inside an " +
+                                            "existing blue area to remove it."
+                                    } else {
+                                        "Now tap the opposite corner to finish the rectangle."
+                                    }
                                 } else {
                                     "Pinch to zoom, drag to pan, tap to add a reading. Dots/squares: " +
-                                        "green passes, red fails, unshaded = no reading yet. Blue = a " +
-                                        "designated critical area."
+                                        "green passes, red fails, unshaded = no reading yet. Teal = a " +
+                                        "coverage area; blue = a designated critical area."
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                             )
@@ -451,8 +451,7 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                 ) {
                                     Text(
                                         "${criticalAreas.size} critical area" +
-                                            (if (criticalAreas.size == 1) "" else "s") +
-                                            " · ${squares.count { it.testable && it.areaClass == ErrcsAreaClass.CRITICAL }} grid squares",
+                                            (if (criticalAreas.size == 1) "" else "s"),
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                     TextButton(onClick = {
@@ -480,37 +479,52 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         } else {
-                            if (coverageArea.isDefined) {
-                                val m2 = coverageAreaSquareMetres(
-                                    coverageArea, gr.widthPx, gr.heightPx, gr.metresPerPixel,
-                                )
+                            if (regions.hasCoverage) {
+                                val m2 = regions.sumOf {
+                                    coverageAreaSquareMetres(
+                                        it.polygon, gr.widthPx, gr.heightPx, gr.metresPerPixel,
+                                    )
+                                }
                                 Text(
                                     "Floor area: %,.0f ft² (%,.0f m²)"
                                         .format(squareMetresToFeet(m2), m2),
                                     style = MaterialTheme.typography.bodyMedium,
                                 )
+                                if (regions.size > 1) {
+                                    Text(
+                                        "${regions.size} areas on this floor; floor area is their sum.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
                             } else {
                                 Text(
-                                    "Define a coverage area above to measure floor area.",
+                                    "Add a coverage area above to measure floor area.",
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
-                            val cell = errcsGridCellSize(
-                                coverageArea, gridRows, gridCols, gr.widthPx, gr.heightPx, gr.metresPerPixel,
-                            )
-                            if (cell != null) {
+                            // Per-region 80-ft check: flag the largest offending grid dimension.
+                            val over = regions.mapNotNull { r ->
+                                errcsGridCellSize(
+                                    r.polygon, r.rows, r.cols, gr.widthPx, gr.heightPx, gr.metresPerPixel,
+                                )?.takeIf { it.exceedsNfpaMax() }?.maxDimFt
+                            }
+                            if (over.isNotEmpty()) {
                                 Text(
-                                    "Each grid ≈ %.0f × %.0f ft"
-                                        .format(cell.widthM / 0.3048, cell.heightM / 0.3048),
+                                    ("⚠ A grid exceeds the NFPA 80-ft maximum dimension (largest %.0f " +
+                                        "ft). Add rows/cols to that area, or sector the floor.")
+                                        .format(over.max()),
                                     style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
                                 )
-                                if (cell.exceedsNfpaMax()) {
+                            } else if (regions.isNotEmpty()) {
+                                val r = regions[sel]
+                                errcsGridCellSize(
+                                    r.polygon, r.rows, r.cols, gr.widthPx, gr.heightPx, gr.metresPerPixel,
+                                )?.let { cell ->
                                     Text(
-                                        "⚠ Exceeds the NFPA 80-ft maximum grid dimension (largest side " +
-                                            "%.0f ft). Add rows/cols, or split the floor into sectors."
-                                                .format(cell.maxDimFt),
+                                        "Area ${sel + 1} grid ≈ %.0f × %.0f ft"
+                                            .format(cell.widthM / 0.3048, cell.heightM / 0.3048),
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.error,
                                     )
                                 }
                             }
@@ -541,11 +555,11 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                         }
                         HorizontalDivider(Modifier.padding(vertical = 2.dp))
                         Text(
-                            "Compliance — by grid square (${gridRows}×${gridCols}" +
-                                (if (coverageArea.isDefined) ", within coverage area)" else ")"),
+                            "Compliance — by grid square" +
+                                (if (regions.size > 1) " (all ${regions.size} areas)" else ""),
                             style = MaterialTheme.typography.titleSmall,
                         )
-                        gridCompliance.forEach { c ->
+                        floorGrid.forEach { c ->
                             val pct = c.actualPct
                             Text(
                                 "${c.areaClass.label}: " +

@@ -82,7 +82,9 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
     var label by remember { mutableStateOf("") }
     var geoMode by remember { mutableStateOf(false) }
     var georefIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var coverageArea by remember { mutableStateOf(com.nhnengineering.rftest.model.CoverageArea.EMPTY) }
+    var coverageRegions by remember {
+        mutableStateOf<List<com.nhnengineering.rftest.model.CoverageRegion>>(emptyList())
+    }
     var editingCoverage by remember { mutableStateOf(false) }
     val coverageStore = remember {
         com.nhnengineering.rftest.session.CoverageAreaStore(
@@ -133,8 +135,7 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                     ?.asImageBitmap()
             }.getOrNull()
         }
-        coverageArea = plan?.let { coverageStore.areaFor(it.id) }
-            ?: com.nhnengineering.rftest.model.CoverageArea.EMPTY
+        coverageRegions = plan?.let { coverageStore.regionsFor(it.id) } ?: emptyList()
         editingCoverage = false
     }
 
@@ -185,11 +186,13 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                             CoverageAreaEditor(
                                 plan = plan,
                                 bitmap = bmp,
-                                initial = coverageArea,
+                                initial = com.nhnengineering.rftest.model.CoverageArea.EMPTY,
                                 onSave = { area ->
-                                    coverageArea = area
                                     editingCoverage = false
-                                    scope.launch { coverageStore.setArea(plan.id, area) }
+                                    val updated = coverageRegions +
+                                        com.nhnengineering.rftest.model.CoverageRegion(area)
+                                    coverageRegions = updated
+                                    scope.launch { coverageStore.setRegions(plan.id, updated) }
                                 },
                                 onCancel = { editingCoverage = false },
                             )
@@ -199,7 +202,7 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                             bitmap = bmp,
                             placed = placed.filter { it.first.floorplanId == plan.id },
                             currentPosition = current?.takeIf { it.floorplanId == plan.id },
-                            polygon = coverageArea.vertices.map { Offset(it.x, it.y) },
+                            polygons = coverageRegions.map { r -> r.polygon.vertices.map { Offset(it.x, it.y) } },
                             onTap = { x, y ->
                                 RecordingState.indoorPosition.value = IndoorPosition(
                                     floorplanId = plan.id,
@@ -255,8 +258,9 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                if (coverageArea.isDefined) {
-                                    "Coverage area: ${coverageArea.vertices.size} corners"
+                                if (coverageRegions.isNotEmpty()) {
+                                    "Coverage: ${coverageRegions.size} area" +
+                                        (if (coverageRegions.size == 1) "" else "s")
                                 } else {
                                     "Coverage area: not set"
                                 },
@@ -264,13 +268,12 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 OutlinedButton(onClick = { editingCoverage = true }) {
-                                    Text(if (coverageArea.isDefined) "Edit area" else "Define area")
+                                    Text("Add area")
                                 }
-                                if (coverageArea.isDefined) {
+                                if (coverageRegions.isNotEmpty()) {
                                     TextButton(onClick = {
-                                        val empty = com.nhnengineering.rftest.model.CoverageArea.EMPTY
-                                        coverageArea = empty
-                                        scope.launch { coverageStore.setArea(plan.id, empty) }
+                                        coverageRegions = emptyList()
+                                        scope.launch { coverageStore.setRegions(plan.id, emptyList()) }
                                     }) { Text("Clear") }
                                 }
                             }
@@ -427,17 +430,17 @@ internal fun FloorplanCanvas(
     // far steadier than trying to land a precise tap (and sidesteps tap/transform gesture contention).
     onCenterChange: ((Float, Float) -> Unit)? = null,
     showCrosshair: Boolean = false,
-    // Optional NFPA grid-method overlay (Safety tab). Drawn in the same pan/zoom space as the plan so
-    // the squares stay locked to the floor as the operator zooms. Null everywhere else.
-    gridOverlay: GridOverlay? = null,
+    // Optional NFPA grid-method overlays (Safety tab) — one per coverage region. Drawn in the same
+    // pan/zoom space as the plan so the squares stay locked to the floor as the operator zooms.
+    gridOverlays: List<GridOverlay> = emptyList(),
     // Optional AHJ-designated critical-area rectangles in normalised (0..1) plan coordinates (Safety
     // tab). Drawn as blue outlines locked to the plan, independent of the sampling grid, so a small
     // feature like a stairwell can be marked precisely. Empty everywhere else.
     criticalRegions: List<Rect> = emptyList(),
-    // Optional coverage-area outline (the traced floor polygon) in normalised vertices. Drawn in teal,
-    // locked to the plan. [polygonClosed] false while it is still being traced.
-    polygon: List<Offset> = emptyList(),
-    polygonClosed: Boolean = true,
+    // Closed coverage-area outlines (one per region), each a list of normalised vertices, drawn teal.
+    polygons: List<List<Offset>> = emptyList(),
+    // A polygon still being traced, drawn open (no closing edge). Used by the coverage editor.
+    openPolygon: List<Offset> = emptyList(),
 ) {
     var scale by remember(plan.id) { mutableStateOf(1f) }
     var offset by remember(plan.id) { mutableStateOf(Offset.Zero) }
@@ -531,7 +534,7 @@ internal fun FloorplanCanvas(
 
             // NFPA grid-method overlay, drawn before the points so readings sit on top of the shaded
             // squares. Cell fills and lines use toScreen() so they pan and zoom with the plan.
-            gridOverlay?.let { g ->
+            for (g in gridOverlays) {
                 val rows = g.rows.coerceAtLeast(1)
                 val cols = g.cols.coerceAtLeast(1)
                 val b = g.bounds
@@ -570,18 +573,26 @@ internal fun FloorplanCanvas(
                 }
             }
 
-            // Coverage-area outline (traced floor polygon), teal, locked to the plan. Open while the
-            // operator is still placing corners; closed once saved.
-            if (polygon.size >= 2) {
-                val teal = Color(0xFF00897B)
-                for (i in 0 until polygon.size - 1) {
-                    drawLine(teal, toScreen(polygon[i].x, polygon[i].y), toScreen(polygon[i + 1].x, polygon[i + 1].y), strokeWidth = 4f)
+            // Coverage-area outlines (one per region), teal, locked to the plan.
+            val teal = Color(0xFF00897B)
+            for (poly in polygons) {
+                if (poly.size >= 2) {
+                    for (i in 0 until poly.size - 1) {
+                        drawLine(teal, toScreen(poly[i].x, poly[i].y), toScreen(poly[i + 1].x, poly[i + 1].y), strokeWidth = 4f)
+                    }
+                    if (poly.size >= 3) {
+                        drawLine(teal, toScreen(poly.last().x, poly.last().y), toScreen(poly.first().x, poly.first().y), strokeWidth = 4f)
+                    }
                 }
-                if (polygonClosed && polygon.size >= 3) {
-                    drawLine(teal, toScreen(polygon.last().x, polygon.last().y), toScreen(polygon.first().x, polygon.first().y), strokeWidth = 4f)
+                poly.forEach { v -> drawCircle(teal, radius = 5f, center = toScreen(v.x, v.y)) }
+            }
+            // The in-progress polygon, drawn open (no closing edge) so the operator sees it forming.
+            if (openPolygon.size >= 2) {
+                for (i in 0 until openPolygon.size - 1) {
+                    drawLine(teal, toScreen(openPolygon[i].x, openPolygon[i].y), toScreen(openPolygon[i + 1].x, openPolygon[i + 1].y), strokeWidth = 4f)
                 }
             }
-            polygon.forEach { v -> drawCircle(Color(0xFF00897B), radius = 6f, center = toScreen(v.x, v.y)) }
+            openPolygon.forEach { v -> drawCircle(teal, radius = 6f, center = toScreen(v.x, v.y)) }
 
             // Placed points, coloured by the KPI recorded there, each tagged with its waypoint label.
             placed.forEach { (pos, argb) ->

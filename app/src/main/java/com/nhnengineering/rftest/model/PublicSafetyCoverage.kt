@@ -384,3 +384,32 @@ fun errcsGridCompliance(
         )
     }
 }
+
+/**
+ * Grid-method compliance for a whole floor that may hold several [CoverageRegion]s: each region is
+ * graded on **its own** grid (over its own polygon) and the squares are summed per area class. This is
+ * the roll-up an AHJ that counts ~20 grids per area would read — the main building and a detached
+ * outbuilding each contribute their own tested/passing squares to the floor total.
+ */
+fun errcsFloorGridCompliance(
+    points: List<ErrcsGridPoint>,
+    regions: List<CoverageRegion>,
+    thresholds: PublicSafetyThresholds,
+    criticalAreas: List<ErrcsCriticalArea> = emptyList(),
+): List<ErrcsGridCellCompliance> {
+    val acc = ErrcsAreaClass.entries.associateWith { intArrayOf(0, 0, 0) } // total, tested, passing
+    regions.filter { it.polygon.isDefined }.forEach { region ->
+        errcsGridCompliance(
+            points, region.rows, region.cols, thresholds, criticalAreas, region.polygon,
+        ).forEach { gc ->
+            val a = acc.getValue(gc.areaClass)
+            a[0] += gc.totalCells
+            a[1] += gc.testedCells
+            a[2] += gc.passingCells
+        }
+    }
+    return ErrcsAreaClass.entries.map { ac ->
+        val a = acc.getValue(ac)
+        ErrcsGridCellCompliance(ac, a[0], a[1], a[2], thresholds.requiredPctFor(ac))
+    }
+}

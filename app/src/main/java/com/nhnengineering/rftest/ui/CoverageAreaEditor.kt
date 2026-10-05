@@ -58,8 +58,7 @@ internal fun CoverageAreaEditor(
             onTap = { _, _ -> }, // placement is crosshair-driven, not tap-driven
             showCrosshair = true,
             onCenterChange = { u, v -> crosshair = u to v },
-            polygon = vertices.map { Offset(it.x, it.y) },
-            polygonClosed = false,
+            openPolygon = vertices.map { Offset(it.x, it.y) },
         )
         Text("${vertices.size} corners placed", style = MaterialTheme.typography.bodySmall)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

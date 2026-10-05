@@ -173,8 +173,8 @@ fun SessionsScreen(modifier: Modifier = Modifier) {
                         errcsCriticalAreas = com.nhnengineering.rftest.session.ErrcsCriticalAreaStore(
                             java.io.File(context.filesDir, "errcs_critical.jsonl"),
                         ).load(),
-                        // Per-floorplan coverage-area polygons (grid-within + cellular coverage %).
-                        errcsCoverageAreas = com.nhnengineering.rftest.session.CoverageAreaStore(
+                        // Per-floorplan coverage regions (grid-within + cellular coverage %).
+                        errcsCoverageRegions = com.nhnengineering.rftest.session.CoverageAreaStore(
                             java.io.File(context.filesDir, "coverage_area.jsonl"),
                         ).load(),
                         // Solved georeferences for the session's floors (square footage + 80-ft check).
