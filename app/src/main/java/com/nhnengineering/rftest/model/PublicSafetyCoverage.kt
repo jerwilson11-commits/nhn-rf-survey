@@ -295,6 +295,42 @@ fun errcsGridSquares(
     return out
 }
 
+/**
+ * Choose rows × cols so that at least [minInside] grid squares fall **inside** the coverage area.
+ *
+ * The NFPA ~20-grid minimum applies to the floor, not the bounding rectangle, so a bounding-box grid
+ * over an irregular footprint under-samples (e.g. a 4×5 grid yielding only 13 inside). This grows the
+ * grid until enough cells land inside the polygon, keeping cells roughly square via [imageAspect] (the
+ * plan image's width/height). Both dimensions are clamped to 1..[maxDim]; if even maxDim×maxDim cannot
+ * reach the target (a sliver polygon), the densest grid tried is returned. With no area defined it
+ * returns the default grid, leaving the whole-page behaviour unchanged.
+ */
+fun fitErrcsGrid(
+    coverage: CoverageArea,
+    imageAspect: Float,
+    minInside: Int = 20,
+    maxDim: Int = 20,
+): Pair<Int, Int> {
+    if (!coverage.isDefined) return ERRCS_DEFAULT_GRID_ROWS to ERRCS_DEFAULT_GRID_COLS
+    val b = coverage.bounds()
+    val wn = (b[2] - b[0]).coerceAtLeast(1e-4f)
+    val hn = (b[3] - b[1]).coerceAtLeast(1e-4f)
+    // cols:rows ratio that makes cells ~square on the image.
+    val bboxAspect = (wn / hn).toDouble() * imageAspect.coerceAtLeast(1e-4f)
+    var best = 1 to 1
+    var total = minInside
+    repeat(200) {
+        val cols = Math.round(Math.sqrt(total * bboxAspect)).toInt().coerceIn(1, maxDim)
+        val rows = Math.round(Math.sqrt(total / bboxAspect)).toInt().coerceIn(1, maxDim)
+        val inside = errcsGridSquares(emptyList(), rows, cols, emptyList(), coverage).count { it.testable }
+        best = rows to cols
+        if (inside >= minInside) return best
+        if (rows >= maxDim && cols >= maxDim) return best
+        total += maxOf(1, total / 8)
+    }
+    return best
+}
+
 /** Grid-method compliance for one [ErrcsAreaClass] — see [errcsGridCompliance]. */
 data class ErrcsGridCellCompliance(
     val areaClass: ErrcsAreaClass,

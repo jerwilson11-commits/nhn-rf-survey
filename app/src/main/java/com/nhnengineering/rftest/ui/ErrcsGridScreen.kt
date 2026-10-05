@@ -51,6 +51,7 @@ import com.nhnengineering.rftest.model.errcsCompliance
 import com.nhnengineering.rftest.model.errcsGridCompliance
 import com.nhnengineering.rftest.model.errcsGridCellSize
 import com.nhnengineering.rftest.model.errcsGridSquares
+import com.nhnengineering.rftest.model.fitErrcsGrid
 import com.nhnengineering.rftest.model.coverageAreaSquareMetres
 import com.nhnengineering.rftest.model.isInCriticalArea
 import com.nhnengineering.rftest.model.squareMetresToFeet
@@ -273,7 +274,16 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                     onSave = { area ->
                                         coverageArea = area
                                         editingCoverage = false
-                                        scope.launch { coverageStore.setArea(plan.id, area) }
+                                        // Auto-fit the grid so >= 20 squares land inside the new area
+                                        // (the NFPA minimum is per floor, not per bounding box). The
+                                        // tester can still adjust with the steppers afterward.
+                                        val (r, c) = fitErrcsGrid(area, plan.aspectRatio)
+                                        gridRows = r
+                                        gridCols = c
+                                        scope.launch {
+                                            coverageStore.setArea(plan.id, area)
+                                            configStore.set(plan.id, r, c)
+                                        }
                                     },
                                     onCancel = { editingCoverage = false },
                                 )
@@ -310,6 +320,28 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                         },
                                         style = MaterialTheme.typography.bodySmall,
                                     )
+                                }
+                                if (coverageArea.isDefined) {
+                                    val inside = squares.count { it.testable }
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        OutlinedButton(onClick = {
+                                            val (r, c) = fitErrcsGrid(coverageArea, plan.aspectRatio)
+                                            gridRows = r
+                                            gridCols = c
+                                            scope.launch { configStore.set(plan.id, r, c) }
+                                        }) { Text("Fit ~20 grids") }
+                                        if (inside < 20) {
+                                            Text(
+                                                "Only $inside inside — NFPA wants ≥ 20; Fit or add grids.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.error,
+                                            )
+                                        }
+                                    }
                                 }
                             }
                             // Tap target: add a reading, or draw an AHJ-designated critical-area

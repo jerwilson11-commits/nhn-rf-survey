@@ -197,6 +197,28 @@ class PublicSafetyCoverageTest {
     }
 
     @Test
+    fun `fitErrcsGrid grows the grid until at least 20 squares fall inside the area`() {
+        // A triangle covers ~half its bounding box, so a plain 4x5=20 bbox grid yields far fewer than
+        // 20 inside. fitErrcsGrid must grow it until >= 20 are inside.
+        val triangle = CoverageArea(
+            listOf(CoverageVertex(0f, 0f), CoverageVertex(1f, 0f), CoverageVertex(0f, 1f)),
+        )
+        val (rows, cols) = fitErrcsGrid(triangle, imageAspect = 1f, minInside = 20)
+        val inside = errcsGridSquares(emptyList(), rows, cols, emptyList(), triangle)
+            .count { it.testable }
+        assertTrue("expected >= 20 inside, got $inside ($rows x $cols)", inside >= 20)
+        assertTrue(rows in 1..20 && cols in 1..20)
+    }
+
+    @Test
+    fun `fitErrcsGrid returns the default grid when no area is defined`() {
+        assertEquals(
+            ERRCS_DEFAULT_GRID_ROWS to ERRCS_DEFAULT_GRID_COLS,
+            fitErrcsGrid(CoverageArea.EMPTY, imageAspect = 1.5f),
+        )
+    }
+
+    @Test
     fun `grid is laid within the coverage area and an untested square counts against`() {
         // Coverage = left half of the plan; grid 1x2 over its bounding box -> two testable squares.
         val coverage = CoverageArea(

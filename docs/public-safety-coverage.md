@@ -140,7 +140,10 @@ feature above was already shipped. Order and scope agreed with Jeremy.
    square-centric and coverage-aware (`errcsGridSquares`/`errcsGridCompliance`): grids lay over the
    polygon's bounding box, only squares whose centre is inside the polygon are testable, and compliance
    is graded over **all** testable squares (an untested square counts against — a valid 20-grid result)
-   with `testedPct`/`complete` reporting how much has been walked (recommendations 1 & 2). The PDF adds
+   with `testedPct`/`complete` reporting how much has been walked (recommendations 1 & 2). Because the
+   ~20-grid minimum applies to the floor and not the bounding box, saving a coverage area **auto-fits**
+   the grid (`fitErrcsGrid`) so ≥ 20 squares land inside the polygon; a "Fit ~20 grids" button and an
+   "only N inside" caution keep it enforced, while the Cols/Rows steppers still override. The PDF adds
    "Within the traced coverage area, x dBm was met in x% of samples" (indoor samples inside the polygon
    only).
 
