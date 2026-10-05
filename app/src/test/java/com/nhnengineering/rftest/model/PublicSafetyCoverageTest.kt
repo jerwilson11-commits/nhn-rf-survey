@@ -178,4 +178,47 @@ class PublicSafetyCoverageTest {
         assertEquals(1, critical.pointCount)
         assertEquals(1, critical.passingCount)
     }
+
+    // ---- coverage area polygon + grid-within (Phase A) ---------------------
+
+    @Test
+    fun `coverage polygon contains points and computes normalised area`() {
+        val quarter = CoverageArea(
+            listOf(
+                CoverageVertex(0f, 0f), CoverageVertex(0.5f, 0f),
+                CoverageVertex(0.5f, 0.5f), CoverageVertex(0f, 0.5f),
+            ),
+        )
+        assertTrue(quarter.contains(0.25f, 0.25f))
+        assertFalse(quarter.contains(0.75f, 0.75f))
+        assertEquals(0.25f, quarter.normalizedArea(), 0.001f) // 0.5 x 0.5 of the plan
+        // An undefined polygon contains everything, so "no area drawn" == "whole plan".
+        assertTrue(CoverageArea.EMPTY.contains(0.9f, 0.9f))
+    }
+
+    @Test
+    fun `grid is laid within the coverage area and an untested square counts against`() {
+        // Coverage = left half of the plan; grid 1x2 over its bounding box -> two testable squares.
+        val coverage = CoverageArea(
+            listOf(
+                CoverageVertex(0f, 0f), CoverageVertex(0.5f, 0f),
+                CoverageVertex(0.5f, 1f), CoverageVertex(0f, 1f),
+            ),
+        )
+        // One passing reading in the first square; the second square is left untested. A reading far
+        // to the right (outside the coverage area) must be ignored entirely.
+        val points = listOf(
+            point(ErrcsAreaClass.GENERAL, -80.0, "in", xNorm = 0.1f, yNorm = 0.5f),
+            point(ErrcsAreaClass.GENERAL, -80.0, "out", xNorm = 0.9f, yNorm = 0.5f),
+        )
+        val gen = errcsGridCompliance(
+            points, rows = 1, cols = 2, PublicSafetyThresholds(), emptyList(), coverage,
+        ).single { it.areaClass == ErrcsAreaClass.GENERAL }
+
+        assertEquals(2, gen.totalCells)       // two squares inside the coverage area
+        assertEquals(1, gen.testedCells)      // only one was walked
+        assertEquals(1, gen.passingCells)     // graded over totalCells, so the untested one is not a pass
+        assertEquals(50.0, gen.actualPct!!, 0.001)
+        assertFalse(gen.complete)
+    }
 }

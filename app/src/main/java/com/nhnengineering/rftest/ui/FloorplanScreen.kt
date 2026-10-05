@@ -82,6 +82,13 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
     var label by remember { mutableStateOf("") }
     var geoMode by remember { mutableStateOf(false) }
     var georefIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var coverageArea by remember { mutableStateOf(com.nhnengineering.rftest.model.CoverageArea.EMPTY) }
+    var editingCoverage by remember { mutableStateOf(false) }
+    val coverageStore = remember {
+        com.nhnengineering.rftest.session.CoverageAreaStore(
+            java.io.File(context.filesDir, "coverage_area.jsonl"),
+        )
+    }
 
     val current by RecordingState.indoorPosition.collectAsState()
     val placed by RecordingState.placedPositions.collectAsState()
@@ -126,6 +133,9 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                     ?.asImageBitmap()
             }.getOrNull()
         }
+        coverageArea = plan?.let { coverageStore.areaFor(it.id) }
+            ?: com.nhnengineering.rftest.model.CoverageArea.EMPTY
+        editingCoverage = false
     }
 
     // Full-screen walk mode: when it is on and a plan is loaded, the whole tab becomes the immersive
@@ -171,11 +181,25 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold,
                         )
+                        if (editingCoverage) {
+                            CoverageAreaEditor(
+                                plan = plan,
+                                bitmap = bmp,
+                                initial = coverageArea,
+                                onSave = { area ->
+                                    coverageArea = area
+                                    editingCoverage = false
+                                    scope.launch { coverageStore.setArea(plan.id, area) }
+                                },
+                                onCancel = { editingCoverage = false },
+                            )
+                        } else {
                         FloorplanCanvas(
                             plan = plan,
                             bitmap = bmp,
                             placed = placed.filter { it.first.floorplanId == plan.id },
                             currentPosition = current?.takeIf { it.floorplanId == plan.id },
+                            polygon = coverageArea.vertices.map { Offset(it.x, it.y) },
                             onTap = { x, y ->
                                 RecordingState.indoorPosition.value = IndoorPosition(
                                     floorplanId = plan.id,
@@ -222,6 +246,35 @@ fun FloorplanScreen(modifier: Modifier = Modifier) {
                                 onClick = { RecordingState.indoorPosition.value = null },
                                 modifier = Modifier.fillMaxWidth(),
                             ) { Text("Clear position (back to GPS only)") }
+                        }
+                        // Coverage area (shared with P. Safety) — the traced floor outline the
+                        // cellular coverage report is scoped to ("x dBm met in x% of the area").
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                if (coverageArea.isDefined) {
+                                    "Coverage area: ${coverageArea.vertices.size} corners"
+                                } else {
+                                    "Coverage area: not set"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                OutlinedButton(onClick = { editingCoverage = true }) {
+                                    Text(if (coverageArea.isDefined) "Edit area" else "Define area")
+                                }
+                                if (coverageArea.isDefined) {
+                                    TextButton(onClick = {
+                                        val empty = com.nhnengineering.rftest.model.CoverageArea.EMPTY
+                                        coverageArea = empty
+                                        scope.launch { coverageStore.setArea(plan.id, empty) }
+                                    }) { Text("Clear") }
+                                }
+                            }
+                        }
                         }
                     }
                 }
@@ -381,6 +434,10 @@ internal fun FloorplanCanvas(
     // tab). Drawn as blue outlines locked to the plan, independent of the sampling grid, so a small
     // feature like a stairwell can be marked precisely. Empty everywhere else.
     criticalRegions: List<Rect> = emptyList(),
+    // Optional coverage-area outline (the traced floor polygon) in normalised vertices. Drawn in teal,
+    // locked to the plan. [polygonClosed] false while it is still being traced.
+    polygon: List<Offset> = emptyList(),
+    polygonClosed: Boolean = true,
 ) {
     var scale by remember(plan.id) { mutableStateOf(1f) }
     var offset by remember(plan.id) { mutableStateOf(Offset.Zero) }
@@ -477,10 +534,13 @@ internal fun FloorplanCanvas(
             gridOverlay?.let { g ->
                 val rows = g.rows.coerceAtLeast(1)
                 val cols = g.cols.coerceAtLeast(1)
+                val b = g.bounds
+                fun gx(c: Int) = b.left + c.toFloat() / cols * b.width
+                fun gy(r: Int) = b.top + r.toFloat() / rows * b.height
                 for (r in 0 until rows) for (col in 0 until cols) {
                     val argb = g.cellArgb(r, col) ?: continue
-                    val tl = toScreen(col.toFloat() / cols, r.toFloat() / rows)
-                    val br = toScreen((col + 1f) / cols, (r + 1f) / rows)
+                    val tl = toScreen(gx(col), gy(r))
+                    val br = toScreen(gx(col + 1), gy(r + 1))
                     drawRect(
                         color = Color(argb),
                         topLeft = tl,
@@ -489,10 +549,10 @@ internal fun FloorplanCanvas(
                 }
                 val lineColor = outline.copy(alpha = 0.5f)
                 for (c in 0..cols) {
-                    drawLine(lineColor, toScreen(c.toFloat() / cols, 0f), toScreen(c.toFloat() / cols, 1f), strokeWidth = 2f)
+                    drawLine(lineColor, toScreen(gx(c), b.top), toScreen(gx(c), b.bottom), strokeWidth = 2f)
                 }
                 for (r in 0..rows) {
-                    drawLine(lineColor, toScreen(0f, r.toFloat() / rows), toScreen(1f, r.toFloat() / rows), strokeWidth = 2f)
+                    drawLine(lineColor, toScreen(b.left, gy(r)), toScreen(b.right, gy(r)), strokeWidth = 2f)
                 }
             }
 
@@ -509,6 +569,19 @@ internal fun FloorplanCanvas(
                     drawRect(color = critical, topLeft = tl, size = sz, style = Stroke(width = 4f))
                 }
             }
+
+            // Coverage-area outline (traced floor polygon), teal, locked to the plan. Open while the
+            // operator is still placing corners; closed once saved.
+            if (polygon.size >= 2) {
+                val teal = Color(0xFF00897B)
+                for (i in 0 until polygon.size - 1) {
+                    drawLine(teal, toScreen(polygon[i].x, polygon[i].y), toScreen(polygon[i + 1].x, polygon[i + 1].y), strokeWidth = 4f)
+                }
+                if (polygonClosed && polygon.size >= 3) {
+                    drawLine(teal, toScreen(polygon.last().x, polygon.last().y), toScreen(polygon.first().x, polygon.first().y), strokeWidth = 4f)
+                }
+            }
+            polygon.forEach { v -> drawCircle(Color(0xFF00897B), radius = 6f, center = toScreen(v.x, v.y)) }
 
             // Placed points, coloured by the KPI recorded there, each tagged with its waypoint label.
             placed.forEach { (pos, argb) ->
@@ -550,6 +623,8 @@ internal fun FloorplanCanvas(
 internal data class GridOverlay(
     val rows: Int,
     val cols: Int,
+    /** The normalised region the grid spans — the coverage-area bounding box, or the whole plan. */
+    val bounds: Rect = Rect(0f, 0f, 1f, 1f),
     val cellArgb: (row: Int, col: Int) -> Int?,
 )
 

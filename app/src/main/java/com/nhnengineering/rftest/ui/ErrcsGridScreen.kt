@@ -30,11 +30,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.nhnengineering.rftest.model.CoverageArea
 import com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_COLS
 import com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_ROWS
 import com.nhnengineering.rftest.model.ErrcsAreaClass
@@ -45,9 +47,10 @@ import com.nhnengineering.rftest.model.IndoorPosition
 import com.nhnengineering.rftest.model.PublicSafetyThresholds
 import com.nhnengineering.rftest.model.effectiveAreaClass
 import com.nhnengineering.rftest.model.errcsCompliance
-import com.nhnengineering.rftest.model.errcsGridCell
 import com.nhnengineering.rftest.model.errcsGridCompliance
+import com.nhnengineering.rftest.model.errcsGridSquares
 import com.nhnengineering.rftest.model.isInCriticalArea
+import com.nhnengineering.rftest.session.CoverageAreaStore
 import com.nhnengineering.rftest.session.ErrcsCriticalAreaStore
 import com.nhnengineering.rftest.session.ErrcsGridConfigStore
 import com.nhnengineering.rftest.session.ErrcsGridStore
@@ -83,10 +86,13 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
     var criticalAreas by remember { mutableStateOf<List<ErrcsCriticalArea>>(emptyList()) }
     // First corner of a critical-area rectangle being drawn (normalised); the second tap closes it.
     var pendingCorner by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    var coverageArea by remember { mutableStateOf(CoverageArea.EMPTY) }
+    var editingCoverage by remember { mutableStateOf(false) }
 
     val store = remember { ErrcsGridStore(File(context.filesDir, "errcs_grid.jsonl")) }
     val configStore = remember { ErrcsGridConfigStore(File(context.filesDir, "errcs_grid_config.jsonl")) }
     val criticalStore = remember { ErrcsCriticalAreaStore(File(context.filesDir, "errcs_critical.jsonl")) }
+    val coverageStore = remember { CoverageAreaStore(File(context.filesDir, "coverage_area.jsonl")) }
 
     LaunchedEffect(Unit) {
         plans = FloorplanStore.list(context)
@@ -108,33 +114,22 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
             gridRows = cfg.rows
             gridCols = cfg.cols
             criticalAreas = criticalStore.areasFor(it.id)
+            coverageArea = coverageStore.areaFor(it.id)
         }
+        editingCoverage = false
     }
 
     val plan = selected
     val pointsHere = plan?.let { p -> points.filter { it.floorplanId == p.id } } ?: emptyList()
     val compliance = errcsCompliance(pointsHere, thresholds, criticalAreas)
-    val gridCompliance = errcsGridCompliance(pointsHere, gridRows, gridCols, thresholds, criticalAreas)
+    val gridCompliance =
+        errcsGridCompliance(pointsHere, gridRows, gridCols, thresholds, criticalAreas, coverageArea)
 
-    // Per-square verdict for the overlay: green when every reading in the square passes (graded at its
-    // effective class, so a reading in a critical area is held to the critical floor), red when any
-    // fails, unshaded when the square holds no reading. Keyed on (row, col) for cheap canvas lookup.
-    val cellVerdict: Map<Pair<Int, Int>, Boolean> = pointsHere
-        .groupBy { errcsGridCell(it.xNorm, it.yNorm, gridRows, gridCols) }
-        .mapValues { (_, cellPoints) ->
-            cellPoints.all { it.passesAs(it.effectiveAreaClass(criticalAreas), thresholds) }
-        }
-
-    // Which grid squares are designated critical: a square whose centre falls in a critical area.
-    val criticalCells: Set<Pair<Int, Int>> = buildSet {
-        if (criticalAreas.isNotEmpty()) {
-            for (r in 0 until gridRows) for (col in 0 until gridCols) {
-                val cx = (col + 0.5f) / gridCols
-                val cy = (r + 0.5f) / gridRows
-                if (isInCriticalArea(cx, cy, criticalAreas)) add(r to col)
-            }
-        }
-    }
+    // All grid squares laid over the coverage area (its bounding box). Drives both the overlay shading
+    // and the compliance rollup, so they can never disagree. A square's verdict: green when tested and
+    // every reading passes, red when tested and any fails, unshaded when untested or non-testable.
+    val squares = errcsGridSquares(pointsHere, gridRows, gridCols, criticalAreas, coverageArea)
+    val squareByCell = squares.associateBy { it.row to it.col }
 
     LazyColumn(
         modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -233,6 +228,51 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                 item {
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // Coverage area: the traced floor outline the grids lay out inside.
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("Coverage area", style = MaterialTheme.typography.titleSmall)
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    OutlinedButton(onClick = { editingCoverage = true }) {
+                                        Text(if (coverageArea.isDefined) "Edit" else "Define")
+                                    }
+                                    if (coverageArea.isDefined) {
+                                        TextButton(onClick = {
+                                            coverageArea = CoverageArea.EMPTY
+                                            scope.launch { coverageStore.setArea(plan.id, CoverageArea.EMPTY) }
+                                        }) { Text("Clear") }
+                                    }
+                                }
+                            }
+                            Text(
+                                if (coverageArea.isDefined) {
+                                    "Floor outline set (${coverageArea.vertices.size} corners); the " +
+                                        "grids lay out inside it."
+                                } else {
+                                    "No coverage area yet — grids cover the whole page. Define the floor " +
+                                        "outline so the grids land on the floor, not the PDF margins."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+
+                            if (editingCoverage) {
+                                CoverageAreaEditor(
+                                    plan = plan,
+                                    bitmap = bmp,
+                                    initial = coverageArea,
+                                    onSave = { area ->
+                                        coverageArea = area
+                                        editingCoverage = false
+                                        scope.launch { coverageStore.setArea(plan.id, area) }
+                                    },
+                                    onCancel = { editingCoverage = false },
+                                )
+                            }
+
+                            if (!editingCoverage) {
                             Row(
                                 Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -256,7 +296,11 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                         scope.launch { configStore.set(plan.id, gridRows, gridCols) }
                                     }
                                     Text(
-                                        "${gridRows * gridCols} squares",
+                                        if (coverageArea.isDefined) {
+                                            "${squares.count { it.testable }} inside area"
+                                        } else {
+                                            "${gridRows * gridCols} squares"
+                                        },
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                 }
@@ -322,17 +366,21 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                 gridOverlay = if (!showGrid) null else GridOverlay(
                                     rows = gridRows,
                                     cols = gridCols,
+                                    bounds = coverageArea.bounds().let { Rect(it[0], it[1], it[2], it[3]) },
                                     cellArgb = { row, col ->
-                                        when (cellVerdict[row to col]) {
-                                            true -> PASS_CELL_ARGB
-                                            false -> FAIL_CELL_ARGB
-                                            null -> null
+                                        val sq = squareByCell[row to col]
+                                        when {
+                                            sq == null || !sq.testable || !sq.tested -> null
+                                            sq.passes(thresholds) -> PASS_CELL_ARGB
+                                            else -> FAIL_CELL_ARGB
                                         }
                                     },
                                 ),
                                 criticalRegions = criticalAreas.map {
                                     Rect(it.x0, it.y0, it.x1, it.y1)
                                 },
+                                polygon = coverageArea.vertices.map { Offset(it.x, it.y) },
+                                polygonClosed = true,
                             )
                             Text(
                                 if (markMode) {
@@ -365,7 +413,7 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                     Text(
                                         "${criticalAreas.size} critical area" +
                                             (if (criticalAreas.size == 1) "" else "s") +
-                                            " · ${criticalCells.size} grid squares",
+                                            " · ${squares.count { it.testable && it.areaClass == ErrcsAreaClass.CRITICAL }} grid squares",
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                     TextButton(onClick = {
@@ -374,6 +422,7 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                         scope.launch { criticalStore.setAreas(plan.id, emptyList()) }
                                     }) { Text("Clear critical") }
                                 }
+                            }
                             }
                         }
                     }
@@ -402,20 +451,24 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                         }
                         HorizontalDivider(Modifier.padding(vertical = 2.dp))
                         Text(
-                            "Compliance — by grid square (${gridRows}×${gridCols})",
+                            "Compliance — by grid square (${gridRows}×${gridCols}" +
+                                (if (coverageArea.isDefined) ", within coverage area)" else ")"),
                             style = MaterialTheme.typography.titleSmall,
                         )
                         gridCompliance.forEach { c ->
                             val pct = c.actualPct
                             Text(
-                                "${c.areaClass.label}: ${c.testedCells} squares tested" +
+                                "${c.areaClass.label}: " +
                                     if (pct == null) {
-                                        ", none yet"
+                                        "no squares"
                                     } else {
-                                        ", %.0f%% passing (needs %d%%) -- %s".format(
+                                        "%d/%d tested, %.0f%% pass (needs %d%%) -- %s%s".format(
+                                            c.testedCells,
+                                            c.totalCells,
                                             pct,
                                             c.requiredPct,
                                             if (c.meetsRequirement) "meets" else "does not meet",
+                                            if (c.complete) "" else " · incomplete",
                                         )
                                     },
                                 style = MaterialTheme.typography.bodySmall,

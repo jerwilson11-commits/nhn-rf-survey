@@ -223,27 +223,107 @@ fun errcsGridCell(xNorm: Float, yNorm: Float, rows: Int, cols: Int): Pair<Int, I
     return row to col
 }
 
+/**
+ * One square of the grid laid over a [CoverageArea].
+ *
+ * Square-centric rather than reading-centric: the square has a fixed location, an [areaClass] decided
+ * by that location (critical when its centre falls in a designated critical area), and whether it is
+ * [testable] (centre inside the coverage polygon — squares over dead space / outside the footprint are
+ * not). This is the NFPA grid unit: the floor is divided into squares and each one is graded, so a
+ * square with no reading is an *untested square*, not an absent data point.
+ */
+data class ErrcsGridSquare(
+    val row: Int,
+    val col: Int,
+    /** Normalised centre on the plan image. */
+    val centerX: Float,
+    val centerY: Float,
+    val areaClass: ErrcsAreaClass,
+    val testable: Boolean,
+    val readings: List<ErrcsGridPoint>,
+) {
+    val tested: Boolean get() = readings.isNotEmpty()
+
+    /** A square passes only when it was tested and every reading in it clears the floor for the
+     *  square's class — worst-case, because one weak reading makes the square unreliable. */
+    fun passes(thresholds: PublicSafetyThresholds): Boolean =
+        tested && readings.all { it.passesAs(areaClass, thresholds) }
+}
+
+/**
+ * Lay a `rows × cols` grid over the [coverage] area (its bounding box) and bucket [points] into
+ * squares. Every square in the grid is returned (so the UI can draw the whole grid); use [testable]
+ * to tell floor squares from dead-space ones. With the default empty coverage the grid covers the
+ * whole plan and every square is testable — the original behaviour.
+ */
+fun errcsGridSquares(
+    points: List<ErrcsGridPoint>,
+    rows: Int,
+    cols: Int,
+    criticalAreas: List<ErrcsCriticalArea> = emptyList(),
+    coverage: CoverageArea = CoverageArea.EMPTY,
+): List<ErrcsGridSquare> {
+    val rr = rows.coerceAtLeast(1)
+    val cc = cols.coerceAtLeast(1)
+    val b = coverage.bounds()
+    val w = (b[2] - b[0]).coerceAtLeast(1e-6f)
+    val h = (b[3] - b[1]).coerceAtLeast(1e-6f)
+
+    val byCell = HashMap<Pair<Int, Int>, MutableList<ErrcsGridPoint>>()
+    for (p in points) {
+        if (!coverage.contains(p.xNorm, p.yNorm)) continue
+        val col = (((p.xNorm - b[0]) / w) * cc).toInt().coerceIn(0, cc - 1)
+        val row = (((p.yNorm - b[1]) / h) * rr).toInt().coerceIn(0, rr - 1)
+        byCell.getOrPut(row to col) { mutableListOf() }.add(p)
+    }
+
+    val out = ArrayList<ErrcsGridSquare>(rr * cc)
+    for (row in 0 until rr) for (col in 0 until cc) {
+        val cx = b[0] + (col + 0.5f) / cc * w
+        val cy = b[1] + (row + 0.5f) / rr * h
+        val cls = if (isInCriticalArea(cx, cy, criticalAreas)) {
+            ErrcsAreaClass.CRITICAL
+        } else {
+            ErrcsAreaClass.GENERAL
+        }
+        out += ErrcsGridSquare(
+            row = row, col = col, centerX = cx, centerY = cy,
+            areaClass = cls, testable = coverage.contains(cx, cy),
+            readings = byCell[row to col] ?: emptyList(),
+        )
+    }
+    return out
+}
+
 /** Grid-method compliance for one [ErrcsAreaClass] — see [errcsGridCompliance]. */
 data class ErrcsGridCellCompliance(
     val areaClass: ErrcsAreaClass,
+    /** Testable squares of this class inside the coverage area (the denominator for the grid test). */
+    val totalCells: Int,
+    /** Of those, how many hold at least one reading. */
     val testedCells: Int,
+    /** Of those, how many pass — graded over [totalCells], so an untested square is not a pass. */
     val passingCells: Int,
     val requiredPct: Int,
 ) {
-    /** Null, not 0.0, when no cell of this class was tested — the same reasoning as
-     *  [ErrcsAreaCompliance.actualPct]: printing 0% would read as a measured failure. */
-    val actualPct: Double? = if (testedCells == 0) null else 100.0 * passingCells / testedCells
+    /** Null, not 0.0, when no square of this class exists in the area — printing 0% would read as a
+     *  measured failure. Graded over all testable squares (an untested square counts against). */
+    val actualPct: Double? = if (totalCells == 0) null else 100.0 * passingCells / totalCells
+
+    /** How much of the required grid has actually been walked; drives the completeness indicator. */
+    val testedPct: Double? = if (totalCells == 0) null else 100.0 * testedCells / totalCells
+    val complete: Boolean get() = totalCells > 0 && testedCells == totalCells
     val meetsRequirement: Boolean get() = actualPct != null && actualPct >= requiredPct
 }
 
 /**
- * Grid-method compliance (the NFPA "20-square" approach): the floor is divided into a `rows × cols`
- * grid and each occupied square is graded, rather than each individual reading.
+ * Grid-method compliance (the NFPA "20-square" approach): the floor — the [coverage] polygon, not the
+ * whole PDF page — is divided into a `rows × cols` grid and each testable square is graded.
  *
- * A square is *tested* when it holds at least one reading of that area class, and *passes* only when
- * every reading in it passes [ErrcsGridPoint.passes] — worst-case within the square, because a
- * square with even one failing reading is not one a responder can rely on. Compliance per area class
- * is passing squares over tested squares, against the same required percentage as the point method.
+ * A square *passes* only when it was tested and every reading in it passes (worst-case). Compliance
+ * per area class is **passing squares over all testable squares** (`actualPct`) — so a square that was
+ * never walked counts against, which is what makes a 20-grid result valid rather than "looks
+ * compliant" — while `testedPct`/`complete` report how much of the grid has actually been covered.
  *
  * Deliberately separate from [errcsCompliance]: that grades every reading, this grades squares. An
  * AHJ that specifies the grid method wants the latter; both are reported so neither is assumed.
@@ -254,15 +334,17 @@ fun errcsGridCompliance(
     cols: Int,
     thresholds: PublicSafetyThresholds,
     criticalAreas: List<ErrcsCriticalArea> = emptyList(),
-): List<ErrcsGridCellCompliance> = ErrcsAreaClass.entries.map { areaClass ->
-    val byCell = points.filter { it.effectiveAreaClass(criticalAreas) == areaClass }
-        .groupBy { errcsGridCell(it.xNorm, it.yNorm, rows, cols) }
-    ErrcsGridCellCompliance(
-        areaClass = areaClass,
-        testedCells = byCell.size,
-        passingCells = byCell.count { (_, cellPoints) ->
-            cellPoints.all { it.passesAs(areaClass, thresholds) }
-        },
-        requiredPct = thresholds.requiredPctFor(areaClass),
-    )
+    coverage: CoverageArea = CoverageArea.EMPTY,
+): List<ErrcsGridCellCompliance> {
+    val squares = errcsGridSquares(points, rows, cols, criticalAreas, coverage).filter { it.testable }
+    return ErrcsAreaClass.entries.map { ac ->
+        val inClass = squares.filter { it.areaClass == ac }
+        ErrcsGridCellCompliance(
+            areaClass = ac,
+            totalCells = inClass.size,
+            testedCells = inClass.count { it.tested },
+            passingCells = inClass.count { it.passes(thresholds) },
+            requiredPct = thresholds.requiredPctFor(ac),
+        )
+    }
 }

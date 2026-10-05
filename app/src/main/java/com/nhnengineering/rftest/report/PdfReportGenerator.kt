@@ -190,6 +190,9 @@ object PdfReportGenerator {
         /** Per-floorplan AHJ-designated critical areas; readings inside them are graded critical. */
         errcsCriticalAreas: Map<String, List<com.nhnengineering.rftest.model.ErrcsCriticalArea>> =
             emptyMap(),
+        /** Per-floorplan traced coverage-area polygons — the grid is laid inside them and cellular
+         *  coverage is reported against them. */
+        errcsCoverageAreas: Map<String, com.nhnengineering.rftest.model.CoverageArea> = emptyMap(),
     ): File = withContext(Dispatchers.IO) {
         val doc = PdfDocument()
         val c = Ctx(doc)
@@ -554,6 +557,43 @@ object PdfReportGenerator {
             c.gap(); c.rule()
         }
 
+        // ---- Cellular coverage within the defined coverage area --------------
+        //
+        // When the operator has traced a coverage-area polygon on a floorplan, report the ordinary
+        // cellular/Wi-Fi coverage restricted to samples that fall inside that outline -- "x dBm met
+        // in x% of the defined coverage area" -- so dead space and samples outside the footprint do
+        // not dilute the figure. Rendered only when an area is defined and has samples inside it.
+        run {
+            val defined = errcsCoverageAreas.filterValues { it.isDefined }
+            if (defined.isNotEmpty()) {
+                val kpiIsCell = report.kpi == SessionStats.Kpi.CELL_RSRP
+                val vals = points
+                    .filter { p ->
+                        p.hasIndoorPosition &&
+                            defined[p.floorplanId]?.contains(p.floorplanX!!, p.floorplanY!!) == true
+                    }
+                    .mapNotNull { if (kpiIsCell) it.rsrpDbm else it.rssiDbm }
+                if (vals.isNotEmpty()) {
+                    val meeting = vals.count { it >= report.thresholdDbm }
+                    val pct = 100.0 * meeting / vals.size
+                    c.ensure(70f)
+                    c.text("Coverage area (defined floor outline)", c.h2)
+                    c.para(
+                        String.format(
+                            Locale.US,
+                            "Within the traced coverage area, %d dBm (%s) was met in %.1f%% of " +
+                                "samples (%d of %d). Samples outside the outline — and the PDF page " +
+                                "margins — are excluded.",
+                            report.thresholdDbm,
+                            if (kpiIsCell) "serving RSRP" else "Wi-Fi RSSI",
+                            pct, meeting, vals.size,
+                        ),
+                    )
+                    c.gap(); c.rule()
+                }
+            }
+        }
+
         // ---- Public Safety Coverage -----------------------------------------
         //
         // Track A (manual LMR entry) and Track B (FirstNet Band 14/n14, auto-measured) never
@@ -641,6 +681,9 @@ object PdfReportGenerator {
                     // floorplans -- each floor graded on its own saved grid, the squares summed. A
                     // square passes only if every reading in it passes, so one weak reading fails the
                     // square. This is the figure an AHJ specifying the grid method asks for.
+                    // Each IntArray is [totalTestableSquares, testedSquares, passingSquares]; graded
+                    // over the total so an untested square counts against (a valid 20-grid result),
+                    // and the floor is the coverage polygon when one is defined, not the PDF page.
                     val gridAgg = LinkedHashMap<com.nhnengineering.rftest.model.ErrcsAreaClass, IntArray>()
                     trackA.groupBy { it.floorplanId }.forEach { (planId, planPoints) ->
                         val cfg = errcsGridConfigs[planId]
@@ -649,10 +692,12 @@ object PdfReportGenerator {
                         com.nhnengineering.rftest.model.errcsGridCompliance(
                             planPoints, rows, cols, publicSafetyThresholds,
                             errcsCriticalAreas[planId] ?: emptyList(),
+                            errcsCoverageAreas[planId] ?: com.nhnengineering.rftest.model.CoverageArea.EMPTY,
                         ).forEach { gc ->
-                            val acc = gridAgg.getOrPut(gc.areaClass) { IntArray(2) }
-                            acc[0] += gc.testedCells
-                            acc[1] += gc.passingCells
+                            val acc = gridAgg.getOrPut(gc.areaClass) { IntArray(3) }
+                            acc[0] += gc.totalCells
+                            acc[1] += gc.testedCells
+                            acc[2] += gc.passingCells
                         }
                     }
                     if (gridAgg.values.any { it[0] > 0 }) {
@@ -661,22 +706,31 @@ object PdfReportGenerator {
                         c.text(
                             String.format(
                                 Locale.US, "%-16s %8s %8s %7s %9s",
-                                "Area class", "Squares", "Passing", "Pass %", "Required",
+                                "Area class", "Tested", "Of total", "Pass %", "Required",
                             ),
                             c.monoBold,
                         )
                         for (ac in com.nhnengineering.rftest.model.ErrcsAreaClass.entries) {
                             val acc = gridAgg[ac] ?: continue
-                            val tested = acc[0]
-                            if (tested == 0) continue
-                            val pct = 100.0 * acc[1] / tested
+                            val total = acc[0]
+                            if (total == 0) continue
+                            val pct = 100.0 * acc[2] / total
                             c.text(
                                 String.format(
                                     Locale.US, "%-16s %8d %8d %6s %8s%%",
-                                    ac.label, tested, acc[1], String.format(Locale.US, "%.1f", pct),
+                                    ac.label, acc[1], total, String.format(Locale.US, "%.1f", pct),
                                     publicSafetyThresholds.requiredPctFor(ac).toString(),
                                 ),
                                 c.mono,
+                            )
+                        }
+                        val incomplete = gridAgg.values.any { it[1] < it[0] }
+                        if (incomplete) {
+                            c.para(
+                                "Grid incomplete: not every square inside the coverage area has a " +
+                                    "reading yet. Untested squares are graded as not-passing, so Pass % " +
+                                    "is a floor until the grid is fully walked.",
+                                indent = 10f,
                             )
                         }
                     }

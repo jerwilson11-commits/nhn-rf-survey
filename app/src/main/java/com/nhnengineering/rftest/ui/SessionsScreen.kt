@@ -173,6 +173,10 @@ fun SessionsScreen(modifier: Modifier = Modifier) {
                         errcsCriticalAreas = com.nhnengineering.rftest.session.ErrcsCriticalAreaStore(
                             java.io.File(context.filesDir, "errcs_critical.jsonl"),
                         ).load(),
+                        // Per-floorplan coverage-area polygons (grid-within + cellular coverage %).
+                        errcsCoverageAreas = com.nhnengineering.rftest.session.CoverageAreaStore(
+                            java.io.File(context.filesDir, "coverage_area.jsonl"),
+                        ).load(),
                     )
                     // The summary CSV rides alongside for anyone who wants the numbers in a
                     // spreadsheet. Apache POI would be a very large dependency to produce
