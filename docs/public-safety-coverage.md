@@ -156,6 +156,31 @@ feature above was already shipped. Order and scope agreed with Jeremy.
    and unit-tested (`CoverageAreaSizingTest.kt`); the georeference itself comes from
    `BuildingStore.geoReferenceFor`.
 
+8. **Multiple coverage regions per floor.** A floor can hold more than one closed area (a main
+   building plus a detached outbuilding that are separate on this floor, connected only on another —
+   seen on the Margaritaville floor-2 page). Coverage is a **list of `CoverageRegion`** per floorplan
+   (`session/CoverageAreaStore.kt`, region-per-line, migrates the old single-polygon format), each with
+   its own polygon and its own grid. Each region is auto-fit to ≥ 20 grids and graded on its own grid;
+   the floor rolls them up (`errcsFloorGridCompliance`) and sums their areas — so a small outbuilding
+   gets its own adequate sample rather than being swamped by a floor-wide grid. The P. Safety tab lists
+   regions (add / select-to-edit-its-grid / delete); `FloorplanCanvas` draws several polygons and grid
+   overlays at once.
+
+9. **Auto-detect the outline (`map/CoverageOutlineTrace.kt`, pure + unit-tested).** iBwave exports draw
+   the coverage boundary as a bold closed loop in an engineer-chosen colour. "Detect" lets the operator
+   tap that line; the tracer samples the colour, isolates the connected loop at the tap, fills it, traces
+   the outer contour (Moore-neighbor) and simplifies (Douglas–Peucker) to a polygon. A detached
+   neighbour is a separate component and is left alone; a grey tap or a page-engulfing fill is rejected.
+   `map/CoverageOutlineDetector.kt` wraps it for Android bitmaps (off-thread, downscaled). Best-effort —
+   the result is an editable/deletable region, never committed blind.
+
+10. **Shared floorplan picker + map-at-top.** `ui/FloorplanPickerCard.kt` (import, "✓ georeferenced"
+    marker, Use, Delete) is shared by the Plan and P. Safety tabs so they can't drift. The P. Safety tab
+    now renders the selected floor's map at the top, with the picker and thresholds below.
+
+**Preliminary, not a certification.** This output is a **preliminary coverage assessment** — confirm
+requirements with the AHJ; it is not an AHJ-submittable certified report.
+
 **Backward compatibility:** the new `ErrcsGridPoint` fields are optional and the store's parser reads
 a missing key as null, so grid points written before this change load unchanged (covered by a
 regression test in `ErrcsGridStoreTest.kt`).
