@@ -33,9 +33,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.nhnengineering.rftest.map.CoverageOutlineDetector
 import com.nhnengineering.rftest.map.GeoReference
 import com.nhnengineering.rftest.model.CoverageArea
 import com.nhnengineering.rftest.model.CoverageRegion
@@ -99,6 +101,9 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
     var regions by remember { mutableStateOf<List<CoverageRegion>>(emptyList()) }
     var selectedRegion by remember { mutableStateOf(0) }
     var editingCoverage by remember { mutableStateOf(false) }
+    // Auto-detect: when armed, the next canvas tap samples the bold outline there and traces it.
+    var detectArmed by remember { mutableStateOf(false) }
+    var detectMsg by remember { mutableStateOf<String?>(null) }
     var geoRef by remember { mutableStateOf<GeoReference?>(null) }
 
     val store = remember { ErrcsGridStore(File(context.filesDir, "errcs_grid.jsonl")) }
@@ -127,6 +132,8 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
         selectedRegion = 0
         geoRef = plan?.let { runCatching { BuildingStore.geoReferenceFor(context, it.id) }.getOrNull() }
         editingCoverage = false
+        detectArmed = false
+        detectMsg = null
     }
 
     val plan = selected
@@ -246,7 +253,24 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text("Coverage areas", style = MaterialTheme.typography.titleSmall)
-                                OutlinedButton(onClick = { editingCoverage = true }) { Text("Add area") }
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    OutlinedButton(onClick = {
+                                        detectArmed = true
+                                        detectMsg = "Tap the bold coloured coverage outline on the plan."
+                                    }) { Text("Detect") }
+                                    OutlinedButton(onClick = { editingCoverage = true }) { Text("Add area") }
+                                }
+                            }
+                            detectMsg?.let {
+                                Text(
+                                    it,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (detectArmed) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                )
                             }
                             if (!regions.hasCoverage) {
                                 Text(
@@ -371,27 +395,48 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                     IndoorPosition(plan.id, x, y, "corner 1")
                                 },
                                 onTap = { x, y ->
-                                    if (!markMode) {
-                                        pendingTap = x to y
-                                    } else {
-                                        val existing = criticalAreas.firstOrNull { it.contains(x, y) }
-                                        val corner = pendingCorner
-                                        when {
-                                            corner == null && existing != null -> {
-                                                val updated = criticalAreas - existing
-                                                criticalAreas = updated
-                                                scope.launch { criticalStore.setAreas(plan.id, updated) }
+                                    when {
+                                        detectArmed -> {
+                                            detectArmed = false
+                                            detectMsg = "Detecting…"
+                                            val bm = bmp.asAndroidBitmap()
+                                            scope.launch {
+                                                val area = CoverageOutlineDetector.detect(bm, x, y)
+                                                if (area != null && area.isDefined) {
+                                                    val (r, c) = fitErrcsGrid(area, plan.aspectRatio)
+                                                    val updated = regions + CoverageRegion(area, r, c)
+                                                    regions = updated
+                                                    selectedRegion = updated.lastIndex
+                                                    coverageStore.setRegions(plan.id, updated)
+                                                    detectMsg = "Detected a coverage area (${area.vertices.size} " +
+                                                        "points). Check it, adjust the grid, or delete if wrong."
+                                                } else {
+                                                    detectMsg = "No outline found there. Tap directly on the bold " +
+                                                        "coloured line (zoom in first)."
+                                                }
                                             }
-                                            corner == null -> pendingCorner = x to y
-                                            else -> {
-                                                val rect = ErrcsCriticalArea(corner.first, corner.second, x, y)
-                                                pendingCorner = null
-                                                if (kotlin.math.abs(rect.x1 - rect.x0) > 0.003f &&
-                                                    kotlin.math.abs(rect.y1 - rect.y0) > 0.003f
-                                                ) {
-                                                    val updated = criticalAreas + rect
+                                        }
+                                        !markMode -> pendingTap = x to y
+                                        else -> {
+                                            val existing = criticalAreas.firstOrNull { it.contains(x, y) }
+                                            val corner = pendingCorner
+                                            when {
+                                                corner == null && existing != null -> {
+                                                    val updated = criticalAreas - existing
                                                     criticalAreas = updated
                                                     scope.launch { criticalStore.setAreas(plan.id, updated) }
+                                                }
+                                                corner == null -> pendingCorner = x to y
+                                                else -> {
+                                                    val rect = ErrcsCriticalArea(corner.first, corner.second, x, y)
+                                                    pendingCorner = null
+                                                    if (kotlin.math.abs(rect.x1 - rect.x0) > 0.003f &&
+                                                        kotlin.math.abs(rect.y1 - rect.y0) > 0.003f
+                                                    ) {
+                                                        val updated = criticalAreas + rect
+                                                        criticalAreas = updated
+                                                        scope.launch { criticalStore.setAreas(plan.id, updated) }
+                                                    }
                                                 }
                                             }
                                         }
