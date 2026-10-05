@@ -47,10 +47,18 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Review/demo build: the Free floor is visible and the upgrade screen unlocks each tier
+            // for free -- a sideloaded build can't complete a real Play purchase, so this lets
+            // testers exercise the free floor, the per-feature gates and the upgrade flow. Never
+            // true in release, where real Google Play Billing is used.
+            buildConfigField("boolean", "DEMO_UPGRADE", "true")
+        }
         release {
             if (keystorePropertiesFile.exists()) {
                 signingConfig = signingConfigs.getByName("release")
             }
+            buildConfigField("boolean", "DEMO_UPGRADE", "false")
             optimization {
                 enable = false
             }

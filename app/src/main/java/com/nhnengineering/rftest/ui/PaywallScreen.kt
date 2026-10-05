@@ -26,10 +26,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.android.billingclient.api.ProductDetails
+import com.nhnengineering.rftest.BuildConfig
 import com.nhnengineering.rftest.billing.EntitlementRepository
 import com.nhnengineering.rftest.billing.FIELD_PRODUCT_ID
 import com.nhnengineering.rftest.billing.PRO_PRODUCT_ID
 import com.nhnengineering.rftest.billing.PurchaseFlow
+import com.nhnengineering.rftest.billing.SubscriptionTier
 import com.nhnengineering.rftest.modem.ProCapability
 import com.nhnengineering.rftest.modem.ProModem
 import com.nhnengineering.rftest.modem.ProModemCapability
@@ -82,6 +84,18 @@ fun PaywallScreen(modifier: Modifier = Modifier, onClose: (() -> Unit)? = null) 
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        if (BuildConfig.DEMO_UPGRADE) {
+            item {
+                Text(
+                    text = "Review build: upgrades unlock for free so you can explore every tier. " +
+                        "On the Play release these are paid subscriptions.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
         if (!loaded) {
             item {
                 CircularProgressIndicator(modifier = Modifier.padding(24.dp))
@@ -90,6 +104,7 @@ fun PaywallScreen(modifier: Modifier = Modifier, onClose: (() -> Unit)? = null) 
             item {
                 TierCard(
                     title = "Field",
+                    tier = SubscriptionTier.FIELD,
                     productDetails = products[FIELD_PRODUCT_ID],
                     features = listOf(
                         "PDF client acceptance report",
@@ -98,6 +113,7 @@ fun PaywallScreen(modifier: Modifier = Modifier, onClose: (() -> Unit)? = null) 
                         "Cell lock watch",
                         "Automation (looped/scripted testing) and threshold alarms",
                     ),
+                    onClose = onClose,
                 )
             }
             item {
@@ -118,6 +134,7 @@ fun PaywallScreen(modifier: Modifier = Modifier, onClose: (() -> Unit)? = null) 
                 }
                 TierCard(
                     title = "Pro",
+                    tier = SubscriptionTier.PRO,
                     productDetails = products[PRO_PRODUCT_ID],
                     features = listOf(
                         "Everything in Field",
@@ -128,6 +145,7 @@ fun PaywallScreen(modifier: Modifier = Modifier, onClose: (() -> Unit)? = null) 
                     ),
                     caveatText = proCaveat?.first,
                     caveatWarning = proCaveat?.second ?: false,
+                    onClose = onClose,
                 )
             }
         }
@@ -152,20 +170,27 @@ fun PaywallScreen(modifier: Modifier = Modifier, onClose: (() -> Unit)? = null) 
 @Composable
 private fun TierCard(
     title: String,
+    tier: SubscriptionTier,
     productDetails: ProductDetails?,
     features: List<String>,
     caveatText: String? = null,
     caveatWarning: Boolean = false,
+    onClose: (() -> Unit)? = null,
 ) {
     val offer = productDetails?.subscriptionOfferDetails?.firstOrNull()
     val price = offer?.pricingPhases?.pricingPhaseList?.firstOrNull()?.formattedPrice
     val activity = LocalContext.current as? Activity
+    val demo = BuildConfig.DEMO_UPGRADE
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleLarge)
             Text(
-                text = price ?: "Price unavailable",
+                text = when {
+                    demo -> "Review build — unlock free"
+                    price != null -> price
+                    else -> "Price unavailable"
+                },
                 style = MaterialTheme.typography.titleMedium,
             )
             features.forEach { feature ->
@@ -184,14 +209,18 @@ private fun TierCard(
             }
             Button(
                 onClick = {
-                    if (activity != null && productDetails != null && offer != null) {
+                    if (demo) {
+                        // Review build: unlock the tier locally at no cost and close the overlay.
+                        EntitlementRepository.grantDemoTier(tier)
+                        onClose?.invoke()
+                    } else if (activity != null && productDetails != null && offer != null) {
                         PurchaseFlow.launch(activity, productDetails, offer.offerToken)
                     }
                 },
-                enabled = activity != null && productDetails != null && offer != null,
+                enabled = demo || (activity != null && productDetails != null && offer != null),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Subscribe to $title")
+                Text(if (demo) "Unlock $title (free)" else "Subscribe to $title")
             }
         }
     }

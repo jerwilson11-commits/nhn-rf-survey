@@ -79,14 +79,17 @@ object EntitlementRepository {
         if (initialized) return
         initialized = true
 
-        // Debug builds only, never release: without this, the app is unusable for local
-        // development the moment this gate ships, since there is no free tier and no Play
-        // Console subscription product exists to test-purchase yet. A release build always
-        // takes the real BillingClient path below, unconditionally.
-        if (com.nhnengineering.rftest.BuildConfig.DEBUG) {
-            _tier.value = SubscriptionTier.PRO
+        // Review/demo build only, never release: start at FREE so testers see the free floor, the
+        // per-feature gates and the upgrade screen, and let the upgrade screen grant a tier at no
+        // cost via [grantDemoTier] -- a sideloaded build cannot complete a real Play purchase. The
+        // granted tier is cached so it survives a restart. A release build always takes the real
+        // BillingClient path below, unconditionally.
+        if (com.nhnengineering.rftest.BuildConfig.DEMO_UPGRADE) {
+            val demoStore = EntitlementStore(context.applicationContext)
+            store = demoStore
+            _tier.value = demoStore.cachedTier
             _checking.value = false
-            Log.i(TAG, "debug build: entitlement forced to PRO, BillingClient not connected")
+            Log.i(TAG, "demo build: entitlement starts at ${_tier.value}; free in-app upgrades enabled")
             return
         }
 
@@ -182,6 +185,15 @@ object EntitlementRepository {
     /** Exposed so [PurchaseFlow] can launch the billing sheet without this object needing to know
      *  about `Activity` at all. */
     fun billingClientOrNull(): BillingClient? = client
+
+    /** Review/demo builds only: unlock a tier at no cost from the upgrade screen, since a sideloaded
+     *  build cannot complete a real Play purchase. A no-op in a release build, so it can never grant
+     *  a paid tier to a real user without a purchase. */
+    fun grantDemoTier(newTier: SubscriptionTier) {
+        if (!com.nhnengineering.rftest.BuildConfig.DEMO_UPGRADE) return
+        _tier.value = newTier
+        store?.cachedTier = newTier
+    }
 }
 
 /** [BillingClient.queryPurchasesAsync] has no KTX suspend extension bundled as of 9.1.0 with the
