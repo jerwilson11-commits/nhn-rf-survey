@@ -1,6 +1,8 @@
 package com.nhnengineering.rftest.ui
 
 import android.graphics.BitmapFactory
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -106,13 +108,35 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
     var detectMsg by remember { mutableStateOf<String?>(null) }
     var geoRef by remember { mutableStateOf<GeoReference?>(null) }
 
+    var georefIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+
     val store = remember { ErrcsGridStore(File(context.filesDir, "errcs_grid.jsonl")) }
     val criticalStore = remember { ErrcsCriticalAreaStore(File(context.filesDir, "errcs_critical.jsonl")) }
     val coverageStore = remember { CoverageAreaStore(File(context.filesDir, "coverage_area.jsonl")) }
 
+    // Import a floorplan without leaving the tab (same PDF/image picker as the Plan tab).
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val name = runCatching {
+                    context.contentResolver.query(
+                        uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null,
+                    )?.use { if (it.moveToFirst()) it.getString(0) else null }
+                }.getOrNull() ?: uri.lastPathSegment
+                val imported = FloorplanStore.import(context, uri, name)
+                plans = FloorplanStore.list(context)
+                imported?.let { selected = it }
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         plans = FloorplanStore.list(context)
         points = store.load().points
+    }
+
+    LaunchedEffect(plans) {
+        georefIds = runCatching { BuildingStore.georeferencedIds(context) }.getOrElse { emptySet() }
     }
 
     LaunchedEffect(selected) {
@@ -153,92 +177,6 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(vertical = 12.dp),
     ) {
-        item {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Public safety coverage — manual grid", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Tap where you took a reading with your own tuned meter, then enter the " +
-                            "dBm value. This app does not measure or verify the reading -- it " +
-                            "records what you enter.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    if (plans.isEmpty()) {
-                        Text(
-                            "No floorplan loaded yet. Load one on the Plan tab first.",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    } else {
-                        plans.forEach { p ->
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                YieldingText(p.displayName, style = MaterialTheme.typography.bodyMedium)
-                                OutlinedButton(onClick = { selected = p }) {
-                                    Text(if (p.id == selected?.id) "Selected" else "Use")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("Thresholds", style = MaterialTheme.typography.titleSmall)
-                        TextButton(onClick = { thresholdsExpanded = !thresholdsExpanded }) {
-                            Text(if (thresholdsExpanded) "Hide" else "Edit")
-                        }
-                    }
-                    Text(
-                        "General ${thresholds.generalMinDbm} dBm / ${thresholds.generalPct}%  ·  " +
-                            "Critical ${thresholds.criticalMinDbm} dBm / ${thresholds.criticalPct}%" +
-                            (thresholds.minDaq?.let { "  ·  DAQ ≥ %.1f".format(it) } ?: ""),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Text(
-                        "Defaults only -- IFC 510 and NFPA 72/1225 do not agree on the exact " +
-                            "general-area percentage, and your AHJ may amend either. Confirm the " +
-                            "actual figures for this jurisdiction before relying on these.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    if (thresholdsExpanded) {
-                        HorizontalDivider()
-                        IntField("General dBm", thresholds.generalMinDbm) {
-                            thresholds = thresholds.copy(generalMinDbm = it)
-                        }
-                        IntField("General %", thresholds.generalPct) {
-                            thresholds = thresholds.copy(generalPct = it)
-                        }
-                        IntField("Critical dBm", thresholds.criticalMinDbm) {
-                            thresholds = thresholds.copy(criticalMinDbm = it)
-                        }
-                        IntField("Critical %", thresholds.criticalPct) {
-                            thresholds = thresholds.copy(criticalPct = it)
-                        }
-                        DoubleField(
-                            label = "Min DAQ (blank = don't grade DAQ)",
-                            value = thresholds.minDaq,
-                        ) { thresholds = thresholds.copy(minDaq = it) }
-                        Text(
-                            "DAQ grades a reading only when you also record a DAQ value for it. " +
-                                "Common objectives: 3.0 (ERRCS acceptance), 3.4 (TSB-88 wide-area P25).",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-            }
-        }
-
         if (plan != null) {
             val bmp = bitmap
             if (bmp != null) {
@@ -654,6 +592,80 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                         TextButton(onClick = {
                             points = store.delete(pt.id)
                         }) { Text("Delete") }
+                    }
+                }
+            }
+        }
+
+        item {
+            FloorplanPickerCard(
+                plans = plans,
+                selectedId = selected?.id,
+                georefIds = georefIds,
+                onSelect = { selected = it },
+                onDelete = { p ->
+                    scope.launch {
+                        FloorplanStore.delete(context, p.id)
+                        BuildingStore.removeFloorplan(context, p.id)
+                        plans = FloorplanStore.list(context)
+                        if (selected?.id == p.id) selected = null
+                    }
+                },
+                onImport = {
+                    picker.launch(arrayOf("application/pdf", "image/png", "image/jpeg", "image/webp"))
+                },
+                subtitle = "Public safety coverage — pick a floor, then tap readings on the map above.",
+            )
+        }
+
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Thresholds", style = MaterialTheme.typography.titleSmall)
+                        TextButton(onClick = { thresholdsExpanded = !thresholdsExpanded }) {
+                            Text(if (thresholdsExpanded) "Hide" else "Edit")
+                        }
+                    }
+                    Text(
+                        "General ${thresholds.generalMinDbm} dBm / ${thresholds.generalPct}%  ·  " +
+                            "Critical ${thresholds.criticalMinDbm} dBm / ${thresholds.criticalPct}%" +
+                            (thresholds.minDaq?.let { "  ·  DAQ ≥ %.1f".format(it) } ?: ""),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        "Defaults only -- IFC 510 and NFPA 72/1225 do not agree on the exact " +
+                            "general-area percentage, and your AHJ may amend either. Confirm the " +
+                            "actual figures for this jurisdiction before relying on these.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    if (thresholdsExpanded) {
+                        HorizontalDivider()
+                        IntField("General dBm", thresholds.generalMinDbm) {
+                            thresholds = thresholds.copy(generalMinDbm = it)
+                        }
+                        IntField("General %", thresholds.generalPct) {
+                            thresholds = thresholds.copy(generalPct = it)
+                        }
+                        IntField("Critical dBm", thresholds.criticalMinDbm) {
+                            thresholds = thresholds.copy(criticalMinDbm = it)
+                        }
+                        IntField("Critical %", thresholds.criticalPct) {
+                            thresholds = thresholds.copy(criticalPct = it)
+                        }
+                        DoubleField(
+                            label = "Min DAQ (blank = don't grade DAQ)",
+                            value = thresholds.minDaq,
+                        ) { thresholds = thresholds.copy(minDaq = it) }
+                        Text(
+                            "DAQ grades a reading only when you also record a DAQ value for it. " +
+                                "Common objectives: 3.0 (ERRCS acceptance), 3.4 (TSB-88 wide-area P25).",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                 }
             }
