@@ -6,6 +6,7 @@ import com.android.billingclient.api.BillingClient
 import com.android.billingclient.api.BillingClientStateListener
 import com.android.billingclient.api.BillingResult
 import com.android.billingclient.api.Purchase
+import com.android.billingclient.api.PendingPurchasesParams
 import com.android.billingclient.api.PurchasesUpdatedListener
 import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
@@ -104,6 +105,17 @@ object EntitlementRepository {
         val billingClient = BillingClient.newBuilder(appContext)
             .setListener(purchasesUpdatedListener)
             .enableAutoServiceReconnection()
+            // Billing 9.x makes this mandatory: BillingClient.Builder.build() throws
+            // IllegalArgumentException("Pending purchases for one-time products must be
+            // supported.") if it isn't called. We only sell subscriptions (which always
+            // support pending purchases), but the builder still requires opting in for
+            // one-time products. Omitting it crashed the release build on launch -- debug
+            // never hit it because the DEMO_UPGRADE path returns before building the client.
+            .enablePendingPurchases(
+                PendingPurchasesParams.newBuilder()
+                    .enableOneTimeProducts()
+                    .build(),
+            )
             .build()
         client = billingClient
 
