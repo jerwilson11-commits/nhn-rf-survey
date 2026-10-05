@@ -193,6 +193,9 @@ object PdfReportGenerator {
         /** Per-floorplan traced coverage-area polygons — the grid is laid inside them and cellular
          *  coverage is reported against them. */
         errcsCoverageAreas: Map<String, com.nhnengineering.rftest.model.CoverageArea> = emptyMap(),
+        /** Per-floorplan solved georeferences, for floor/building square footage and the 80-ft
+         *  grid-dimension check. A floor absent here is simply not georeferenced. */
+        errcsGeoRefs: Map<String, com.nhnengineering.rftest.map.GeoReference> = emptyMap(),
     ): File = withContext(Dispatchers.IO) {
         val doc = PdfDocument()
         val c = Ctx(doc)
@@ -589,6 +592,30 @@ object PdfReportGenerator {
                             pct, meeting, vals.size,
                         ),
                     )
+                    // Floor/building square footage from the georeference, when available.
+                    val floorFt2 = defined.mapNotNull { (id, area) ->
+                        errcsGeoRefs[id]?.let { gr ->
+                            com.nhnengineering.rftest.model.squareMetresToFeet(
+                                com.nhnengineering.rftest.model.coverageAreaSquareMetres(
+                                    area, gr.widthPx, gr.heightPx, gr.metresPerPixel,
+                                ),
+                            )
+                        }
+                    }.filter { it > 0.0 }
+                    if (floorFt2.isNotEmpty()) {
+                        c.para(
+                            if (floorFt2.size == 1) {
+                                String.format(Locale.US, "Floor area (georeferenced): %,.0f ft².", floorFt2[0])
+                            } else {
+                                String.format(
+                                    Locale.US,
+                                    "Floor areas (georeferenced): %s = %,.0f ft² across %d floors.",
+                                    floorFt2.joinToString(" + ") { String.format(Locale.US, "%,.0f", it) },
+                                    floorFt2.sum(), floorFt2.size,
+                                )
+                            },
+                        )
+                    }
                     c.gap(); c.rule()
                 }
             }
@@ -730,6 +757,30 @@ object PdfReportGenerator {
                                 "Grid incomplete: not every square inside the coverage area has a " +
                                     "reading yet. Untested squares are graded as not-passing, so Pass % " +
                                     "is a floor until the grid is fully walked.",
+                                indent = 10f,
+                            )
+                        }
+                        // NFPA 80-ft maximum grid dimension, checked per floor where georeferenced.
+                        val oversize = trackA.groupBy { it.floorplanId }.mapNotNull { (planId, _) ->
+                            val gr = errcsGeoRefs[planId] ?: return@mapNotNull null
+                            val cfg = errcsGridConfigs[planId]
+                            val rows = cfg?.first ?: com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_ROWS
+                            val cols = cfg?.second ?: com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_COLS
+                            val cov = errcsCoverageAreas[planId]
+                                ?: com.nhnengineering.rftest.model.CoverageArea.EMPTY
+                            com.nhnengineering.rftest.model.errcsGridCellSize(
+                                cov, rows, cols, gr.widthPx, gr.heightPx, gr.metresPerPixel,
+                            )?.takeIf { it.exceedsNfpaMax() }?.maxDimFt
+                        }
+                        if (oversize.isNotEmpty()) {
+                            c.para(
+                                String.format(
+                                    Locale.US,
+                                    "Grid dimension exceeds the NFPA 80-ft maximum on one or more " +
+                                        "floors (largest %.0f ft). Subdivide the grid (more rows/cols) " +
+                                        "or split the floor into sectors.",
+                                    oversize.max(),
+                                ),
                                 indent = 10f,
                             )
                         }

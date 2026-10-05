@@ -177,6 +177,11 @@ fun SessionsScreen(modifier: Modifier = Modifier) {
                         errcsCoverageAreas = com.nhnengineering.rftest.session.CoverageAreaStore(
                             java.io.File(context.filesDir, "coverage_area.jsonl"),
                         ).load(),
+                        // Solved georeferences for the session's floors (square footage + 80-ft check).
+                        errcsGeoRefs = summary.floorplanIds.mapNotNull { id ->
+                            com.nhnengineering.rftest.session.BuildingStore
+                                .geoReferenceFor(context, id)?.let { id to it }
+                        }.toMap(),
                     )
                     // The summary CSV rides alongside for anyone who wants the numbers in a
                     // spreadsheet. Apache POI would be a very large dependency to produce

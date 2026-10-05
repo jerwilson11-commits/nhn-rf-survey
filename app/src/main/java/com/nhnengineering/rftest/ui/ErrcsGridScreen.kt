@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.nhnengineering.rftest.map.GeoReference
 import com.nhnengineering.rftest.model.CoverageArea
 import com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_COLS
 import com.nhnengineering.rftest.model.ERRCS_DEFAULT_GRID_ROWS
@@ -48,8 +49,12 @@ import com.nhnengineering.rftest.model.PublicSafetyThresholds
 import com.nhnengineering.rftest.model.effectiveAreaClass
 import com.nhnengineering.rftest.model.errcsCompliance
 import com.nhnengineering.rftest.model.errcsGridCompliance
+import com.nhnengineering.rftest.model.errcsGridCellSize
 import com.nhnengineering.rftest.model.errcsGridSquares
+import com.nhnengineering.rftest.model.coverageAreaSquareMetres
 import com.nhnengineering.rftest.model.isInCriticalArea
+import com.nhnengineering.rftest.model.squareMetresToFeet
+import com.nhnengineering.rftest.session.BuildingStore
 import com.nhnengineering.rftest.session.CoverageAreaStore
 import com.nhnengineering.rftest.session.ErrcsCriticalAreaStore
 import com.nhnengineering.rftest.session.ErrcsGridConfigStore
@@ -88,6 +93,7 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
     var pendingCorner by remember { mutableStateOf<Pair<Float, Float>?>(null) }
     var coverageArea by remember { mutableStateOf(CoverageArea.EMPTY) }
     var editingCoverage by remember { mutableStateOf(false) }
+    var geoRef by remember { mutableStateOf<GeoReference?>(null) }
 
     val store = remember { ErrcsGridStore(File(context.filesDir, "errcs_grid.jsonl")) }
     val configStore = remember { ErrcsGridConfigStore(File(context.filesDir, "errcs_grid_config.jsonl")) }
@@ -116,6 +122,7 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
             criticalAreas = criticalStore.areasFor(it.id)
             coverageArea = coverageStore.areaFor(it.id)
         }
+        geoRef = plan?.let { runCatching { BuildingStore.geoReferenceFor(context, it.id) }.getOrNull() }
         editingCoverage = false
     }
 
@@ -423,6 +430,57 @@ fun ErrcsGridScreen(modifier: Modifier = Modifier) {
                                     }) { Text("Clear critical") }
                                 }
                             }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Floor sizing", style = MaterialTheme.typography.titleSmall)
+                        val gr = geoRef
+                        if (gr == null) {
+                            Text(
+                                "Georeference this floor on the Plan tab (satellite tie points) to get " +
+                                    "floor area in ft² and the NFPA 80-ft grid-dimension check.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        } else {
+                            if (coverageArea.isDefined) {
+                                val m2 = coverageAreaSquareMetres(
+                                    coverageArea, gr.widthPx, gr.heightPx, gr.metresPerPixel,
+                                )
+                                Text(
+                                    "Floor area: %,.0f ft² (%,.0f m²)"
+                                        .format(squareMetresToFeet(m2), m2),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            } else {
+                                Text(
+                                    "Define a coverage area above to measure floor area.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            val cell = errcsGridCellSize(
+                                coverageArea, gridRows, gridCols, gr.widthPx, gr.heightPx, gr.metresPerPixel,
+                            )
+                            if (cell != null) {
+                                Text(
+                                    "Each grid ≈ %.0f × %.0f ft"
+                                        .format(cell.widthM / 0.3048, cell.heightM / 0.3048),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                if (cell.exceedsNfpaMax()) {
+                                    Text(
+                                        "⚠ Exceeds the NFPA 80-ft maximum grid dimension (largest side " +
+                                            "%.0f ft). Add rows/cols, or split the floor into sectors."
+                                                .format(cell.maxDimFt),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
                             }
                         }
                     }

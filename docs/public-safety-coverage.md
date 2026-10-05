@@ -132,6 +132,27 @@ feature above was already shipped. Order and scope agreed with Jeremy.
    annual-certification walk the critical areas are already AHJ-approved (often marked in the iBwave
    design / PDF), so the tester just paints the squares to match before walking.
 
+6. **Coverage area + grid-within (Phase A).** The NFPA grid must cover the floor, not the whole PDF
+   page. The operator traces the floor outline as a polygon, corner by corner, with the crosshair (the
+   georeference-style aim-then-confirm — more accurate than finger taps). Shared per floorplan
+   (`model/CoverageArea.kt`, `session/CoverageAreaStore.kt`, `ui/CoverageAreaEditor.kt`) and offered on
+   **both** the P. Safety tab (grid method) and the Plan tab (cellular). The grid method became
+   square-centric and coverage-aware (`errcsGridSquares`/`errcsGridCompliance`): grids lay over the
+   polygon's bounding box, only squares whose centre is inside the polygon are testable, and compliance
+   is graded over **all** testable squares (an untested square counts against — a valid 20-grid result)
+   with `testedPct`/`complete` reporting how much has been walked (recommendations 1 & 2). The PDF adds
+   "Within the traced coverage area, x dBm was met in x% of samples" (indoor samples inside the polygon
+   only).
+
+7. **Georeference sizing (Phase B).** When a floor is georeferenced, the coverage polygon yields real
+   numbers. A similarity transform scales area by `metresPerPixel²`, so floor area (m² → ft²) is the
+   polygon's pixel area × `metresPerPixel²` (`coverageAreaSquareMetres`), and each grid square's real
+   size (`errcsGridCellSize`) is checked against the **NFPA 80-ft maximum grid dimension**. Surfaced in
+   a "Floor sizing" card on the P. Safety tab (floor area ft²/m², per-grid ft, an 80-ft warning) and in
+   the report (floor/building ft² across floors, and an 80-ft flag per floor). All sizing maths is pure
+   and unit-tested (`CoverageAreaSizingTest.kt`); the georeference itself comes from
+   `BuildingStore.geoReferenceFor`.
+
 **Backward compatibility:** the new `ErrcsGridPoint` fields are optional and the store's parser reads
 a missing key as null, so grid points written before this change load unchanged (covered by a
 regression test in `ErrcsGridStoreTest.kt`).

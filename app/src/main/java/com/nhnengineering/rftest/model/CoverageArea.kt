@@ -73,3 +73,66 @@ data class CoverageArea(val vertices: List<CoverageVertex>) {
         val EMPTY = CoverageArea(emptyList())
     }
 }
+
+// ---------------------------------------------------------------------------
+// Real-world sizing (Phase B) — needs a georeference's pixel size + ground resolution
+// ---------------------------------------------------------------------------
+
+/** Metres per foot, for ft²/ft conversions. */
+const val METRES_PER_FOOT = 0.3048
+
+/** NFPA grid method's maximum grid dimension: 80 ft. A square larger than this needs the grid
+ *  subdivided (or the floor split into sectors). */
+const val ERRCS_MAX_GRID_DIM_FT = 80.0
+
+fun squareMetresToFeet(m2: Double): Double = m2 / (METRES_PER_FOOT * METRES_PER_FOOT)
+
+/**
+ * Real floor area (m²) enclosed by a [CoverageArea] on a plan of the given pixel size and ground
+ * resolution (`metresPerPixel`, from the floor's georeference).
+ *
+ * A similarity georeference scales area uniformly by `metresPerPixel²`, so the polygon's area in
+ * pixels² (its normalised area × the plan's pixel area) times `metresPerPixel²` is the real area.
+ * 0 when the polygon is undefined or the inputs are degenerate.
+ */
+fun coverageAreaSquareMetres(
+    area: CoverageArea,
+    widthPx: Int,
+    heightPx: Int,
+    metresPerPixel: Double,
+): Double {
+    if (!area.isDefined || widthPx <= 0 || heightPx <= 0 || metresPerPixel <= 0.0) return 0.0
+    val pixelArea = area.normalizedArea().toDouble() * widthPx.toDouble() * heightPx.toDouble()
+    return pixelArea * metresPerPixel * metresPerPixel
+}
+
+/** Real size (metres) of one grid square laid over a coverage area's bounding box at rows × cols. */
+data class GridCellSize(val widthM: Double, val heightM: Double) {
+    val maxDimM: Double get() = maxOf(widthM, heightM)
+    val maxDimFt: Double get() = maxDimM / METRES_PER_FOOT
+    /** True when the larger side exceeds the NFPA 80-ft maximum grid dimension. */
+    fun exceedsNfpaMax(): Boolean = maxDimFt > ERRCS_MAX_GRID_DIM_FT
+}
+
+/**
+ * The real-world size of one grid square for the current grid, so the operator can check the NFPA
+ * 80-ft maximum grid dimension and the UI can suggest more rows/cols. Null without a usable
+ * georeference. Uses the coverage area's bounding box (the grid spans that), falling back to the whole
+ * plan when no area is drawn.
+ */
+fun errcsGridCellSize(
+    area: CoverageArea,
+    rows: Int,
+    cols: Int,
+    widthPx: Int,
+    heightPx: Int,
+    metresPerPixel: Double,
+): GridCellSize? {
+    if (widthPx <= 0 || heightPx <= 0 || metresPerPixel <= 0.0) return null
+    val b = area.bounds()
+    val wNorm = (b[2] - b[0]).toDouble()
+    val hNorm = (b[3] - b[1]).toDouble()
+    val cellW = wNorm / cols.coerceAtLeast(1) * widthPx * metresPerPixel
+    val cellH = hNorm / rows.coerceAtLeast(1) * heightPx * metresPerPixel
+    return GridCellSize(cellW, cellH)
+}
