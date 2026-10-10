@@ -1,8 +1,20 @@
 # Multi-chipset modem support — roadmap & research plan
 
-**Status: roadmap / research-first. No engineering committed yet.** This is the plan for *investigating*
-what's reachable on non-Qualcomm modems; the per-vendor implementation plans come out of the spikes
-below, the same way `docs/nr-rrc-decoder-plan.md` came out of its spike.
+**Status: research-first. Abstraction seam landed; spikes in progress.** This is the plan for
+*investigating* what's reachable on non-Qualcomm modems; the per-vendor implementation plans come out
+of the spikes below, the same way `docs/nr-rrc-decoder-plan.md` came out of its spike.
+
+**Progress (2026-10-10):**
+- **`ModemBackend` seam landed** (`modem/ModemBackend.kt`, commit `dab59a5`): `ModemChipset.classify()`
+  → `ModemBackends` registry → `ProModem.capability()`. Behavior-preserving — adding a vendor backend is
+  now a one-line registry change. Per-feature accessors deliberately deferred until a second backend
+  validates their cross-vendor shape (see the file's KDoc).
+- **MediaTek spike written** — `docs/mediatek-spike.md`. Verdict: capture+decode feasible on root (MD
+  log), band/tech lock low-confidence, EngineerMode no-root a possible differentiator. **Blocked on
+  hardware** (no MediaTek device).
+- **Exynos/Shannon spike written** — `docs/exynos-spike.md`. Verdict: capture+decode plausible on root
+  (Samsung SDM via SCAT), but **Pixel/Tensor `cpif` transport is the main risk**; control weak; no-root
+  weak on Pixel. On-device validation targets the **Pixel 6 Pro** (confirm root first).
 
 ## Why this exists
 
