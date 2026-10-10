@@ -2,7 +2,6 @@ package com.nhnengineering.rftest.modem
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.concurrent.TimeUnit
 
 /**
  * Whether this device can actually run Pro's root-gated modem tools (band lock, technology lock,
@@ -26,29 +25,15 @@ object ProModem {
     /** Resolves the capability off the main thread (reads modem identity, probes `su`). */
     suspend fun capability(): ProCapability = withContext(Dispatchers.IO) {
         val vendor = ModemChipset.classify()
-        val state = when (vendor) {
-            ModemChipset.Vendor.EXYNOS,
-            ModemChipset.Vendor.MEDIATEK,
-            ModemChipset.Vendor.UNISOC -> ProModemCapability.WRONG_CHIPSET
-            // Qualcomm or unrecognised: root is the deciding factor. "Unrecognised" is treated
-            // optimistically (checked for root, not declared wrong-chipset) so a Qualcomm device the
-            // classifier couldn't positively ID is never wrongly told its modem is unsupported -- the
-            // modem features themselves self-report if QMI turns out unreachable.
-            else -> if (isRooted()) ProModemCapability.CAPABLE else ProModemCapability.NEEDS_ROOT
+        // Routed through the per-vendor backend registry so that adding a MediaTek / Exynos backend
+        // automatically flips its chipset from WRONG_CHIPSET to CAPABLE/NEEDS_ROOT with no change
+        // here (see ModemBackends). A vendor with no backend yet resolves to null -> WRONG_CHIPSET,
+        // exactly as before. The vendor label still comes from the classifier, for messaging.
+        val state = when (ModemBackends.forVendor(vendor)?.availability()) {
+            BackendAvailability.Available -> ProModemCapability.CAPABLE
+            BackendAvailability.NeedsRoot -> ProModemCapability.NEEDS_ROOT
+            is BackendAvailability.Unsupported, null -> ProModemCapability.WRONG_CHIPSET
         }
         ProCapability(state, vendor.label)
-    }
-
-    private fun isRooted(): Boolean = try {
-        val p = ProcessBuilder("su", "-c", "id").redirectErrorStream(true).start()
-        val line = p.inputStream.bufferedReader().use { it.readLine() }
-        if (!p.waitFor(3, TimeUnit.SECONDS)) {
-            p.destroyForcibly()
-            false
-        } else {
-            line?.contains("uid=0") == true
-        }
-    } catch (e: Exception) {
-        false
     }
 }
