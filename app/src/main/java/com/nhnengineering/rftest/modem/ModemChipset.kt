@@ -63,6 +63,13 @@ object ModemChipset {
             when {
                 "qualcomm" in m -> return Vendor.QUALCOMM
                 "samsung" in m -> return Vendor.EXYNOS
+                // Google Tensor (Pixel 6+) pairs a Google AP with a Samsung "Shannon" modem
+                // (g5123b/g5300), so for *modem*-vendor purposes a Tensor device is Exynos/Shannon.
+                // Confirmed on a Pixel 6 Pro (raven, gs101): SOC_MANUFACTURER reports "Google", not
+                // "Samsung", and the DM diag node is /dev/umts_dm0 over the cpif driver -- the
+                // Samsung modem stack. Older Qualcomm Pixels (<=5) report "Qualcomm" and are caught
+                // above, so this never mis-flags them.
+                "google" in m -> return Vendor.EXYNOS
                 "mediatek" in m -> return Vendor.MEDIATEK
                 "unisoc" in m || "spreadtrum" in m -> return Vendor.UNISOC
             }
@@ -73,7 +80,11 @@ object ModemChipset {
         return when {
             Regex("""\bqcom\b|lahaina|kalama|taro|kona|lito|bengal|\bsm\d{4,5}\b|\bsdm\d{3}\b""")
                 .containsMatchIn(codename) -> Vendor.QUALCOMM
-            Regex("""\bs5e\w*|\buniversal\w*|\bexynos\w*""").containsMatchIn(codename) -> Vendor.EXYNOS
+            // s5e*/universal*/exynos* are Samsung's own board codenames; gs\d{3}/zuma/tensor are
+            // Google Tensor platforms (gs101/gs201/zuma), whose modem is Samsung Shannon -- a
+            // weak fallback for when SOC_MANUFACTURER is unavailable.
+            Regex("""\bs5e\w*|\buniversal\w*|\bexynos\w*|\bgs\d{3}\w*|\bzuma\w*|\btensor\w*""")
+                .containsMatchIn(codename) -> Vendor.EXYNOS
             Regex("""\bmt6\w*|\bmt8\w*""").containsMatchIn(codename) -> Vendor.MEDIATEK
             Regex("""\bsp\d{4,}|\bums\d{3,}|\bsc\d{4,}""").containsMatchIn(codename) -> Vendor.UNISOC
             else -> Vendor.OTHER_OR_UNKNOWN

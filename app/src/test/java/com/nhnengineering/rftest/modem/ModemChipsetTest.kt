@@ -29,6 +29,20 @@ class ModemChipsetTest {
     }
 
     @Test
+    fun `SOC_MANUFACTURER Google (Tensor) is Exynos-Shannon`() {
+        // Confirmed on a Pixel 6 Pro (raven, gs101, Shannon g5123b): Tensor reports "Google", and
+        // its modem is Samsung Shannon, so it must route to EXYNOS -- not OTHER_OR_UNKNOWN, which
+        // would send the future ExynosBackend's device down the Qualcomm path.
+        assertEquals(ModemChipset.Vendor.EXYNOS, ModemChipset.classify(signals(socManufacturer = "Google")))
+    }
+
+    @Test
+    fun `Tensor platform codename falls back to Exynos when SOC_MANUFACTURER is absent`() {
+        assertEquals(ModemChipset.Vendor.EXYNOS, ModemChipset.classify(signals(board = "gs101")))
+        assertEquals(ModemChipset.Vendor.EXYNOS, ModemChipset.classify(signals(hardware = "zuma")))
+    }
+
+    @Test
     fun `SOC_MANUFACTURER MediaTek is MediaTek`() {
         assertEquals(ModemChipset.Vendor.MEDIATEK, ModemChipset.classify(signals(socManufacturer = "MediaTek")))
     }

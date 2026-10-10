@@ -1,6 +1,6 @@
 # Exynos / Samsung Shannon modem backend — feasibility spike
 
-**Status: desk research (reference-based). No on-device validation yet.** The Phase-3 spike from
+**Status: RQ1 partially confirmed on-device (Pixel 6 Pro, unrooted, 2026-10-10); RQ5 needs root.** The Phase-3 spike from
 `docs/multi-chipset-roadmap.md`. Answers the five research questions from open references (primarily
 **SCAT**, which supports Samsung's **SDM** diagnostic format) and platform knowledge, marking what is
 **reference-derived** vs. **must be confirmed on a real rooted device**. Follows the ground rules in
@@ -51,9 +51,35 @@ Pixel specifically.
   alone opens it.
 - **Root is required** either way (same barrier as Qualcomm/MediaTek).
 
-**Confirm on the rooted Pixel 6 Pro:** enumerate modem/diag nodes (`/dev/`, relevant sysfs, any
-`cpif`/`cbd`-related interfaces), whether `su` opens the diag stream, and whether a port-enable step is
-needed. *(Read-only reconnaissance on an already-rooted device — no firmware writes, no root exploits.)*
+### On-device findings — Pixel 6 Pro (raven, gs101), unrooted, 2026-10-10
+
+Read-only reconnaissance over adb (no root, no writes) **confirmed the transport exists and is
+root/system-gated**, turning this RQ from reference-derived to device-confirmed:
+
+- **Modem:** `gsm.version.baseband = g5123b-…` → Samsung **Shannon g5123b**. SoC = Google **Tensor
+  gs101**, `ro.soc.manufacturer = Google`.
+- **The DM diagnostic node is `/dev/umts_dm0`** — char device `489,4`, owner **`system:system`**,
+  mode `crw-rw----`. This is the Samsung **DM (Diagnostic Monitor)** channel SCAT reads SDM from. Its
+  permissions mean **a normal app cannot open it — root (or the `system`/`radio` context) is
+  required**, confirming the root barrier.
+- **`cpif` driver confirmed:** `/dev/logbuffer_cpif` present; the modem IPC is exposed as
+  `umts_ipc0/1`, `umts_rfs0`, `umts_boot0`, `umts_router` (all `radio`/`system`) and `oem_ipc0..7`
+  (`radio:radio`). So Tensor uses the Samsung `cpif` stack, **not** QRTR/QMI — none of our Qualcomm
+  transport applies, as expected.
+- **SELinux is `Enforcing`**, so even with root, opening `umts_dm0` likely needs an SELinux allowance
+  (e.g. a permissive domain / Magisk policy) — a real RQ5 caveat.
+- **Classifier fix made as a result:** Tensor reports `SOC_MANUFACTURER = "Google"` (not "Samsung")
+  and the board codename `raven` matched no vendor regex, so `ModemChipset.classify()` was returning
+  `OTHER_OR_UNKNOWN` for Pixels — which would route a Pixel to the Qualcomm backend instead of a
+  future `ExynosBackend`. Fixed: `"Google"` → `EXYNOS`, plus `gs\d{3}`/`zuma`/`tensor` codename
+  fallbacks, with tests.
+
+**Still needs root (RQ5):** opening `/dev/umts_dm0`, capturing SDM, and decoding a real RRC packet.
+
+**Original confirm list (for reference):** enumerate modem/diag nodes, whether `su` opens the diag
+stream, and whether a port-enable step is needed. *(Read-only reconnaissance on an already-rooted
+device — no firmware writes, no root exploits.)* — the node enumeration above is done; the `su`-open
+test remains.
 
 ## RQ2 — Logs: which formats carry what we need, mapped to our model?
 
