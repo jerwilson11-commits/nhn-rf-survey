@@ -872,6 +872,44 @@ object PdfReportGenerator {
                         indent = 10f,
                     )
                 }
+
+                // FirstNet retainability & continuity -- whether the serving cell STAYED on FirstNet
+                // across the walk, which the level-only table above does not answer. Shown whenever
+                // FirstNet was actually seen (gated by continuity.hasData).
+                val continuity = FirstNetContinuity.analyse(points, publicSafetyThresholds.generalMinDbm)
+                if (continuity.hasData) {
+                    c.ensure(80f)
+                    c.gap(4f)
+                    c.text("FirstNet retainability & continuity", c.body)
+                    c.para(
+                        "Whether the serving cell stayed on FirstNet Band 14/n14 across the walk -- a " +
+                            "sample that fell to a commercial band is not FirstNet coverage even with " +
+                            "strong signal, and a Band 14/n14 sample below " + continuity.thresholdDbm +
+                            " dBm is a FirstNet coverage hole. Counted over samples that had a serving " +
+                            "cellular band.",
+                        indent = 10f,
+                    )
+                    c.gap(4f)
+                    c.text(
+                        String.format(
+                            Locale.US, "%-26s %10s", "On FirstNet (of served)",
+                            continuity.onFirstNetPct?.let { String.format(Locale.US, "%.1f%%", it) } ?: "—",
+                        ),
+                        c.mono,
+                    )
+                    c.text(String.format(Locale.US, "%-26s %10d", "Served samples", continuity.servingSamples), c.mono)
+                    c.text(String.format(Locale.US, "%-26s %10d", "Fell off to commercial", continuity.commercialFallback), c.mono)
+                    c.text(String.format(Locale.US, "%-26s %10d", "Lost-FirstNet events", continuity.dropEvents), c.mono)
+                    c.text(String.format(Locale.US, "%-26s %10d", "Weak FirstNet (below floor)", continuity.weakFirstNet), c.mono)
+                    c.text(String.format(Locale.US, "%-26s %10d", "Longest on-FirstNet run", continuity.longestOnRun), c.mono)
+                    if (continuity.firstNetNoLevel > 0) {
+                        c.para(
+                            continuity.firstNetNoLevel.toString() +
+                                " Band 14/n14 samples carried no level and are not graded here.",
+                            indent = 10f,
+                        )
+                    }
+                }
                 c.gap(); c.rule()
             }
         }
