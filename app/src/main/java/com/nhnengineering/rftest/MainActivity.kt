@@ -150,6 +150,19 @@ private fun RfTestApp() {
     // way; the walk screen carries its own Exit control to come back.
     val walkMode by com.nhnengineering.rftest.ui.WalkMode.active.collectAsState()
 
+    // Auto-dismiss the upgrade overlay the instant a purchase lands, so the buyer immediately sees the
+    // features they just unlocked instead of being stranded on the purchase screen -- which previously
+    // required an app restart to reflect the new tier. The purchase already updates the tier live
+    // (EntitlementRepository), so we capture the tier when the overlay opened and close it once the
+    // tier rises above that. Captured per-open (keyed on showUpgrade), so a Field user upgrading to Pro
+    // isn't dismissed before they can buy.
+    val tierAtUpgradeOpen = remember(showUpgrade) { tier }
+    LaunchedEffect(tier, showUpgrade) {
+        if (showUpgrade && tier > tierAtUpgradeOpen) {
+            com.nhnengineering.rftest.billing.UpgradePrompt.dismiss()
+        }
+    }
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         bottomBar = {
