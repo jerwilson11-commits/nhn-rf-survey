@@ -105,7 +105,10 @@ modem gen before shipping. OnePlus 9 is fine to start (it's on hand).
    conflicts" section. Works on public-API or modem neighbours. Unit-tested. True collision/confusion
    (needs per-neighbour NCI) deliberately not claimed.
 4. **A1 + A2** (4.1) — the marquee Pro depth that matches NSG. Verify on a modem-gen-matched Snapdragon.
-5. **F1** (4.1) — CBRS/private-5G, consulting niche.
+5. **F1** (4.1) — CBRS/private-5G, consulting niche. **Field part DONE 2026-10-11** —
+   `report/CbrsCoverage.kt`: detects CBRS (LTE B48 / NR n48) over the walk, % on CBRS of served
+   samples, B48-vs-n48 split, median/worst RSRP; rendered in a PDF "CBRS / Band-48 coverage" section.
+   Unit-tested. **Pro follow-up (DIAG):** network slice (S-NSSAI) + NPN/SNPN from NAS decode.
 6. Then C2/C4/A5, B1/B2, D1, and the rest by score.
 
 ## DIAG log-code references (for A, to confirm on real captures)

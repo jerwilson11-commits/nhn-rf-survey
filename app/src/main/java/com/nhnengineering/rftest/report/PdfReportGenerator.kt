@@ -914,6 +914,36 @@ object PdfReportGenerator {
             }
         }
 
+        // ---- CBRS / Band-48 coverage --------------------------------------
+        //
+        // How much of the walk ran on CBRS (LTE B48 / NR n48, 3.5 GHz) and how strong. Field-tier,
+        // pure sample analysis. Network slice (S-NSSAI) and NPN/SNPN identification need NAS decode
+        // and are a separate DIAG-gated follow-up.
+        val cbrs = CbrsCoverage.analyse(points)
+        if (cbrs.hasData) {
+            c.ensure(120f)
+            c.text("CBRS / Band-48 coverage", c.h2)
+            c.para(
+                "Samples served on CBRS spectrum (LTE B48 / NR n48, 3.5 GHz), of samples that had a " +
+                    "serving cellular band. Network slice (S-NSSAI) and private-network (NPN) identity " +
+                    "need signalling decode and are not included here.",
+            )
+            c.gap(4f)
+            c.kv(
+                "On CBRS",
+                cbrs.cbrsPct?.let {
+                    String.format(Locale.US, "%.1f%% (%d of %d served)", it, cbrs.cbrsSamples, cbrs.servingSamples)
+                } ?: "—",
+            )
+            if (cbrs.lteB48Samples > 0) c.kv("LTE B48 samples", cbrs.lteB48Samples.toString())
+            if (cbrs.nrN48Samples > 0) c.kv("NR n48 samples", cbrs.nrN48Samples.toString())
+            if (cbrs.cbrsWithLevel > 0) {
+                c.kv("CBRS RSRP median", "${cbrs.medianRsrpDbm} dBm")
+                c.kv("CBRS RSRP worst", "${cbrs.worstRsrpDbm} dBm")
+            }
+            c.gap(); c.rule()
+        }
+
         // ---- Dominance / best server --------------------------------------
         val dom = SessionStats.dominance(points)
         if (dom.samples > 0 && dom.servers.isNotEmpty()) {
