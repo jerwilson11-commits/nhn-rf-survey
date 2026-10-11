@@ -1320,6 +1320,43 @@ object PdfReportGenerator {
             c.gap(); c.rule()
         }
 
+        // ---- PCI planning conflicts ---------------------------------------
+        //
+        // Co-channel cells whose PCIs collide on a reference-signal dimension (mod 3 = DL RS/PSS; mod 6
+        // = LTE CRS; mod 30 = LTE UL RS). Not visible in a coverage plot. True collision/confusion
+        // needs per-neighbour cell identity (NCI) that reports don't carry, so it is not claimed.
+        val pciConflicts = PciConflicts.analyse(points)
+        if (pciConflicts.hasConflicts) {
+            c.ensure(130f)
+            c.text("PCI planning conflicts", c.h2)
+            c.para(
+                "Co-channel cells sharing a PCI reference-signal dimension -- interference a coverage " +
+                    "plot cannot show. mod 3 collides the downlink RS/PSS; mod 6 the LTE CRS; mod 30 the " +
+                    "LTE uplink RS. Margin is the closest the two came in level (smaller is worse).",
+            )
+            c.gap(4f)
+            c.text(String.format(Locale.US, "%-8s %12s %10s %8s", "Channel", "PCIs", "Conflict", "Margin"), c.monoBold)
+            for (x in pciConflicts.conflicts.take(20)) {
+                c.ensure(LINE)
+                val mods = buildString {
+                    append("mod3")
+                    if (x.mod6) append("+6")
+                    if (x.mod30) append("+30")
+                }
+                c.text(
+                    String.format(
+                        Locale.US, "%-8s %12s %10s %8s",
+                        x.channel?.toString() ?: "—",
+                        "${x.pciA}/${x.pciB}",
+                        mods,
+                        x.minMarginDb?.let { "$it dB" } ?: "—",
+                    ),
+                    c.mono,
+                )
+            }
+            c.gap(); c.rule()
+        }
+
         // ---- Coverage holes -----------------------------------------------
         c.ensure(120f)
         // ---- Roaming ------------------------------------------------------

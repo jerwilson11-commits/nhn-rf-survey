@@ -99,7 +99,11 @@ modem gen before shipping. OnePlus 9 is fine to start (it's on hand).
    stronger same-band neighbour vs coverage hole); rendered in a PDF "Mobility and retainability"
    section. Unit-tested. **Follow-up (hardware-gated):** true modem-internal RLF/RACH/HO DIAG log
    codes (needs a confirmed capture-capable device; our OnePlus 9 streams zero packets on 0xB823).
-3. **C1** (4.3) — nearly free; Field basic + Pro deep.
+3. **C1** (4.3) — nearly free; Field basic + Pro deep. **DONE 2026-10-11** — `report/PciConflicts.kt`:
+   co-channel PCI conflicts, gated on mod-3 (DL RS/PSS) with mod-6 (LTE CRS) and mod-30 (LTE UL RS)
+   flags (both are subsets of mod-3), min-level-margin for severity; rendered in a PDF "PCI planning
+   conflicts" section. Works on public-API or modem neighbours. Unit-tested. True collision/confusion
+   (needs per-neighbour NCI) deliberately not claimed.
 4. **A1 + A2** (4.1) — the marquee Pro depth that matches NSG. Verify on a modem-gen-matched Snapdragon.
 5. **F1** (4.1) — CBRS/private-5G, consulting niche.
 6. Then C2/C4/A5, B1/B2, D1, and the rest by score.
