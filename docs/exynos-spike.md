@@ -14,8 +14,11 @@
 > We have a **Pixel 6 Pro (Tensor G1 = Shannon g5123b)**, so our on-device validation targets sub-target
 > **(2)** — the harder one. A retail Exynos Galaxy would validate the easier (1); we don't have one.
 >
-> **Prerequisite not yet confirmed:** the Pixel 6 Pro must be **rooted** for any capture path. Last
-> month's Pixel 6 Pro test was a plain install and does not establish root — confirm before RQ5.
+> **RQ5 blocked on our hardware (2026-10-10):** our Pixel 6 Pro is a **Verizon** unit — OEM unlocking
+> is **greyed out and permanent** (Verizon is the one carrier that ships Pixels with a permanently
+> locked bootloader). It **cannot be rooted**, so the capture path (open `/dev/umts_dm0`, SDM, decode)
+> is blocked on this device. RQ5 needs a **rootable** Exynos target instead — a Google-Store (unlocked)
+> Pixel, or, easier per this spike, a retail **international Exynos Samsung Galaxy** (unlockable).
 
 ---
 
@@ -154,7 +157,15 @@ product call before committing the backend.
 
 ## Next step
 
-Connect and confirm **root** on the Pixel 6 Pro, then run RQ1 (enumerate the Shannon diag transport) as
-read-only on-device reconnaissance. Until then this backend stays `null` in the registry and the
-capability gate honestly reports `WRONG_CHIPSET` for Exynos — while the decoder, no-root import, and
-Field features already serve Exynos/Pixel users.
+RQ1 is done (transport confirmed: `/dev/umts_dm0` over cpif, root-gated). **RQ5 is blocked for lack of
+a rootable Exynos device** — our only one is the Verizon-locked Pixel 6 Pro (see the banner). To
+proceed to a real `ExynosBackend`, source a **rootable** target:
+
+- a **Google-Store (unlocked) Pixel** (Tensor/Shannon — the path we already have RQ1 for), or
+- a retail **international Exynos Samsung Galaxy** — the **better-documented SDM path** and likely the
+  higher-ROI first build.
+
+Until then this backend stays `null` in the registry and the capability gate honestly reports
+`WRONG_CHIPSET` for Exynos — while the decoder, no-root import, and Field features already serve
+Exynos/Pixel users. The `ModemBackend` seam means adding the backend is a one-line registration once a
+device and an SDM parser exist.
