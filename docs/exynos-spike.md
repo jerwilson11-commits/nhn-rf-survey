@@ -1,6 +1,6 @@
 # Exynos / Samsung Shannon modem backend — feasibility spike
 
-**Status: RQ1 partially confirmed on-device (Pixel 6 Pro, unrooted, 2026-10-10); RQ5 needs root.** The Phase-3 spike from
+**Status: RQ1 confirmed on-device (Pixel 6 Pro, unrooted); backend code WRITTEN from the SCAT reference and gated OFF; RQ5 (live capture) needs a rootable Shannon device.** The Phase-3 spike from
 `docs/multi-chipset-roadmap.md`. Answers the five research questions from open references (primarily
 **SCAT**, which supports Samsung's **SDM** diagnostic format) and platform knowledge, marking what is
 **reference-derived** vs. **must be confirmed on a real rooted device**. Follows the ground rules in
@@ -137,16 +137,32 @@ On the rooted Pixel 6 Pro, prove the path end-to-end — the Qualcomm bar:
   Pixel 6 Pro is actually rooted before budgeting RQ5.
 - SDM **dialect drift** across firmwares may need parser tolerance.
 
-## Recommended implementation plan (after on-device validation)
+## Implementation status (code written 2026-10-11, from the SCAT reference, gated OFF)
 
-1. `ExynosBackend` registered in `ModemBackends` (currently returns `null` → `WRONG_CHIPSET`).
-   `availability()` = rooted **and** SDM/diag transport reachable.
-2. `SdmTransport` (open/read the Shannon diag stream — Tensor-specific) + `SdmParser` (SDM framing →
-   raw RRC OTA bytes) → **reuse** `NrRrcDecoder` / `Sib1Parser` / `TddProfile`.
-3. Neighbours from SDM measurement logs → `ModemNeighbourSource`-shaped output.
-4. Control: **likely report band/tech lock unavailable** on Exynos/Shannon initially, with an honest
-   message — revisit only if a safe AT path is proven.
-5. No-root: nothing to add on Pixel beyond existing Field features.
+Written from the SCAT Samsung-SDM format (clean-room Kotlin, not SCAT's GPL code), **unit-tested on
+synthetic frames, not yet run on hardware:**
+
+1. ✅ **`ExynosBackend`** registered in `ModemBackends` (EXYNOS → `ExynosBackend`). `availability()`
+   returns `Unsupported` while `ExynosBackend.VALIDATED = false`, so the capability gate **still
+   reports `WRONG_CHIPSET`** in production — flip `VALIDATED` after a real capture decodes. The real
+   rooted + `/dev/umts_dm0`-present check is written behind the flag.
+2. ✅ **`SdmParser`** — outer SDM framing (`0x7F … header … 0x7E`, `'<HBHHBBBL'`), command groups/ids,
+   and the LTE RRC-OTA inner header (`'<BBH'` → raw RRC PDU). Round-trip + resync + partial-frame
+   tests pass. Feeds the existing `NrRrcDecoder` / `Sib1Parser` / `TddProfile` unchanged.
+   ⚠️ The **NR RRC inner container** layout is still a TODO (`nrRrcPayloadUnparsed` returns the raw
+   payload) — needs `sdmcommonparser` cross-checked against a real NR capture.
+3. ✅ **`SdmTransport`** — byte-stream → frame → NR/LTE RRC dispatch (`processStream`, unit-tested with
+   split reads). ⚠️ `openDiagStream` (the `su` open of `/dev/umts_dm0` under SELinux Enforcing) and the
+   **item-select enable handshake** are the two parts deliberately left for on-device work (RQ5) and
+   currently return "not yet enabled".
+4. ◻️ Neighbours from SDM measurement logs → `ModemNeighbourSource`-shaped output — not started.
+5. ◻️ Control: **likely report band/tech lock unavailable** on Exynos/Shannon initially, with an
+   honest message — revisit only if a safe AT path is proven.
+6. ◻️ No-root: nothing to add on Pixel beyond existing Field features.
+
+**To turn it on:** on a rootable Shannon device, finish `openDiagStream` + the item-select sequence,
+confirm the NR inner container, decode one real SIB1/RRCReconfiguration through `libnrrrc`, then flip
+`ExynosBackend.VALIDATED = true`.
 
 ## Open question for sequencing
 

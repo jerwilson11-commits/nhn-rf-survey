@@ -83,10 +83,13 @@ object ModemBackends {
         // device the classifier couldn't positively ID is never pre-emptively declared unsupported
         // -- the QMI/DIAG mechanisms self-report if they turn out unreachable.
         ModemChipset.Vendor.OTHER_OR_UNKNOWN -> QualcommBackend
-        // MediaTek, Exynos/Shannon, Unisoc: research-first, no backend yet. Non-root users keep the
-        // paste-import path and every Field feature regardless.
+        // Exynos/Shannon has a backend (SDM over /dev/umts_dm0), but it is gated OFF until validated
+        // on a rooted Shannon device -- ExynosBackend.availability() currently returns Unsupported, so
+        // the capability gate still reports WRONG_CHIPSET in production. See ExynosBackend / the spike.
+        ModemChipset.Vendor.EXYNOS -> ExynosBackend
+        // MediaTek, Unisoc: research-first, no backend yet. Non-root users keep the paste-import path
+        // and every Field feature regardless.
         ModemChipset.Vendor.MEDIATEK,
-        ModemChipset.Vendor.EXYNOS,
         ModemChipset.Vendor.UNISOC -> null
     }
 

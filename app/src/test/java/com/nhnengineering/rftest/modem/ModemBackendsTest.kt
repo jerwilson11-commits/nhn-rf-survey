@@ -1,7 +1,9 @@
 package com.nhnengineering.rftest.modem
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -32,8 +34,18 @@ class ModemBackendsTest {
     }
 
     @Test
-    fun `Exynos has no backend yet`() {
-        assertNull(ModemBackends.forVendor(ModemChipset.Vendor.EXYNOS))
+    fun `Exynos routes to the Exynos backend`() {
+        assertSame(ExynosBackend, ModemBackends.forVendor(ModemChipset.Vendor.EXYNOS))
+    }
+
+    @Test
+    fun `Exynos backend is gated off until hardware-validated`() {
+        // While ExynosBackend.VALIDATED is false the backend reports Unsupported, so the capability
+        // gate still resolves Exynos to WRONG_CHIPSET -- production behaviour is unchanged until a
+        // real SDM capture is decoded on a rooted Shannon device. (Safe to call: the VALIDATED=false
+        // path returns before any su probe.)
+        assertFalse(ExynosBackend.VALIDATED)
+        assertTrue(ExynosBackend.availability() is BackendAvailability.Unsupported)
     }
 
     @Test
