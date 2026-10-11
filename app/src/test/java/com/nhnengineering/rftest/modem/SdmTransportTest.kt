@@ -58,7 +58,22 @@ class SdmTransportTest {
     }
 
     @Test
-    fun `live start is gated off until the diag stream is validated`() {
+    fun `summary counts frames by type and cmd_sig`() {
+        val data = nrFrame(1, 2) + lteFrame(3, 0, byteArrayOf(0x40)) + nrFrame(9)
+        val t = SdmTransport()
+        t.processStream(ByteArrayInputStream(data), onNrRrc = {}, onLteRrc = {})
+        val s = t.summary()
+        assertEquals(3, s.framesTotal)
+        assertEquals(2, s.nrRrcFrames)
+        assertEquals(1, s.lteRrcFrames)
+        assertEquals(data.size.toLong(), s.bytesRead)
+        assertEquals(2L, s.cmdSigCounts[0x0108])   // NR RRC
+        assertEquals(1L, s.cmdSigCounts[0x0252])   // LTE RRC OTA
+    }
+
+    @Test
+    fun `start returns false (with a node reason) when the diag node can't be opened`() {
+        // On a JVM/CI host there is no `su`, so the device open fails -- the honest beta outcome.
         val t = SdmTransport()
         val ok = t.start(onNrRrc = {}, onLteRrc = {})
         assertEquals(false, ok)

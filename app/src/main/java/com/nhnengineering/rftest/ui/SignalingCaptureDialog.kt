@@ -23,6 +23,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.nhnengineering.rftest.cellular.BandMapping
+import com.nhnengineering.rftest.modem.ExynosCapture
 import com.nhnengineering.rftest.modem.ModemNrStream
 import com.nhnengineering.rftest.modem.Nas5gsOtaParser
 import com.nhnengineering.rftest.modem.NrRrcTdd
@@ -30,6 +31,7 @@ import com.nhnengineering.rftest.modem.ProCapability
 import com.nhnengineering.rftest.modem.ProModem
 import com.nhnengineering.rftest.modem.ProModemCapability
 import com.nhnengineering.rftest.modem.RrcOtaParser
+import com.nhnengineering.rftest.modem.SdmTransport
 import com.nhnengineering.rftest.profile.Sib1Parser
 import com.nhnengineering.rftest.profile.TddProfile
 import kotlinx.coroutines.delay
@@ -57,6 +59,10 @@ internal fun SignalingCaptureDialog(
     onExport: (List<ModemNrStream.SignalingEvent>) -> Unit,
     onSaveProfile: (TddProfile) -> Unit,
     onDismiss: () -> Unit,
+    // Non-null only on a rooted Exynos/Shannon device with the beta flag on. When set, the dialog
+    // shows the experimental Exynos capture in place of the "needs Qualcomm" dead-end; the Qualcomm
+    // path is left entirely untouched.
+    exynosCapture: ExynosCapture? = null,
 ) {
     var events by remember { mutableStateOf(emptyList<ModemNrStream.SignalingEvent>()) }
 
@@ -76,6 +82,16 @@ internal fun SignalingCaptureDialog(
     var cap by remember { mutableStateOf<ProCapability?>(null) }
     LaunchedEffect(Unit) { cap = ProModem.capability() }
     val captureSupported = cap == null || cap?.state == ProModemCapability.CAPABLE
+
+    // Experimental Exynos capture state, polled while running (same pattern as the Qualcomm events).
+    var exRunning by remember { mutableStateOf(false) }
+    var exSummary by remember { mutableStateOf<SdmTransport.CaptureSummary?>(null) }
+    LaunchedEffect(exRunning) {
+        while (exRunning && exynosCapture != null) {
+            exSummary = exynosCapture.summary()
+            delay(POLL_INTERVAL_MS)
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -104,7 +120,8 @@ internal fun SignalingCaptureDialog(
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
-                    ProModemCapability.WRONG_CHIPSET -> item {
+                    // Suppressed when the Exynos beta is offered below (it replaces this dead-end).
+                    ProModemCapability.WRONG_CHIPSET -> if (exynosCapture == null) item {
                         Text(
                             "Live capture needs a Qualcomm modem — this device is ${cap?.vendorLabel}, " +
                                 "so it can't run here. Use the no-root import: Config tab → New " +
@@ -115,53 +132,111 @@ internal fun SignalingCaptureDialog(
                     }
                     else -> Unit
                 }
-                item {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = onStart, enabled = !capturing && captureSupported) { Text("Start") }
-                        OutlinedButton(onClick = onStop, enabled = capturing) { Text("Stop") }
-                        OutlinedButton(
-                            onClick = { onExport(events) },
-                            enabled = events.isNotEmpty(),
-                        ) { Text("Export") }
-                    }
-                }
-                item { HorizontalDivider() }
-                decodedTdd?.let { d ->
+                if (exynosCapture == null) {
+                    // --- Qualcomm path (unchanged) ---
                     item {
-                        Text(
-                            "TDD config decoded from capture",
-                            style = MaterialTheme.typography.titleSmall,
-                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = onStart, enabled = !capturing && captureSupported) { Text("Start") }
+                            OutlinedButton(onClick = onStop, enabled = capturing) { Text("Stop") }
+                            OutlinedButton(
+                                onClick = { onExport(events) },
+                                enabled = events.isNotEmpty(),
+                            ) { Text("Export") }
+                        }
                     }
-                    items(sib1FoundLines(d.profile)) { (k, v) -> KvRow(k, v) }
-                    if (d.cellInfo.isNotEmpty()) {
+                    item { HorizontalDivider() }
+                    decodedTdd?.let { d ->
                         item {
                             Text(
-                                "Cell info",
+                                "TDD config decoded from capture",
                                 style = MaterialTheme.typography.titleSmall,
                             )
                         }
-                        items(d.cellInfo) { (k, v) -> KvRow(k, v) }
+                        items(sib1FoundLines(d.profile)) { (k, v) -> KvRow(k, v) }
+                        if (d.cellInfo.isNotEmpty()) {
+                            item {
+                                Text(
+                                    "Cell info",
+                                    style = MaterialTheme.typography.titleSmall,
+                                )
+                            }
+                            items(d.cellInfo) { (k, v) -> KvRow(k, v) }
+                        }
+                        item {
+                            Button(onClick = {
+                                val profile = blankProfile(null, d.profile.mcc, d.profile.mnc, d.profile.band)
+                                    .copy(source = "Signaling capture")
+                                    .withSib1(d.profile, System.currentTimeMillis())
+                                onSaveProfile(profile)
+                            }) { Text("Save as profile") }
+                        }
+                        item { HorizontalDivider() }
                     }
-                    item {
-                        Button(onClick = {
-                            val profile = blankProfile(null, d.profile.mcc, d.profile.mnc, d.profile.band)
-                                .copy(source = "Signaling capture")
-                                .withSib1(d.profile, System.currentTimeMillis())
-                            onSaveProfile(profile)
-                        }) { Text("Save as profile") }
+                    if (events.isEmpty()) {
+                        item {
+                            Text(
+                                if (capturing) "Capturing… waiting for the first event." else "No events captured yet.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    } else {
+                        items(events.asReversed()) { e -> SignalingEventRow(e) }
                     }
-                    item { HorizontalDivider() }
-                }
-                if (events.isEmpty()) {
+                } else {
+                    // --- Experimental Exynos/Shannon capture (beta) ---
                     item {
                         Text(
-                            if (capturing) "Capturing… waiting for the first event." else "No events captured yet.",
+                            "⚠ Experimental Exynos / Shannon capture (beta)",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    item {
+                        Text(
+                            "This device is Exynos/Shannon. Live capture here is experimental and not " +
+                                "yet validated — it opens the Shannon diagnostic node and reports what it " +
+                                "sees. Please run it for ~30s while connected to the network, then send us " +
+                                "the summary below so we can finish Exynos support. (Paid modem tools stay " +
+                                "Qualcomm-only; this is a free opt-in beta.)",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                } else {
-                    items(events.asReversed()) { e -> SignalingEventRow(e) }
+                    item {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = { exynosCapture.start(); exRunning = exynosCapture.running },
+                                enabled = !exRunning,
+                            ) { Text("Start (beta)") }
+                            OutlinedButton(
+                                onClick = {
+                                    exynosCapture.stop(); exRunning = false; exSummary = exynosCapture.summary()
+                                },
+                                enabled = exRunning,
+                            ) { Text("Stop") }
+                        }
+                    }
+                    item { HorizontalDivider() }
+                    val s = exSummary
+                    if (s != null) {
+                        items(exynosSummaryLines(s, exynosCapture.unavailableReason())) { (k, v) -> KvRow(k, v) }
+                    } else {
+                        item {
+                            Text(
+                                if (exRunning) "Capturing…" else "Not started.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                    if (exynosCapture.decodedTdd() != null) {
+                        item {
+                            Text(
+                                "✓ Decoded a TDD config from the Exynos capture — unexpected this early, " +
+                                    "please definitely send this.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
                 }
             }
         },
@@ -170,6 +245,22 @@ internal fun SignalingCaptureDialog(
         },
         modifier = Modifier.heightIn(max = 560.dp),
     )
+}
+
+/** Renders an [SdmTransport.CaptureSummary] as key/value rows for the Exynos beta — what a tester sends back. */
+private fun exynosSummaryLines(s: SdmTransport.CaptureSummary, reason: String?): List<Pair<String, String>> = buildList {
+    add("Frames seen" to s.framesTotal.toString())
+    add("NR RRC frames" to s.nrRrcFrames.toString())
+    add("LTE RRC frames" to s.lteRrcFrames.toString())
+    add("Bytes read" to s.bytesRead.toString())
+    if (s.cmdSigCounts.isNotEmpty()) {
+        add(
+            "Message types" to s.cmdSigCounts.entries
+                .sortedByDescending { it.value }
+                .joinToString(", ") { "0x%04x:%d".format(it.key, it.value) },
+        )
+    }
+    (s.firstError ?: reason)?.let { add("Note" to it) }
 }
 
 @Composable

@@ -167,6 +167,11 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     var localCell by remember { mutableStateOf<CellularSample?>(null) }
     var showSignalingCapture by remember { mutableStateOf(false) }
     var signalingCapturing by remember { mutableStateOf(false) }
+    // Experimental Exynos/Shannon capture (beta): offered only on a rooted Exynos device with the beta
+    // flag on. canAttempt() shells out to `su`, so resolve it off the composition thread.
+    val exynosCapture = remember { com.nhnengineering.rftest.modem.ExynosCapture() }
+    var exynosBetaOk by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { exynosBetaOk = withContext(Dispatchers.IO) { exynosCapture.canAttempt() } }
 
     // Checked once per visit to this screen, off the composition thread: the check shells out
     // (qrtr-lookup, then the helper), and calling that from a bare `remember {}` initializer --
@@ -766,6 +771,7 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                 ).show()
             },
             onDismiss = { showSignalingCapture = false },
+            exynosCapture = exynosCapture.takeIf { exynosBetaOk },
         )
     }
 }

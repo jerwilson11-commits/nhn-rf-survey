@@ -21,6 +21,16 @@ object ExynosBackend : ModemBackend {
     /** Flip to true only after a real SDM capture decodes end-to-end on a rooted Shannon device. */
     const val VALIDATED = false
 
+    /**
+     * Enables the experimental **field-validation capture** ([ExynosCapture]) on rooted Exynos/Shannon
+     * devices, separately from [VALIDATED]. This is NOT the paid Pro modem tools (band lock, neighbours
+     * etc. have no Exynos path) — it is an opt-in beta that runs the SDM capture and reports what it saw
+     * ([SdmTransport.summary]), so real Exynos users give us the data we can't get without hardware. The
+     * capability gate stays `WRONG_CHIPSET` (VALIDATED=false) regardless, so nobody is sold Pro on
+     * Exynos; the beta is a self-contained diagnostic.
+     */
+    const val CAPTURE_BETA = true
+
     /** The Shannon Diagnostic Monitor node, confirmed on a Pixel 6 Pro (raven). */
     const val DM_NODE = "/dev/umts_dm0"
 

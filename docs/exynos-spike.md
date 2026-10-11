@@ -109,6 +109,16 @@ Lowest-confidence dimension.
   backend — report it honestly via `ModemFailureMessages`, never a silent no-op. Capture-only is still
   a strong deliverable (SIB1/TDD + RRC OTA on a Pixel is itself valuable and currently impossible).
 
+**Confirmed 2026-10-11 (band-lock reality):** Samsung Galaxy phones (Exynos *and* Snapdragon) *do* have
+a **native, no-root band-selection menu** via **`*#2263#`** in the Samsung stock dialer (users report it
+working even on the 2025 US/CA S25 series: ServiceMode → UE SETTING & INFO → … → SET LTE BAND CONFIG). So
+band-lock is "native" on Samsung — **but it is a manual hidden menu the user navigates; a normal app
+cannot drive it** (automators like Alliance Shield X need Knox/device-admin). And it is a **Samsung**
+thing — **Pixel/Tensor (our target) has no such menu** (Pixels dropped band selection ~Android 13). So
+programmatic, app-driven band-lock stays **Qualcomm-only**. *Future option:* on Samsung Exynos devices
+we could add a **"guided band lock"** (detect Samsung + show the `*#2263#` steps) — manual, model/
+firmware-dependent, out of scope for the capture work.
+
 ## RQ4 — No-root options worth surfacing?
 
 - **Retail Exynos Samsung:** ServiceMode dialer codes (`*#0011#`, `*#197328640#`) surface RF detail —
@@ -152,9 +162,23 @@ synthetic frames, not yet run on hardware:**
    ⚠️ The **NR RRC inner container** layout is still a TODO (`nrRrcPayloadUnparsed` returns the raw
    payload) — needs `sdmcommonparser` cross-checked against a real NR capture.
 3. ✅ **`SdmTransport`** — byte-stream → frame → NR/LTE RRC dispatch (`processStream`, unit-tested with
-   split reads). ⚠️ `openDiagStream` (the `su` open of `/dev/umts_dm0` under SELinux Enforcing) and the
-   **item-select enable handshake** are the two parts deliberately left for on-device work (RQ5) and
-   currently return "not yet enabled".
+   split reads) **+ instrumentation** (`CaptureSummary`: frame counts by `cmd_sig`, bytes, errors).
+   `openDiagStream` now has a **best-effort `su` open** of `/dev/umts_dm0` (one persistent fd,
+   CONTROL_START written base64-in-shell, then `cat`). ⚠️ Still unvalidated; the **item-select enable
+   handshake** is still unknown, so on many firmwares this opens the node but surfaces no RRC — that's
+   fine, the instrumentation reports it. **Deliberately does NOT run `setenforce 0`** — a shipped app
+   must not globally disable SELinux; if Enforcing denies the node, the summary records it and the fix
+   is a user-installed sepolicy/Magisk module.
+
+### Field-validation BETA (shipped 2026-10-11)
+
+Since we have no rootable Shannon device, the Exynos path ships as a **free opt-in beta** so real
+rooted-Exynos users generate the data we can't: `ExynosCapture` drives `SdmTransport` and feeds any RRC
+to `NrRrcTdd` (shared decoder); `ExynosBackend.CAPTURE_BETA = true` offers it on rooted Exynos devices;
+`SignalingCaptureDialog` shows an "⚠ Experimental Exynos/Shannon capture (beta)" section (in place of
+the old "needs Qualcomm" dead-end) with Start/Stop and a live summary the user sends back. **`VALIDATED`
+stays `false`**, so the paid Pro capability gate is unchanged (Exynos still `WRONG_CHIPSET` — band-lock
+etc. have no Exynos path); the beta is a self-contained diagnostic, not a sold feature.
 4. ◻️ Neighbours from SDM measurement logs → `ModemNeighbourSource`-shaped output — not started.
 5. ◻️ Control: **likely report band/tech lock unavailable** on Exynos/Shannon initially, with an
    honest message — revisit only if a safe AT path is proven.
