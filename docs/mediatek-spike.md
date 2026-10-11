@@ -1,6 +1,6 @@
 # MediaTek modem backend — feasibility spike
 
-**Status: desk research (reference-based). No on-device validation yet.** This is the Phase-1 spike
+**Status: desk research + backend registered (gated OFF). No parser yet — the MD-log byte format is not in any open reference, so it needs on-device reverse-engineering.** This is the Phase-1 spike
 called for in `docs/multi-chipset-roadmap.md`. It answers the five research questions from open
 references (MobileInsight, SCAT) and general platform knowledge, and flags precisely which claims are
 **reference-derived** vs. **must be confirmed on a real rooted MediaTek device**. It follows the
@@ -100,6 +100,24 @@ On a rooted MTK device, prove the whole path end-to-end — the same bar Qualcom
 - The **diagnostic port may need enabling**, and some carriers/OEMs lock it.
 - **Root is required** for the capture path (this broadens the *rooted* fleet; it does not remove the
   root barrier). Non-root MediaTek users keep the **paste-import** path and all Field features today.
+
+## Implementation status (2026-10-11): backend registered & gated; no parser
+
+Unlike the Exynos pass (where SCAT fully specs the Samsung SDM format, so a real tested parser exists),
+**MediaTek has no clean open byte-format reference**, confirmed this pass:
+
+- **MobileInsight's packet decoder (`dm_collector_c/log_packet.cpp`) is entirely Qualcomm** — read it,
+  zero MediaTek/MTK/CCCI framing — and its own docs list MediaTek as a *future* plan.
+- So a MediaTek log parser cannot be written clean-room now without **inventing** the frame/header
+  offsets, which this project does not do. It is deferred to a real capture from a rooted MediaTek
+  device.
+
+What landed in code: **`MediaTekBackend`** registered in `ModemBackends` (MEDIATEK → `MediaTekBackend`),
+gated OFF (`availability()` returns `Unsupported` while `VALIDATED = false`, so the capability gate still
+reports `WRONG_CHIPSET`). Its KDoc carries the grounded facts for when a device is available: transport
+node `/dev/ccci_md_log_ctrl`, enable via `ioctl` / `AT+TRACE`, two-stage parse (metadata → msg type id +
+version → handler), scope 4G/3G NAS + RRC OTA. **No `MtkTransport` / `MtkLogParser` yet** — writing them
+would be guessing until the framing is captured on hardware.
 
 ## Recommended implementation plan (after on-device validation)
 

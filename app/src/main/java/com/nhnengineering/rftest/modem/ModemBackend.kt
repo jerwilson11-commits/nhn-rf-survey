@@ -87,9 +87,12 @@ object ModemBackends {
         // on a rooted Shannon device -- ExynosBackend.availability() currently returns Unsupported, so
         // the capability gate still reports WRONG_CHIPSET in production. See ExynosBackend / the spike.
         ModemChipset.Vendor.EXYNOS -> ExynosBackend
-        // MediaTek, Unisoc: research-first, no backend yet. Non-root users keep the paste-import path
-        // and every Field feature regardless.
-        ModemChipset.Vendor.MEDIATEK,
+        // MediaTek is registered but gated OFF and has no parser yet -- the MD-log byte format isn't in
+        // any open reference, so it awaits reverse-engineering on a rooted MediaTek device. Reports
+        // WRONG_CHIPSET like before. See MediaTekBackend / docs/mediatek-spike.md.
+        ModemChipset.Vendor.MEDIATEK -> MediaTekBackend
+        // Unisoc: research-first, no backend. Non-root users keep the paste-import path and every
+        // Field feature regardless.
         ModemChipset.Vendor.UNISOC -> null
     }
 

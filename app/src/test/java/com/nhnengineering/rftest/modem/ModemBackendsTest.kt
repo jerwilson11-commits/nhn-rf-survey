@@ -29,8 +29,14 @@ class ModemBackendsTest {
     }
 
     @Test
-    fun `MediaTek has no backend yet`() {
-        assertNull(ModemBackends.forVendor(ModemChipset.Vendor.MEDIATEK))
+    fun `MediaTek routes to the MediaTek backend`() {
+        assertSame(MediaTekBackend, ModemBackends.forVendor(ModemChipset.Vendor.MEDIATEK))
+    }
+
+    @Test
+    fun `MediaTek backend is gated off (no parser yet)`() {
+        assertFalse(MediaTekBackend.VALIDATED)
+        assertTrue(MediaTekBackend.availability() is BackendAvailability.Unsupported)
     }
 
     @Test
