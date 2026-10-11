@@ -93,7 +93,12 @@ modem gen before shipping. OnePlus 9 is fine to start (it's on hand).
    events + longest on-FirstNet run, surfaced in the PDF Track-B section. Unit-tested. (Automation is
    Track-B/FirstNet only — LMR stays manual by physics.) Remaining F2 options: acceptance report +
    survey workflow; donor-signal check mode.
-2. **B5 + C3** (4.6) — RLF/HO event log → root-cause. The "we give answers" Pro differentiator.
+2. **B5 + C3** (4.6) — RLF/HO event log → root-cause. **IN PROGRESS:** derived v1 shipped 2026-10-11
+   — `report/MobilityEvents.kt`: from the recorded samples, detects serving-cell changes, NR→LTE
+   fallbacks, off-FirstNet, and service losses, and root-causes each loss (missed-handover via a
+   stronger same-band neighbour vs coverage hole); rendered in a PDF "Mobility and retainability"
+   section. Unit-tested. **Follow-up (hardware-gated):** true modem-internal RLF/RACH/HO DIAG log
+   codes (needs a confirmed capture-capable device; our OnePlus 9 streams zero packets on 0xB823).
 3. **C1** (4.3) — nearly free; Field basic + Pro deep.
 4. **A1 + A2** (4.1) — the marquee Pro depth that matches NSG. Verify on a modem-gen-matched Snapdragon.
 5. **F1** (4.1) — CBRS/private-5G, consulting niche.

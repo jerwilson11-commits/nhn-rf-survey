@@ -1270,6 +1270,56 @@ object PdfReportGenerator {
             c.gap(); c.rule()
         }
 
+        // ---- Mobility & retainability -------------------------------------
+        //
+        // Where the connection changed or broke across the walk, with the likeliest reason -- what a
+        // coverage plot never shows. Derived from the recorded samples (serving-cell/tech changes,
+        // service loss, off-FirstNet); modem-internal RLF/RACH counters are a separate, hardware path.
+        val mob = MobilityEvents.analyse(points)
+        if (mob.hasEvents) {
+            c.ensure(140f)
+            c.text("Mobility and retainability", c.h2)
+            c.para(
+                "Transitions across the walk and their likeliest cause -- derived from the recorded " +
+                    "samples, not modem-internal RLF/RACH events.",
+            )
+            c.gap(4f)
+            c.kv("Serving-cell changes", mob.servingCellChanges.toString())
+            if (mob.nrToLteFallbacks > 0) c.kv("NR to LTE fallbacks", mob.nrToLteFallbacks.toString())
+            if (mob.offFirstNetEvents > 0) c.kv("Fell off FirstNet", mob.offFirstNetEvents.toString())
+            c.kv("Service losses", mob.serviceLosses.toString())
+            val notable = mob.events.filter { it.kind != MobilityEvents.Kind.SERVING_CELL_CHANGE }
+            if (notable.isNotEmpty()) {
+                c.gap(4f)
+                c.text(String.format(Locale.US, "%-16s %-22s %8s", "Event", "Likely cause", "RSRP"), c.monoBold)
+                for (e in notable.take(20)) {
+                    c.ensure(LINE)
+                    val kindLabel = when (e.kind) {
+                        MobilityEvents.Kind.SERVING_CELL_CHANGE -> "Cell change"
+                        MobilityEvents.Kind.NR_FALLBACK -> "NR to LTE"
+                        MobilityEvents.Kind.OFF_FIRSTNET -> "Off FirstNet"
+                        MobilityEvents.Kind.SERVICE_LOST -> "Service lost"
+                    }
+                    val causeLabel = when (e.cause) {
+                        MobilityEvents.Cause.MISSED_HANDOVER -> "Missed handover"
+                        MobilityEvents.Cause.COVERAGE_HOLE -> "Coverage hole"
+                        MobilityEvents.Cause.FIRSTNET_GAP -> "FirstNet gap"
+                        MobilityEvents.Cause.NR_TO_LTE -> "NR dropped to LTE"
+                        MobilityEvents.Cause.RESELECTION -> "Reselection/HO"
+                        MobilityEvents.Cause.NONE -> "—"
+                    }
+                    c.text(
+                        String.format(
+                            Locale.US, "%-16s %-22s %8s",
+                            kindLabel, causeLabel, e.rsrpDbm?.let { it.toString() } ?: "—",
+                        ),
+                        c.mono,
+                    )
+                }
+            }
+            c.gap(); c.rule()
+        }
+
         // ---- Coverage holes -----------------------------------------------
         c.ensure(120f)
         // ---- Roaming ------------------------------------------------------
