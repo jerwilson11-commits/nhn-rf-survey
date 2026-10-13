@@ -161,7 +161,8 @@ private fun WalkStrip(
     val placed by RecordingState.placedPositions.collectAsState()
     val area by RecordingState.areaLabel.collectAsState()
     val floor by RecordingState.floor.collectAsState()
-    val walkThroughput by RecordingState.walkThroughputEnabled.collectAsState()
+    val throughputCadence by RecordingState.throughputCadence.collectAsState()
+    val walkThroughput = throughputCadence != com.nhnengineering.rftest.service.ThroughputCadence.OFF
     val elapsedMs by RecordingState.elapsedMs.collectAsState()
     val rows by RecordingState.rowCount.collectAsState()
 
@@ -239,7 +240,10 @@ private fun WalkStrip(
                 }
                 FloorStepper(floor)
                 ChipButton("TP ${if (walkThroughput) "on" else "off"}", selected = walkThroughput) {
-                    RecordingState.walkThroughputEnabled.value = !walkThroughput
+                    // Simple on/off here; the Measure/Setup pages carry the full Off/15s/30s/60s choice.
+                    RecordingState.throughputCadence.value =
+                        if (walkThroughput) com.nhnengineering.rftest.service.ThroughputCadence.OFF
+                        else com.nhnengineering.rftest.service.ThroughputCadence.S15
                 }
                 if (current?.floorplanId == plan.id) {
                     ChipButton("Clear") { RecordingState.indoorPosition.value = null }

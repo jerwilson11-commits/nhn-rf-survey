@@ -53,7 +53,9 @@ import java.util.Locale
 import kotlin.math.atan2
 import kotlin.math.floor
 import kotlin.math.log10
+import kotlin.math.log2
 import kotlin.math.pow
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.font.FontFamily
@@ -114,10 +116,16 @@ fun MapScreen(modifier: Modifier = Modifier) {
     // Free-camera state. `following` is the important one: while true the map tracks the operator,
     // and any pan turns it off, because a map that yanks itself back under your thumb every second
     // is unusable. The Recentre button turns it back on.
+    // rememberSaveable so the operator's chosen zoom (and whether they are free-panning) survive a
+    // tab switch or rotation. Before this, leaving the map and coming back re-ran remember { } and
+    // snapped zoom back to DEFAULT_ZOOM -- which read on-device as "Recentre zoomed me out", since
+    // the operator's first instinct after returning was to recentre. Centre is left as plain
+    // remember: it is recomputed from the live fix on the next frame anyway, and a stale lat/lon is
+    // the one piece of camera state not worth restoring.
     var centerLat by remember { mutableStateOf<Double?>(null) }
     var centerLon by remember { mutableStateOf<Double?>(null) }
-    var zoom by remember { mutableFloatStateOf(DEFAULT_ZOOM) }
-    var following by remember { mutableStateOf(true) }
+    var zoom by rememberSaveable { mutableFloatStateOf(DEFAULT_ZOOM) }
+    var following by rememberSaveable { mutableStateOf(true) }
 
     val shownCell = if (recording) liveCell else localCell
     val shownFix = if (recording) fix else localFix
@@ -213,10 +221,6 @@ fun MapScreen(modifier: Modifier = Modifier) {
                         style = MaterialTheme.typography.bodySmall,
                     )
                 } else {
-                    // Referenced so Compose redraws when a tile or a building footprint lands.
-                    @Suppress("UNUSED_EXPRESSION") tileGeneration
-                    @Suppress("UNUSED_EXPRESSION") buildingGeneration
-
                     MapKpiStrip(shownCell, shownFix)
 
                     LockWatchStatus(shownCell, lockPci, lockArfcn)
@@ -234,7 +238,14 @@ fun MapScreen(modifier: Modifier = Modifier) {
                                     // see Basemap.maxZoom's own doc for where the numbers come
                                     // from -- so the cap follows whichever layer is selected.
                                     val maxZoom = basemap.maxZoom
-                                    val newZoom = (zoom * zoomChange)
+                                    // Zoom LEVELS are logarithmic -- each whole level doubles the
+                                    // scale -- but detectTransformGestures hands back a linear scale
+                                    // *ratio* (1.1 for a 10% pinch). Multiplying the level by the
+                                    // ratio (the old `zoom * zoomChange`) made a 10% pinch at z17
+                                    // jump ~1.7 levels, which is the "very sensitive" the operator
+                                    // reported. Adding log2(ratio) applies the pinch in the space the
+                                    // levels actually live in, so a 10% pinch moves ~0.14 levels.
+                                    val newZoom = (zoom + log2(zoomChange.coerceAtLeast(0.0001f)))
                                         .coerceIn(MIN_ZOOM.toFloat(), maxZoom.toFloat())
                                     val zi = floor(newZoom).toInt().coerceIn(MIN_ZOOM, maxZoom)
                                     val sc = 2.0.pow(newZoom.toDouble() - zi)
@@ -272,6 +283,15 @@ fun MapScreen(modifier: Modifier = Modifier) {
                                 centerLon = centerLon ?: shownFix?.longitudeDeg ?: 0.0,
                                 zoom = zoom,
                                 maxZoom = basemap.maxZoom,
+                                // Read HERE, inside the draw lambda, on purpose: Compose tracks
+                                // state read during the draw phase and re-runs the draw when it
+                                // changes. TileCache/BuildingFootprintCache bump these counters when
+                                // an async fetch lands. The previous attempt read them as bare
+                                // statements up in the composition body, which did not reliably
+                                // trigger a redraw, so a freshly fetched tile or building footprint
+                                // stayed invisible until a pan/zoom forced one -- the "map blanks
+                                // after a zoom until you adjust again" and "Buildings intermittent".
+                                redrawKey = tileGeneration + buildingGeneration,
                             )
                         }
                     }
@@ -383,6 +403,9 @@ private fun DrawScope.drawWalkMap(
     centerLon: Double,
     zoom: Float,
     maxZoom: Int,
+    // Observe-only. Passing it here reads the tile/building load counters in the draw phase so this
+    // draw re-runs when an async fetch completes; the value itself is intentionally unused.
+    @Suppress("UNUSED_PARAMETER") redrawKey: Int,
 ) {
     // Centre-and-zoom rather than fit-to-bounds.
     //
@@ -643,7 +666,20 @@ private const val MIN_ZOOM = 3
  * to orient by while keeping a walk-sized area on screen. The operator can pinch from there.
  */
 private const val DEFAULT_ZOOM = 17f
-private const val MAX_TILES = 40L
+
+/**
+ * Sanity cap on how many tiles one frame may draw, so a degenerate viewport cannot try to paint the
+ * whole world. It is NOT a budget to tune down: the loop already fetches only the tiles the viewport
+ * covers, and because `zi = floor(zoom)` the per-tile scale is always in [1, 2), so the real count is
+ * bounded by screen size alone.
+ *
+ * It was 40, which silently broke large displays: a tablet's square map canvas (~1500 px) needs about
+ * 7x7 = 49 tiles at an integer zoom, over the cap, so the entire imagery loop was skipped and the map
+ * went blank -- while a phone (~1080 px, ~5x5) stayed under it. At fractional zooms the tiles are
+ * larger and fewer, which is why it "reappeared when you adjusted". 256 covers a landscape tablet or
+ * a 4K panel (~12x12) with margin; the viewport, not this number, is what bounds the fetch.
+ */
+private const val MAX_TILES = 256L
 
 /**
  * The numbers an operator needs while looking at the map.

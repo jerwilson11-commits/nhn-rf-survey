@@ -143,6 +143,14 @@ object RecordingState {
     val throughputBusy = MutableStateFlow(false)
 
     /**
+     * The running throughput of the burst in progress, in Mbps, updated several times a second from
+     * the transfer itself (null between bursts). Split by direction so the live gauges can move in
+     * real time while a burst transfers, instead of only stepping to the final average per burst.
+     */
+    val liveDownloadMbps = MutableStateFlow<Double?>(null)
+    val liveUploadMbps = MutableStateFlow<Double?>(null)
+
+    /**
      * True when the last burst was refused for sending too many requests.
      *
      * Surfaced separately from a failure because it is not one: it says nothing about the network
@@ -153,8 +161,29 @@ object RecordingState {
     /** Most recent walk throughput result, for the live display. */
     val lastThroughput = MutableStateFlow<ThroughputSample?>(null)
 
-    /** Set by the UI before recording starts; read by the service when it launches the burst loop. */
-    val walkThroughputEnabled = MutableStateFlow(false)
+    /** `SystemClock.elapsedRealtime()` when [lastThroughput] was logged, for the "N s ago" label. */
+    val lastThroughputAtElapsed = MutableStateFlow<Long?>(null)
+
+    /** `SystemClock.elapsedRealtime()` the next burst is scheduled for, for the countdown. */
+    val nextThroughputAtElapsed = MutableStateFlow<Long?>(null)
+
+    /**
+     * Walk-throughput cadence: OFF, or the idle gap between bursts. The service starts the burst
+     * loop while this is non-OFF and stops it on OFF; a live change of interval is picked up on the
+     * loop's next cycle. Replaces the old on/off boolean so the tester can set how dense the readings
+     * are (a 30 s gap was too sparse — one reading every ~40 s at walking pace).
+     */
+    val throughputCadence = MutableStateFlow(ThroughputCadence.OFF)
+
+    /**
+     * Which radio the Live dashboard's headline reading and verdict speak about.
+     *
+     * Both radios are always measured and recorded regardless -- this only frames the live display.
+     * AUTO keeps the old behaviour (features cellular whenever a serving cellular level exists, else
+     * Wi-Fi), which quietly confused a Wi-Fi survey the moment any weak cellular signal appeared;
+     * WIFI/CELLULAR pin it so the operator always knows which radio the big number belongs to.
+     */
+    val surveyFocus = MutableStateFlow(SurveyFocus.AUTO)
 
     /**
      * Throughput endpoint, shared by the one-off speed test and the walk bursts.
@@ -219,6 +248,29 @@ object RecordingState {
         floor.value = null
         liveTrack.value = emptyList()
         lastThroughput.value = null
+        lastThroughputAtElapsed.value = null
+        nextThroughputAtElapsed.value = null
         throughputBusy.value = false
+        liveDownloadMbps.value = null
+        liveUploadMbps.value = null
     }
+}
+
+/**
+ * How often walk-throughput runs. The value is the idle gap between the end of one burst and the
+ * start of the next (a burst is a download then an upload, ~8 s), so the observed spacing is this
+ * plus the burst. OFF disables it.
+ */
+enum class ThroughputCadence(val label: String, val intervalMs: Long?) {
+    OFF("Off", null),
+    S15("15s", 15_000L),
+    S30("30s", 30_000L),
+    S60("60s", 60_000L),
+}
+
+/** Which radio the Live dashboard headline features. See [RecordingState.surveyFocus]. */
+enum class SurveyFocus(val label: String) {
+    AUTO("Auto"),
+    WIFI("Wi-Fi"),
+    CELLULAR("Cellular"),
 }

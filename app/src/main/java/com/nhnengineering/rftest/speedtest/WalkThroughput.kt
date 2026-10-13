@@ -111,7 +111,11 @@ class WalkThroughput(private val config: Config = Config()) {
         job = scope.launch {
             while (isActive && RecordingState.active.value) {
                 runBurst()
-                delay(config.intervalMs + backoffMs)
+                // Read the cadence each cycle so changing it mid-walk (Off/15s/30s/60s) takes effect
+                // on the next gap without a restart. OFF is handled by the service stopping the loop.
+                val interval = (RecordingState.throughputCadence.value.intervalMs ?: config.intervalMs) + backoffMs
+                RecordingState.nextThroughputAtElapsed.value = android.os.SystemClock.elapsedRealtime() + interval
+                delay(interval)
             }
         }
     }
@@ -119,6 +123,7 @@ class WalkThroughput(private val config: Config = Config()) {
     fun stop() {
         job?.cancel()
         job = null
+        RecordingState.nextThroughputAtElapsed.value = null
     }
 
     /**
@@ -135,7 +140,12 @@ class WalkThroughput(private val config: Config = Config()) {
         val problems = mutableListOf<String>()
         var rateLimited = false
         try {
-            val down = runCatching { tester.measureDownload() }
+            // onProgress reports the running Mbps several times a second; feeding it to the live
+            // state lets the gauge needle move in real time during the transfer rather than only
+            // stepping to the burst's final average. Cleared when the direction's phase ends.
+            val down = runCatching {
+                tester.measureDownload { rate -> RecordingState.liveDownloadMbps.value = rate }
+            }
                 .onFailure {
                     if (it is CancellationException) throw it
                     Log.w(TAG, "download burst failed", it)
@@ -143,9 +153,12 @@ class WalkThroughput(private val config: Config = Config()) {
                     problems += "down: " + (it.message ?: it::class.java.simpleName)
                 }
                 .getOrNull()
+            RecordingState.liveDownloadMbps.value = null
 
             val up = if (config.includeUpload) {
-                runCatching { tester.measureUpload() }
+                runCatching {
+                    tester.measureUpload { rate -> RecordingState.liveUploadMbps.value = rate }
+                }
                     .onFailure {
                         if (it is CancellationException) throw it
                         Log.w(TAG, "upload burst failed", it)
@@ -156,6 +169,7 @@ class WalkThroughput(private val config: Config = Config()) {
             } else {
                 null
             }
+            RecordingState.liveUploadMbps.value = null
 
             // Every failure is recorded, including a partial one. The first version only set this
             // when *both* directions failed, so a walk whose downloads were all rejected wrote
@@ -174,6 +188,7 @@ class WalkThroughput(private val config: Config = Config()) {
             )
             RecordingState.pendingThroughput.value = sample
             RecordingState.lastThroughput.value = sample
+            RecordingState.lastThroughputAtElapsed.value = android.os.SystemClock.elapsedRealtime()
 
             // Back off when the endpoint is throttling us, rather than hammering it for the rest
             // of the walk and filling the session with failures that say nothing about the venue.
@@ -186,6 +201,10 @@ class WalkThroughput(private val config: Config = Config()) {
             RecordingState.throughputRateLimited.value = rateLimited
         } finally {
             RecordingState.throughputBusy.value = false
+            // Belt and braces for the cancellation path (Stop pressed mid-transfer), where the
+            // per-direction clears above are skipped by the rethrow.
+            RecordingState.liveDownloadMbps.value = null
+            RecordingState.liveUploadMbps.value = null
         }
     }
 

@@ -185,6 +185,17 @@ class ModemNrStream(context: Context) {
             running.set(false)
             return
         }
+        // Probe for root ONCE. Without it every runWindow() throws immediately (su is absent), and
+        // the loop below respawned `su` once a second for the whole life of the collector -- pure
+        // wasted wakeups and log spam on the large majority of devices, which are not rooted (the
+        // tablet that surfaced this is a non-rooted Snapdragon). One probe settles it; a device that
+        // later gains root picks it up on the next start()/stop() cycle.
+        if (!modemRootAvailable()) {
+            lastError = "Deep modem capture needs root, which this device does not have."
+            Log.i(TAG, "NR stream unavailable: no root")
+            running.set(false)
+            return
+        }
         while (running.get()) {
             val started = SystemClock.elapsedRealtime()
             runCatching { runWindow(helper) }.onFailure {

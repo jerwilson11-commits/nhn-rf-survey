@@ -254,6 +254,19 @@ data class CellularSample(
      */
     val permissionLimited: Boolean = false,
     /**
+     * Whether the modem reports actual service, from `ServiceState` (the packet-switched domain, so
+     * a data-only tablet is not mislabelled on its missing voice registration).
+     *
+     * This exists because `CellInfo.isRegistered()` is true for an **emergency-only camp** -- the
+     * device is "registered" on a cell it may only dial 911 on -- which made an out-of-service SIM
+     * (present but deactivated, or simply no coverage) draw as a live serving cell, e.g. a phantom
+     * "5G SA n25". `ServiceState` is the one surface that separates real service from that camp.
+     *
+     * Defaults true: when it cannot be read (no permission, platform declines), absence of proof is
+     * not proof of no service, and the cell-based inference stands as before.
+     */
+    val inService: Boolean = true,
+    /**
      * Every carrier the modem has configured, primary and aggregated secondaries.
      *
      * Empty on an ordinary install, where the listener behind it cannot be registered. Read it
@@ -334,8 +347,12 @@ data class CellularSample(
      * [lte]/[nr] so the RF is not lost (coverage exists, the device just can't use it), but it is
      * NOT a serving cell. This flag is the one place the UI should check before calling that reading
      * "serving" or reporting roaming on it. False here means "observed, not registered".
+     *
+     * Gated on [inService] as well as the cell's own registered flag: an emergency-only camp sets
+     * `CellInfo.isRegistered()` true while providing no usable service, so without the service-state
+     * gate this returned true for an out-of-service SIM and the UI drew it as a serving cell.
      */
-    val isRegistered: Boolean get() = lte?.registered == true || nr?.registered == true
+    val isRegistered: Boolean get() = (lte?.registered == true || nr?.registered == true) && inService
 }
 
 /**

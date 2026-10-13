@@ -366,10 +366,20 @@ class WifiCollector(context: Context) {
         val live = liveWifiInfo()
         val observed = observedAps.values.toList()
         val scans = observed.map { it.result }
-        if (info == null && scans.isEmpty()) return null
+        // `live` (getConnectionInfo) counts toward "is there anything to record", not just the
+        // callback's `info`. The old guard dropped the whole sample whenever the NetworkCallback
+        // had not yet delivered a WifiInfo -- even though the device was connected and
+        // getConnectionInfo could see it -- so a recording begun before the first
+        // onCapabilitiesChanged wrote empty Wi-Fi columns for its early rows, and for every row if
+        // that callback never fired on the run. That is the "no Wi-Fi data in the CSV" report.
+        if (info == null && live == null && scans.isEmpty()) return null
 
-        val bssid = info?.bssid?.takeUnless { it == REDACTED_BSSID }
-        val ssid = info?.ssid
+        // Identity prefers the callback (un-redacted under FLAG_INCLUDE_LOCATION_INFO) and falls
+        // back to the live query, so RSSI/frequency/channel are still recorded when only the
+        // deprecated surface answered. A redacted value from either is dropped, not stored.
+        val idInfo = info ?: live
+        val bssid = idInfo?.bssid?.takeUnless { it == REDACTED_BSSID }
+        val ssid = idInfo?.ssid
             ?.removeSurrounding("\"")            // WifiInfo returns the SSID quoted
             ?.takeUnless { it == REDACTED_SSID }
 
@@ -389,9 +399,9 @@ class WifiCollector(context: Context) {
             channel = frequency?.let { WifiFrequency.channelOf(it) },
             band = frequency?.let { WifiFrequency.bandOf(it) } ?: WifiBand.UNKNOWN,
             channelWidthMhz = ourScanResult?.let { WifiFrequency.channelWidthMhz(it.channelWidth) },
-            standard = info?.let { WifiStandard.fromScanResultConstant(it.wifiStandard) }
+            standard = idInfo?.let { WifiStandard.fromScanResultConstant(it.wifiStandard) }
                 ?: WifiStandard.UNKNOWN,
-            security = info?.let { WifiSecurity.fromWifiInfoConstant(it.currentSecurityType) }
+            security = idInfo?.let { WifiSecurity.fromWifiInfoConstant(it.currentSecurityType) }
                 ?: WifiSecurity.UNKNOWN,
             txLinkMbps = (live ?: info)?.txLinkSpeedMbps?.takeIf { it > 0 },
             rxLinkMbps = (live ?: info)?.rxLinkSpeedMbps?.takeIf { it > 0 },

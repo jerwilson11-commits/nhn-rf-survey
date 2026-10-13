@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.telephony.CellInfo
 import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
+import android.telephony.ServiceState
 import android.telephony.CellSignalStrengthLte
 import android.telephony.CellSignalStrengthNr
 import android.telephony.PhysicalChannelConfig
@@ -359,10 +360,14 @@ class CellularCollector(context: Context) {
         // is not thrown away -- but roaming is only meaningful against a cell we are actually on, so
         // isNetworkRoaming must not be trusted when nothing is registered (it reports true for an
         // out-of-service SIM and that surfaced a bogus "Roam" on a deactivated Verizon SIM).
-        val registered = lte?.registered == true || nr?.registered == true
+        // ServiceState is the only surface that separates real service from an emergency-only camp
+        // -- CellInfo.isRegistered() is true for both. Gating [registered] on it stops an
+        // out-of-service SIM being reported as camped/roaming on its strongest observed cell.
+        val inService = inService()
+        val registered = (lte?.registered == true || nr?.registered == true) && inService
 
         val nrState = nrStateOf()
-        val rat = ratOf(lte, nr, sim)
+        val rat = ratOf(lte, nr, sim, inService)
 
         // Kicked off here and read from cache: the read forks su, so it must not sit in the
         // sampling path. Whatever the last one produced carries its own age.
@@ -399,6 +404,7 @@ class CellularCollector(context: Context) {
             neighboursEverSeen = neighbourEverSeen,
             cellBandwidthsKhz = cellBandwidthsKhz(),
             permissionLimited = !hasPhoneState,
+            inService = inService,
             carriers = latestCarriers,
             channelConfigAvailable = channelConfigActive,
             // Either surface counts: LTE neighbours answer a QMI request, NR ones arrive in
@@ -547,7 +553,7 @@ class CellularCollector(context: Context) {
         else -> NrState.UNKNOWN
     }
 
-    private fun ratOf(lte: LteCell?, nr: NrCell?, sim: SimState): Rat {
+    private fun ratOf(lte: LteCell?, nr: NrCell?, sim: SimState, inService: Boolean): Rat {
         if (sim == SimState.ABSENT) return Rat.NO_SERVICE
         val dnt = dataNetworkType()
         return when {
@@ -559,12 +565,38 @@ class CellularCollector(context: Context) {
                 dnt == TelephonyManager.NETWORK_TYPE_HSPAP -> Rat.WCDMA
             dnt == TelephonyManager.NETWORK_TYPE_GPRS ||
                 dnt == TelephonyManager.NETWORK_TYPE_EDGE -> Rat.GSM
-            // No registration info available (no READ_PHONE_STATE): infer from the cells present
-            // and flag the sample as permission-limited so the guess is never mistaken for fact.
+            // dataNetworkType() is UNKNOWN below. With READ_PHONE_STATE and a modem that is not in
+            // service, there is NO serving RAT -- an emergency-only camp reports a registered
+            // CellInfo and a stale dataNetworkType, which is what drew an out-of-service SIM as a
+            // live "5G SA n25"/"LTE". Do not synthesise a serving cell from a merely observed one.
+            hasPhoneState && !inService -> Rat.NO_SERVICE
+            // Either no permission (dataNetworkType() is then always UNKNOWN; infer from the cells
+            // present and let permissionLimited flag the guess), or in service with data dormant.
             nr != null -> Rat.NR_SA
             lte != null -> Rat.LTE
             else -> Rat.UNKNOWN
         }
+    }
+
+    /**
+     * Whether the modem reports actual service, as opposed to an emergency-only camp or none.
+     *
+     * [ServiceState.getState] alone is the voice state, which a data-only tablet reports as
+     * out-of-service even with working data -- so a `STATE_IN_SERVICE` short-circuits true, and
+     * otherwise the packet-switched registration is checked directly. Returns true whenever it
+     * cannot tell (no permission, or the platform declines): absence of proof is not proof of no
+     * service, and the cell-based inference plus the permissionLimited flag then stand as before.
+     */
+    private fun inService(): Boolean {
+        if (!hasPhoneState) return true
+        val st = runCatching { tm?.serviceState }.getOrNull() ?: return true
+        if (st.state == ServiceState.STATE_IN_SERVICE) return true
+        // st.state is not IN_SERVICE. A data-only tablet reports its voice domain OUT_OF_SERVICE
+        // even with working data, so accept a live data RAT as service before declaring none --
+        // getServiceState()'s per-domain detail is a system API this build cannot read, and
+        // dataNetworkType() is the public signal that the packet-switched side is actually up. An
+        // emergency-only / out-of-service SIM has no data RAT, so this stays false there.
+        return dataNetworkType() != TelephonyManager.NETWORK_TYPE_UNKNOWN
     }
 
     private fun overrideLabel(): String? = when (latestDisplayInfo?.overrideNetworkType) {

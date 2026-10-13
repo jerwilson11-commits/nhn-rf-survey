@@ -55,9 +55,27 @@ class BuildingFootprintProxy(private val cacheDir: File) {
         return runCatching { parseBuildings(json) }.getOrNull()
     }
 
-    private fun fetchAndCache(cell: BboxCell, cached: File): String? = runCatching {
+    private fun fetchAndCache(cell: BboxCell, cached: File): String? {
         val query = buildOverpassQuery(cell)
-        val c = (URL(OVERPASS_ENDPOINT).openConnection() as HttpURLConnection).apply {
+        // Try each mirror in turn. The main instance (overpass-api.de) is frequently overloaded and
+        // answers 504/429 under casual load; a second public mirror turns a lot of those momentary
+        // misses into a drawn building, rather than leaving the overlay blank. The cache layer still
+        // backs off and retries the cell later when every mirror is busy.
+        for (endpoint in OVERPASS_ENDPOINTS) {
+            val text = fetchFrom(endpoint, query) ?: continue
+            runCatching {
+                cacheDir.mkdirs()
+                val tmp = File(cacheDir, "${cacheKey(cell)}.tmp")
+                tmp.writeText(text)
+                tmp.renameTo(cached)
+            }
+            return text
+        }
+        return null
+    }
+
+    private fun fetchFrom(endpoint: String, query: String): String? = runCatching {
+        val c = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
@@ -70,24 +88,14 @@ class BuildingFootprintProxy(private val cacheDir: File) {
                 it.write("data=${java.net.URLEncoder.encode(query, "UTF-8")}".toByteArray())
             }
             if (c.responseCode != HttpURLConnection.HTTP_OK) {
-                // Overpass's own guidance: back off on 429/406 rather than retry immediately.
-                // This class does not retry at all -- the next pan/zoom naturally tries again
-                // later, which is backoff enough for a field tool.
-                Log.w(TAG, "footprints $cell returned HTTP ${c.responseCode}")
+                Log.w(TAG, "footprints via $endpoint returned HTTP ${c.responseCode}")
                 return null
             }
-            val text = c.inputStream.use { it.readBytes() }.toString(Charsets.UTF_8)
-            runCatching {
-                cacheDir.mkdirs()
-                val tmp = File(cacheDir, "${cacheKey(cell)}.tmp")
-                tmp.writeText(text)
-                tmp.renameTo(cached)
-            }
-            text
+            c.inputStream.use { it.readBytes() }.toString(Charsets.UTF_8)
         } finally {
             runCatching { c.disconnect() }
         }
-    }.onFailure { Log.w(TAG, "footprints $cell failed", it) }.getOrNull()
+    }.onFailure { Log.w(TAG, "footprints via $endpoint failed", it) }.getOrNull()
 
     /** Bytes currently cached, for the UI to show what building outlines have cost. */
     fun cacheBytes(): Long =
@@ -100,9 +108,19 @@ class BuildingFootprintProxy(private val cacheDir: File) {
     companion object {
         private const val TAG = "BuildingFootprintProxy"
         private const val CONNECT_TIMEOUT_MS = 8_000
-        private const val READ_TIMEOUT_MS = 20_000
+        // Generous: the public Overpass instances are frequently slow (tens of seconds) under load,
+        // and the fetch is fully async behind a 2-wide gate, so a long read never blocks the UI --
+        // it just means an overlay that was going to arrive late still arrives instead of being cut
+        // off. Beyond this the server is effectively down for a field tool and the cell backs off.
+        private const val READ_TIMEOUT_MS = 35_000
         private const val USER_AGENT = "NHN-RF-Survey/1.0 (field measurement tool)"
         const val OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
+
+        /** Mirrors tried in order per request. Both are public Overpass instances on the same API. */
+        val OVERPASS_ENDPOINTS = listOf(
+            OVERPASS_ENDPOINT,
+            "https://overpass.kumi.systems/api/interpreter",
+        )
         const val ATTRIBUTION = "© OpenStreetMap contributors"
 
         private fun cacheKey(cell: BboxCell): String =

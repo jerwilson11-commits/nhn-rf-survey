@@ -87,6 +87,7 @@ class RecordingService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val walkThroughput = com.nhnengineering.rftest.speedtest.WalkThroughput()
     private var loop: Job? = null
+    private var throughputToggleJob: Job? = null
 
     private lateinit var wifi: WifiCollector
     private lateinit var locations: LocationCollector
@@ -131,7 +132,16 @@ class RecordingService : Service() {
         locations.start()
         cellular.start()
 
-        if (RecordingState.walkThroughputEnabled.value) walkThroughput.start(scope)
+        // Follow the cadence for the whole session rather than sampling it once here. The first
+        // build read the flag a single time at Record, so enabling throughput *after* starting a
+        // recording started no bursts. Collecting the flow starts the burst loop the instant the
+        // cadence leaves OFF and stops it on OFF; interval changes between non-OFF values are picked
+        // up inside the loop. start()/stop() are idempotent, so a duplicate emission is harmless.
+        throughputToggleJob = scope.launch {
+            RecordingState.throughputCadence.collect { cadence ->
+                if (cadence != ThroughputCadence.OFF) walkThroughput.start(scope) else walkThroughput.stop()
+            }
+        }
         // The live server is deliberately not started or stopped here — see [LiveView]. Tying it
         // to the recording made the setup unverifiable until a walk was already underway.
 
@@ -304,6 +314,8 @@ class RecordingService : Service() {
 
         val w = writer
         writer = null
+        throughputToggleJob?.cancel()
+        throughputToggleJob = null
         walkThroughput.stop()
 
         // New scope: the recording scope is being torn down, and the file still needs closing.

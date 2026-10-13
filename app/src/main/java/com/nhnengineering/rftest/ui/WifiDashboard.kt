@@ -54,7 +54,10 @@ import com.nhnengineering.rftest.model.WifiNeighbor
 import com.nhnengineering.rftest.model.WifiSample
 import com.nhnengineering.rftest.service.RecordingService
 import com.nhnengineering.rftest.model.Verdict
+import androidx.compose.material3.FilterChip
 import com.nhnengineering.rftest.service.RecordingState
+import com.nhnengineering.rftest.service.SurveyFocus
+import com.nhnengineering.rftest.service.ThroughputCadence
 import com.nhnengineering.rftest.automation.AutomationRunner
 import com.nhnengineering.rftest.automation.AutomationScript
 import com.nhnengineering.rftest.automation.AutomationStep
@@ -146,11 +149,17 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
     val ratLock by RecordingState.ratLock.collectAsState()
     val lockWatchPci by RecordingState.lockWatchPci.collectAsState()
     val lockWatchArfcn by RecordingState.lockWatchArfcn.collectAsState()
-    val walkThroughput by RecordingState.walkThroughputEnabled.collectAsState()
+    val throughputCadence by RecordingState.throughputCadence.collectAsState()
+    val walkThroughput = throughputCadence != ThroughputCadence.OFF
+    val surveyFocus by RecordingState.surveyFocus.collectAsState()
     val liveView by RecordingState.liveViewEnabled.collectAsState()
     val liveViewError by RecordingState.liveServerError.collectAsState()
     val lastThroughput by RecordingState.lastThroughput.collectAsState()
     val throughputBusy by RecordingState.throughputBusy.collectAsState()
+    val lastThroughputAt by RecordingState.lastThroughputAtElapsed.collectAsState()
+    val nextThroughputAt by RecordingState.nextThroughputAtElapsed.collectAsState()
+    val liveDownMbps by RecordingState.liveDownloadMbps.collectAsState()
+    val liveUpMbps by RecordingState.liveUploadMbps.collectAsState()
     val thresholds by RecordingState.thresholds.collectAsState()
     val serviceError by RecordingState.error.collectAsState()
     // Root alone is never sufficient for these two controls -- see the tier check folded into
@@ -448,36 +457,69 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                         // result does not outrank anything, so it waits below as one line.
                         if (preWalkHasFindings) item { PreWalkCard(preWalk) }
                     }
-                    item { LevelBar(cell, wifi) }
-                    item { HeroKpi(cell, wifi) }
+                    item { SurveyFocusSelector(surveyFocus) { RecordingState.surveyFocus.value = it } }
+                    // forceCellular pins the headline radio to the operator's chosen focus; null in
+                    // AUTO keeps the automatic pick. The hero, the level bar and the verdict all read
+                    // the SAME decision so they can never disagree about which radio is on screen.
+                    val heroForce: Boolean? = when (surveyFocus) {
+                        SurveyFocus.AUTO -> null
+                        SurveyFocus.WIFI -> false
+                        SurveyFocus.CELLULAR -> true
+                    }
+                    item { LevelBar(cell, wifi, forceCellular = heroForce) }
+                    item { HeroKpi(cell, wifi, forceCellular = heroForce) }
                     if (!recording && !preWalkHasFindings) item { PreWalkPassLine() }
                     item {
-                        // Which radio this screen is speaking about. Decided once per sample and
-                        // passed explicitly, because the stabiliser keeps a window and a window that
-                        // changes quantity mid-flight produces a median of two different things.
-                        val onCellular = cell?.servingRsrpDbm != null || wifi == null
-                        val steady = if (onCellular) {
-                            stabiliser.update(
+                        // Which radio the verdict speaks about. Honour the focus; in AUTO, feature
+                        // cellular when it has a serving level, else Wi-Fi. The stabiliser keeps a
+                        // window, so the quantity it is fed must not change mid-flight -- hence one
+                        // decision per sample. The Wi-Fi branch is only taken with a Wi-Fi sample in
+                        // hand; a Wi-Fi focus with nothing connected reports Wi-Fi "no signal" rather
+                        // than silently switching to cellular.
+                        val showCellular = when (surveyFocus) {
+                            SurveyFocus.CELLULAR -> true
+                            SurveyFocus.WIFI -> false
+                            SurveyFocus.AUTO -> cell?.servingRsrpDbm != null || wifi == null
+                        }
+                        val steady = when {
+                            showCellular -> stabiliser.update(
                                 VerdictStabiliser.Source.CELLULAR,
                                 cell?.servingRsrpDbm,
                                 cell?.nr?.ssSinrDb ?: cell?.lte?.rssnrDb,
                             )
-                        } else {
-                            stabiliser.update(
+                            wifi != null -> stabiliser.update(
                                 VerdictStabiliser.Source.WIFI,
                                 wifi.rssiDbm,
                                 null,
                                 wifiCoChannel = wifi.coChannelCount,
                             )
+                            else -> stabiliser.update(VerdictStabiliser.Source.WIFI, null, null)
                         }
                         VerdictLine(steady, spreadDb = stabiliser.spreadDb)
                     }
-                    item { KpiGrid(cell, wifi, fix) }
+                    item { KpiGrid(cell, wifi, fix, forceCellular = heroForce) }
                     // Lock-watch status, surfaced here so it is seen at a glance while moving. The
                     // entry that sets the target lives in the Setup sub-tab; this renders nothing
                     // until a target is set.
                     item { LockWatchStatus(cell, lockWatchPci, lockWatchArfcn) }
-                    item { ThroughputStrip(lastThroughput, throughputBusy) }
+                    // Throughput cadence, on the Measure page so the tester can turn it on and set
+                    // how dense the readings are without leaving the recording screen (also on Setup).
+                    item {
+                        ThroughputCadenceSelector(throughputCadence) {
+                            RecordingState.throughputCadence.value = it
+                        }
+                    }
+                    item {
+                        ThroughputStrip(
+                            lastThroughput,
+                            throughputBusy,
+                            enabled = walkThroughput && recording,
+                            liveDown = liveDownMbps,
+                            liveUp = liveUpMbps,
+                            lastAtElapsed = lastThroughputAt,
+                            nextAtElapsed = nextThroughputAt,
+                        )
+                    }
                     if (recording) {
                         item {
                             WalkControls(
@@ -562,7 +604,12 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                             techLockStatus = techLockStatus,
                             onTechnologyLock = onTechnologyLock,
                             walkThroughput = walkThroughput,
-                            onWalkThroughputChange = { RecordingState.walkThroughputEnabled.value = it },
+                            // The Setup switch stays a simple on/off; turning it on uses the default
+                            // 15 s cadence. The Measure page carries the full Off/15s/30s/60s choice.
+                            onWalkThroughputChange = {
+                                RecordingState.throughputCadence.value =
+                                    if (it) ThroughputCadence.S15 else ThroughputCadence.OFF
+                            },
                             liveView = liveView,
                             onLiveViewChange = { com.nhnengineering.rftest.live.LiveView.set(context, it) },
                             liveViewError = liveViewError,
@@ -799,6 +846,52 @@ private fun buildAutomationScript(config: AutomationConfig, speedServerUrl: Stri
         }
     }
     return AutomationScript(steps, intervalMs = config.intervalSeconds * 1_000L)
+}
+
+/**
+ * Lets the operator pin which radio the headline reading and verdict speak about. Both radios are
+ * always measured and recorded; this only frames the live display. Added because AUTO featured
+ * cellular the moment any weak cellular level appeared, so a Wi-Fi survey silently showed a cellular
+ * headline and the operator could not tell which radio they were reading.
+ */
+@Composable
+private fun SurveyFocusSelector(focus: SurveyFocus, onChange: (SurveyFocus) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Focus", style = MaterialTheme.typography.labelMedium)
+        SurveyFocus.entries.forEach { option ->
+            FilterChip(
+                selected = focus == option,
+                onClick = { onChange(option) },
+                label = { Text(option.label, maxLines = 1) },
+            )
+        }
+    }
+}
+
+/**
+ * Walk-throughput cadence, on the Measure page so the tester can switch it on and set how often it
+ * runs without leaving the recording screen. Backed by the same state as the Setup switch.
+ */
+@Composable
+private fun ThroughputCadenceSelector(cadence: ThroughputCadence, onChange: (ThroughputCadence) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Throughput", style = MaterialTheme.typography.labelMedium)
+        ThroughputCadence.entries.forEach { option ->
+            FilterChip(
+                selected = cadence == option,
+                onClick = { onChange(option) },
+                label = { Text(option.label, maxLines = 1) },
+            )
+        }
+    }
 }
 
 @Composable
