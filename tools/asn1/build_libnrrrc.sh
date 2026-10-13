@@ -33,7 +33,15 @@ for abi in $ABIS; do
   esac
   mkdir -p "$OUT/$abi"
   echo "== build $abi (API $API) =="
+  # -z max-page-size=16384: align ELF LOAD segments to 16 KB. Google Play requires 16 KB page-size
+  # support for new releases, and the stock output here was 4 KB-aligned -- which blocked a
+  # Production upload. NDK r28+ defaults to this, but it is pinned explicitly so an older NDK is safe.
+  # -D_timezone=timezone: the asn1c GeneralizedTime.c skeleton uses the Windows spelling `_timezone`
+  # under some target detections; Android/bionic exports it as `timezone`. The RRC decoder never
+  # encodes GeneralizedTime, so this only needs to compile, which the remap satisfies.
   "$TOOLS/clang" --target="${triple}${API}" -fPIC -O2 -shared -w \
+      -D_timezone=timezone \
+      -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
       -I"$OUT/gen" -I"$HERE" \
       "$OUT/gen"/*.c "$HERE/nrrrc_decode.c" "$HERE/nrrrc_jni.c" \
       -o "$OUT/$abi/libnrrrc.so"

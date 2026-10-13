@@ -34,3 +34,6 @@ speedtest-server/*.log
 keystore.properties
 *.jks
 *.keystore
+
+# asn1c codegen + native build output (regenerate with tools/asn1/build_libnrrrc.sh)
+tools/asn1/build/
