@@ -236,6 +236,43 @@ object PdfReportGenerator {
         }
         c.gap(); c.rule()
 
+        // ---- Area RF audit (headline grade) -------------------------------
+        //
+        // One graded verdict for the area, combined from the measurements below (strength,
+        // compliance, SINR, stability). Placed first as an executive summary; the sections that
+        // follow are its evidence. The score is a stated convention, not a new measurement — the
+        // component table carries each raw figure so the grade can be traced back to it.
+        val audit = AreaRfAudit.analyse(points, report)
+        if (audit.hasData) {
+            c.ensure(150f)
+            c.text("Area RF audit", c.h2)
+            c.kv("Overall grade", "${audit.grade}  (${audit.overallScore}/100)")
+            c.kv("Basis", audit.kpiLabel)
+            c.gap()
+            c.para(audit.verdict)
+            c.gap()
+            c.text(
+                String.format(Locale.US, "%-18s %7s %8s   %s", "Factor", "Score", "Weight", "Measured"),
+                c.monoBold,
+            )
+            for (comp in audit.components) {
+                c.text(
+                    String.format(
+                        Locale.US, "%-18s %5d/100 %6d%%   %s",
+                        comp.name.take(18), comp.score, comp.weightPct, comp.detail,
+                    ),
+                    c.mono,
+                )
+            }
+            c.gap()
+            c.para(
+                "The grade weights the factors shown and renormalises over those with data, so a " +
+                    "factor the survey could not measure is omitted rather than scored zero. The " +
+                    "0–100 mapping is a reporting convention; the measured figures are the record.",
+            )
+            c.gap(); c.rule()
+        }
+
         // ---- KPI ----------------------------------------------------------
         c.text("${report.kpi.label} — measured", c.h2)
         val s = report.stats
