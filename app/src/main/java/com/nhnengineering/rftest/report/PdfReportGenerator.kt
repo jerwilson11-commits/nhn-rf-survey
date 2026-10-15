@@ -981,6 +981,51 @@ object PdfReportGenerator {
             c.gap(); c.rule()
         }
 
+        // ---- Estimated voice quality (VoLTE / VoNR) -----------------------
+        //
+        // A G.107 E-model MOS estimated from serving SINR — the voice quality the coverage can
+        // support, not a measured call. Field-tier, no root. An active POLQA/PESQ test is a separate
+        // licensed follow-up (see the roadmap).
+        val voice = VoiceMosEstimate.analyse(points)
+        if (voice.hasData) {
+            c.ensure(140f)
+            c.text("Estimated voice quality (VoLTE / VoNR)", c.h2)
+            c.para(
+                "An estimate of the voice quality the radio conditions can support, from the G.107 " +
+                    "E-model driven by serving SINR. This is not a measured call score: the survey " +
+                    "places no call and measures no packet loss, jitter or delay. It assumes a codec " +
+                    "(AMR-WB for VoLTE, EVS for VoNR) and a typical delay. A measured MOS needs an " +
+                    "active voice test.",
+            )
+            c.gap()
+            c.kv("Voice-capable samples (with SINR)", voice.samples.toString())
+            voice.medianMos?.let { c.kv("Median estimated MOS", String.format(Locale.US, "%.1f", it)) }
+            voice.worstMos?.let { c.kv("Worst estimated MOS", String.format(Locale.US, "%.1f", it)) }
+            voice.pctAcceptable?.let {
+                c.kv(
+                    "At/above MOS ${String.format(Locale.US, "%.1f", VoiceMosEstimate.ACCEPTABLE_MOS)}",
+                    String.format(Locale.US, "%.1f %% of samples", it),
+                )
+            }
+            if (voice.byTech.size > 1) {
+                c.gap()
+                c.text(
+                    String.format(Locale.US, "%-8s %7s %8s %8s", "Stack", "Samples", "Median", "Worst"),
+                    c.monoBold,
+                )
+                for (t in voice.byTech) {
+                    c.text(
+                        String.format(
+                            Locale.US, "%-8s %7d %8.1f %8.1f",
+                            t.tech.label, t.samples, t.medianMos, t.worstMos,
+                        ),
+                        c.mono,
+                    )
+                }
+            }
+            c.gap(); c.rule()
+        }
+
         // ---- Dominance / best server --------------------------------------
         val dom = SessionStats.dominance(points)
         if (dom.samples > 0 && dom.servers.isNotEmpty()) {
