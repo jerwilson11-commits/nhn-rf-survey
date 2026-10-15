@@ -106,16 +106,18 @@ fun SessionsScreen(modifier: Modifier = Modifier) {
             onBack = { selected = null; status = null },
             onExportKml = {
                 scope.launch {
+                    val tier = com.nhnengineering.rftest.billing.EntitlementRepository.tier.value
                     val out = exportFile(context, current.first.displayName, "kml")
-                    TrackExporters.writeKml(current.first, current.second, out)
+                    TrackExporters.writeKml(current.first, current.second, out, tier)
                     status = "Wrote ${out.name}"
                     share(context, out, "application/vnd.google-earth.kml+xml")
                 }
             },
             onExportGeoJson = {
                 scope.launch {
+                    val tier = com.nhnengineering.rftest.billing.EntitlementRepository.tier.value
                     val out = exportFile(context, current.first.displayName, "geojson")
-                    TrackExporters.writeGeoJson(current.first, current.second, out)
+                    TrackExporters.writeGeoJson(current.first, current.second, out, tier)
                     status = "Wrote ${out.name}"
                     share(context, out, "application/geo+json")
                 }
@@ -369,18 +371,21 @@ private fun SessionDetail(
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Export", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "KML opens in Google Earth with the RSSI colouring already applied. " +
-                            "GeoJSON carries the same buckets for QGIS or a web map. iBwave CSV is a " +
-                            "long-format measurement table (lon, lat, freq, value) for importing into " +
-                            "an iBwave design.",
+                        "KML opens in Google Earth with the coverage colouring already applied — " +
+                            "free, and it carries more detail on Field and Pro. GeoJSON carries the " +
+                            "same buckets for QGIS or a web map. iBwave CSV is a long-format " +
+                            "measurement table (lon, lat, freq, value) for importing into an iBwave design.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     val gate: (() -> Unit) -> () -> Unit = { action ->
                         { if (field) action() else com.nhnengineering.rftest.billing.UpgradePrompt.open() }
                     }
                     val sfx = if (field) "" else " (Field)"
-                    Button(onClick = gate(onExportKml), modifier = Modifier.fillMaxWidth()) {
-                        Text("Export KML (Google Earth)$sfx")
+                    // KML is free — the depth of the file scales with tier (Free = Coverage layer;
+                    // Field/Pro add the split radio / throughput / events / FirstNet layers and
+                    // richer popups), so a Free user still gets a genuinely useful Google Earth file.
+                    Button(onClick = onExportKml, modifier = Modifier.fillMaxWidth()) {
+                        Text("Export KML (Google Earth)")
                     }
                     Button(onClick = gate(onExportGeoPackage), modifier = Modifier.fillMaxWidth()) {
                         Text("Export GeoPackage (QGIS)$sfx")
