@@ -39,10 +39,15 @@ is root still involved? Which models/firmware? Open to US entities / small vendo
 replicable enrollment path QTRUN used. **ACTION: pursue "obtain Samsung diagnostic-access authorization"
 as a high-priority business-dev track.**
 
-**DIAG verification device:** OnePlus 9 = SD888 / X60 (2021); current Samsung S = SD 8 Gen 3 / 8 Elite,
-X75/X80. DIAG log-packet field offsets vary by modem generation, so verify A-metrics on a **recent
-rootable Snapdragon** (e.g. a current Motorola Edge, see `docs/test-device-research.md`) matching that
-modem gen before shipping. OnePlus 9 is fine to start (it's on hand).
+**DIAG dev device & workflow:** the rooted **OnePlus 9 (SD888 / X60, 2021)** is the DIAG/QMI dev
+device and is on hand — the deep (A/B/D) Pro items are built on it, NOT blocked on acquiring hardware.
+The full rooted-modem workflow (QRTR, QMI NAS, the DCI log path, validated log-code layouts for 0xB97F
+/0xB821/0xB80A-B/SIB1, the native helpers, and how to update the privileged install via the Magisk
+`nhn_privapp` module) is the canonical record in **`docs/modem-diag-access.md`** — read it before any
+DIAG work rather than re-deriving. Known X60 quirks documented there: 0xB823 (RRC-serving) streams zero,
+and forcing SA-only can cut a DCI capture short (give the subscription ~10 s to settle). DIAG log-packet
+field offsets vary by modem generation, so re-validate A-metrics on a **recent rootable Snapdragon**
+(e.g. a current Motorola Edge, see `docs/test-device-research.md`) matching that gen **before shipping**.
 
 ## Competitive frame
 
