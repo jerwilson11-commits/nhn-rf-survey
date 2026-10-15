@@ -192,11 +192,14 @@ object TrackExporters {
     }
 
     private fun placemark(sb: StringBuilder, name: String, styleId: String?, coord: String, whenMs: Long, descHtml: String) {
+        // Child order follows the KML 2.2 schema (kml:AbstractFeatureType): name → description →
+        // TimePrimitive → styleUrl → geometry. Out of order, Google Earth re-serialises the document
+        // on load, which marks it "modified" and prompts to save every time the Places panel is touched.
         sb.append("<Placemark>\n")
         sb.append("  <name>").append(xml(name)).append("</name>\n")
-        styleId?.let { sb.append("  <styleUrl>#").append(it).append("</styleUrl>\n") }
-        sb.append("  <TimeStamp><when>").append(Instant.ofEpochMilli(whenMs).toString()).append("</when></TimeStamp>\n")
         sb.append("  <description><![CDATA[").append(descHtml).append("]]></description>\n")
+        sb.append("  <TimeStamp><when>").append(Instant.ofEpochMilli(whenMs).toString()).append("</when></TimeStamp>\n")
+        styleId?.let { sb.append("  <styleUrl>#").append(it).append("</styleUrl>\n") }
         sb.append("  <Point><coordinates>").append(coord).append("</coordinates></Point>\n")
         sb.append("</Placemark>\n")
     }
