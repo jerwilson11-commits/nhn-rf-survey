@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
@@ -23,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -104,6 +106,27 @@ fun SessionsScreen(modifier: Modifier = Modifier) {
             points = current.second,
             status = status,
             onBack = { selected = null; status = null },
+            otherSessions = files.filter { it.absolutePath != current.first.file.absolutePath },
+            onBenchmark = { bFile ->
+                scope.launch {
+                    status = "Reading ${bFile.name}…"
+                    val b = SessionReader.read(bFile)
+                    if (b == null) {
+                        status = "Could not read ${bFile.name}"
+                        return@launch
+                    }
+                    val sideA = com.nhnengineering.rftest.report.BenchmarkComparison.Side(
+                        current.first.displayName, current.first, current.second,
+                    )
+                    val sideB = com.nhnengineering.rftest.report.BenchmarkComparison.Side(
+                        b.first.displayName, b.first, b.second,
+                    )
+                    val out = exportFile(context, "benchmark_${current.first.displayName}_vs_${b.first.displayName}", "pdf")
+                    PdfReportGenerator.generateBenchmark(sideA, sideB, out)
+                    status = "Wrote ${out.name}"
+                    share(context, out, "application/pdf")
+                }
+            },
             onExportKml = {
                 scope.launch {
                     val tier = com.nhnengineering.rftest.billing.EntitlementRepository.tier.value
@@ -246,6 +269,34 @@ private fun SessionList(modifier: Modifier, files: List<File>, onOpen: (File) ->
 }
 
 @Composable
+private fun BenchmarkPickerDialog(
+    sessions: List<File>,
+    onDismiss: () -> Unit,
+    onPick: (File) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        title = { Text("Benchmark against…") },
+        text = {
+            if (sessions.isEmpty()) {
+                Text("No other sessions to compare against.")
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(sessions, key = { it.absolutePath }) { f ->
+                        OutlinedButton(
+                            onClick = { onPick(f) },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(f.nameWithoutExtension, maxLines = 2) }
+                    }
+                }
+            }
+        },
+    )
+}
+
+@Composable
 private fun SessionDetail(
     modifier: Modifier,
     summary: SessionSummary,
@@ -258,6 +309,8 @@ private fun SessionDetail(
     onExportIBwave: () -> Unit,
     onShareCsv: () -> Unit,
     onGenerateReport: (Int?) -> Unit,
+    otherSessions: List<File> = emptyList(),
+    onBenchmark: (File) -> Unit = {},
 ) {
     // Blank means "use the default for whichever KPI this session carries" — -75 dBm for Wi-Fi,
     // -105 dBm for cellular. Those differ by roughly 30 dB and must not share a default.
@@ -266,6 +319,15 @@ private fun SessionDetail(
     // tap routes to the upgrade screen instead of acting.
     val tier by com.nhnengineering.rftest.billing.EntitlementRepository.tier.collectAsState()
     val field = tier.grantsField
+    var showBenchmarkPicker by remember { mutableStateOf(false) }
+
+    if (showBenchmarkPicker) {
+        BenchmarkPickerDialog(
+            sessions = otherSessions,
+            onDismiss = { showBenchmarkPicker = false },
+            onPick = { showBenchmarkPicker = false; onBenchmark(it) },
+        )
+    }
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(horizontal = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -363,6 +425,35 @@ private fun SessionDetail(
                         },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(if (field) "Generate PDF report" else "Generate PDF report (Field)") }
+                }
+            }
+        }
+        item {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("A-B benchmark", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Compare this session against another — two carriers over the same route, " +
+                            "before vs after a fix, or two devices — as a side-by-side PDF with a " +
+                            "winner on each KPI.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Button(
+                        onClick = {
+                            if (!field) com.nhnengineering.rftest.billing.UpgradePrompt.open()
+                            else showBenchmarkPicker = true
+                        },
+                        enabled = !field || otherSessions.isNotEmpty(),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            when {
+                                !field -> "Benchmark vs another session (Field)"
+                                otherSessions.isEmpty() -> "Record a second session to benchmark"
+                                else -> "Benchmark vs another session…"
+                            },
+                        )
+                    }
                 }
             }
         }

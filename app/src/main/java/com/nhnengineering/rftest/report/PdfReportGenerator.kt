@@ -1644,6 +1644,87 @@ object PdfReportGenerator {
     }
 
     /**
+     * A-B benchmark report (roadmap E3): two sessions compared KPI by KPI, each row naming a winner,
+     * with a headline verdict. The comparison itself is [BenchmarkComparison]; this only renders it.
+     */
+    suspend fun generateBenchmark(
+        a: BenchmarkComparison.Side,
+        b: BenchmarkComparison.Side,
+        out: File,
+    ): File = withContext(Dispatchers.IO) {
+        val cmp = BenchmarkComparison.analyse(a, b)
+        val doc = PdfDocument()
+        val c = Ctx(doc)
+        c.newPage()
+
+        c.text("A-B Network Benchmark", c.title)
+        c.gap(6f)
+        c.titleBlock(
+            listOf(
+                "Session A" to a.summary.displayName,
+                "Session B" to b.summary.displayName,
+                "A measurement" to cmp.kpiA,
+                "B measurement" to cmp.kpiB,
+                "Instrument" to "${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}",
+                "Prepared by" to "NHN Engineering & Consultants",
+                "Report generated" to DATE.format(Date(System.currentTimeMillis())),
+            ),
+        )
+        c.rule()
+
+        c.text("Verdict", c.h2)
+        c.para(cmp.verdict, c.body)
+        c.gap()
+        c.para("A = ${a.label}    ·    B = ${b.label}")
+        c.gap(); c.rule()
+
+        c.text("KPI comparison", c.h2)
+        c.gap(2f)
+        c.text(String.format(Locale.US, "%-26s %10s %10s %9s  %-6s", "Metric", "A", "B", "Delta", "Better"), c.monoBold)
+        for (m in cmp.metrics) {
+            val unit = if (m.unit.isBlank()) "" else " ${m.unit}"
+            val winner = when (m.winner) {
+                BenchmarkComparison.Winner.A -> "A"
+                BenchmarkComparison.Winner.B -> "B"
+                BenchmarkComparison.Winner.TIE -> "tie"
+                BenchmarkComparison.Winner.NA -> "—"
+            }
+            c.text(
+                String.format(
+                    Locale.US, "%-26s %10s %10s %9s  %-6s",
+                    m.name.take(26), m.aText() + unit, m.bText() + unit, m.deltaText(), winner,
+                ),
+                c.mono,
+            )
+        }
+        c.gap()
+        c.para("Delta is B minus A in the metric's own units. A dash means the metric could not be compared.")
+        if (!cmp.sameKpi) {
+            c.gap(2f)
+            c.para(
+                "The two sessions measured different radios (${cmp.kpiA} vs ${cmp.kpiB}), so the " +
+                    "signal-level rows (median, cell edge) are omitted — only comparisons that hold " +
+                    "across that boundary (coverage %, audit score, voice, throughput, stability) are shown.",
+            )
+        }
+        c.gap(); c.rule()
+
+        c.text("How to read this", c.h2)
+        c.para(
+            "Each session is run through the same analysis a single-session report uses; this places " +
+                "the two side by side and marks the better value per KPI. 'Better' follows each " +
+                "metric's own direction (higher for coverage and signal, lower for losses and PCI " +
+                "conflicts). Estimated voice MOS is a model estimate from radio conditions, not a " +
+                "measured call (see the single-session report's voice-quality note).",
+        )
+
+        c.finish()
+        out.outputStream().use { doc.writeTo(it) }
+        doc.close()
+        out
+    }
+
+    /**
      * Renders one breakdown as a fixed-width table.
      *
      * The `Share` column is the point of the table. Without it a band measured in 2% of samples
