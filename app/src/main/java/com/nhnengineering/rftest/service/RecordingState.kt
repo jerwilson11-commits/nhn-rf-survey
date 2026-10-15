@@ -219,6 +219,17 @@ object RecordingState {
      */
     val pendingThroughput = MutableStateFlow<ThroughputSample?>(null)
 
+    /**
+     * Scripted test plan (E1). The UI configures [testPlan] and flips [planRunRequested] to ask the
+     * service to run it; the service publishes [activePlanProgress] as it advances and clears the
+     * request when the plan finishes or is stopped. Same UI-sets / service-reacts pattern as
+     * [throughputCadence], so no new wiring threads through the dashboard.
+     */
+    val testPlan = MutableStateFlow<com.nhnengineering.rftest.automation.TestPlan?>(null)
+    val planRunRequested = MutableStateFlow(false)
+    val activePlanProgress =
+        MutableStateFlow<com.nhnengineering.rftest.automation.PlanRunner.Progress?>(null)
+
     /** One point on the live trail. Deliberately flat and small — it is serialised per poll. */
     data class LiveFix(
         val lat: Double,
@@ -253,6 +264,10 @@ object RecordingState {
         throughputBusy.value = false
         liveDownloadMbps.value = null
         liveUploadMbps.value = null
+        // The plan configuration ([testPlan]) is kept as a reusable setting; only the run state is
+        // cleared, so a new session never inherits a half-finished run.
+        planRunRequested.value = false
+        activePlanProgress.value = null
     }
 }
 

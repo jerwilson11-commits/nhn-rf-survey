@@ -188,6 +188,8 @@ fun SetupPanel(
                 )
             }
 
+            TestPlanSection(recording = recording)
+
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,

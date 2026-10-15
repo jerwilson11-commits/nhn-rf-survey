@@ -30,6 +30,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -88,6 +89,22 @@ class RecordingService : Service() {
     private val walkThroughput = com.nhnengineering.rftest.speedtest.WalkThroughput()
     private var loop: Job? = null
     private var throughputToggleJob: Job? = null
+    private var planJob: Job? = null
+
+    /**
+     * Drives a scripted [TestPlan] (E1): a dwell is a delay, a throughput step is one burst, and a
+     * step's label is written to the sticky [RecordingState.areaLabel] so its samples land in the
+     * report's per-area section under the point's name. Progress is published for the UI.
+     */
+    private val planActions = object : com.nhnengineering.rftest.automation.PlanRunner.Actions {
+        override fun label(label: String?) { RecordingState.areaLabel.value = label }
+        override fun progress(progress: com.nhnengineering.rftest.automation.PlanRunner.Progress) {
+            RecordingState.activePlanProgress.value = progress
+        }
+        override suspend fun dwell(seconds: Int) { delay(seconds * 1000L) }
+        override suspend fun throughput() { walkThroughput.runOnce() }
+        override fun keepRunning(): Boolean = RecordingState.active.value
+    }
 
     private lateinit var wifi: WifiCollector
     private lateinit var locations: LocationCollector
@@ -140,6 +157,21 @@ class RecordingService : Service() {
         throughputToggleJob = scope.launch {
             RecordingState.throughputCadence.collect { cadence ->
                 if (cadence != ThroughputCadence.OFF) walkThroughput.start(scope) else walkThroughput.stop()
+            }
+        }
+
+        // Scripted test plan (E1). collectLatest so that clearing the request (operator presses Stop
+        // plan) cancels the run in flight; the run's own finally clears the progress and the request.
+        planJob = scope.launch {
+            RecordingState.planRunRequested.collectLatest { requested ->
+                val plan = RecordingState.testPlan.value
+                if (!requested || plan == null || !plan.isValid) return@collectLatest
+                try {
+                    com.nhnengineering.rftest.automation.PlanRunner.run(plan, planActions)
+                } finally {
+                    RecordingState.activePlanProgress.value = null
+                    RecordingState.planRunRequested.value = false
+                }
             }
         }
         // The live server is deliberately not started or stopped here — see [LiveView]. Tying it
@@ -316,6 +348,10 @@ class RecordingService : Service() {
         writer = null
         throughputToggleJob?.cancel()
         throughputToggleJob = null
+        planJob?.cancel()
+        planJob = null
+        RecordingState.planRunRequested.value = false
+        RecordingState.activePlanProgress.value = null
         walkThroughput.stop()
 
         // New scope: the recording scope is being torn down, and the file still needs closing.

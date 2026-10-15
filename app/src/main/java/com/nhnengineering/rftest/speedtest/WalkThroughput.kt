@@ -127,6 +127,14 @@ class WalkThroughput(private val config: Config = Config()) {
     }
 
     /**
+     * Runs exactly one burst and returns when it finishes. Used by the scripted test plan, which
+     * sequences its own bursts rather than leaving them to the free-running cadence loop. Shares
+     * [runBurst], so the result lands in [RecordingState.pendingThroughput] and is written on the
+     * current row exactly as a cadence burst would be.
+     */
+    suspend fun runOnce() = runBurst()
+
+    /**
      * Runs one burst.
      *
      * Cancellation is rethrown rather than recorded. A burst still transferring when the operator
