@@ -162,6 +162,13 @@ data class TrackPoint(
     val nrServingArfcn: Int? = null,
     val lteServingPci: Int? = null,
     val lteServingEarfcn: Int? = null,
+    /**
+     * LTE timing advance of the serving cell, in the modem's own units (one step ≈ 78.125 m of
+     * one-way distance to the eNB). Null on an NR serving cell, when the handset did not report it,
+     * and on sessions recorded before it was read back. The public-API half of A5 (TA → distance);
+     * NR TA and PHR/Tx power need the DIAG path and are a separate Pro follow-up.
+     */
+    val lteTimingAdvance: Int? = null,
 ) {
     /** True when this sample can be placed on a floorplan even though GPS could not place it. */
     val hasIndoorPosition: Boolean
@@ -259,6 +266,7 @@ object SessionReader {
             val iNrPci = idx("nr_pci"); val iLtePci = idx("lte_pci")
             val iNrNci = idx("nr_nci")
             val iNrArfcn = idx("nr_arfcn"); val iEarfcn = idx("lte_earfcn")
+            val iLteTa = idx("lte_ta")
             val iCells = idx("cell_neighbors_json")
             val iCellSrc = idx("cell_neighbor_source")
             val iFloor = idx("floor")
@@ -377,6 +385,7 @@ object SessionReader {
                     nrServingArfcn = s(iNrArfcn)?.toIntOrNull(),
                     lteServingPci = s(iLtePci)?.toIntOrNull(),
                     lteServingEarfcn = s(iEarfcn)?.toIntOrNull(),
+                    lteTimingAdvance = s(iLteTa)?.toIntOrNull(),
                 )
             }
 

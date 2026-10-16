@@ -1026,6 +1026,47 @@ object PdfReportGenerator {
             c.gap(); c.rule()
         }
 
+        // ---- Distance to serving cell (LTE timing advance) ----------------
+        //
+        // A5, public-API half. TA → one-way distance to the eNB. Macro overshoot shows as a large
+        // distance; on a DAS this is cable + head-end delay, not location — stated plainly below.
+        val ta = TimingAdvanceRange.analyse(points)
+        if (ta.hasData) {
+            c.ensure(140f)
+            c.text("Distance to serving cell (LTE timing advance)", c.h2)
+            c.para(
+                "Derived from the modem's LTE timing advance: one step is 78 m of one-way distance " +
+                    "to the eNodeB. On a macro cell a large distance is overshoot — a venue served " +
+                    "from far off that an in-building system should be carrying. On a DAS or repeater " +
+                    "this is the system's cable and processing delay, not a physical distance, and " +
+                    "must not be read as one. LTE only; NR timing advance needs the modem log.",
+            )
+            c.gap()
+            c.kv("LTE samples with timing advance", ta.samples.toString())
+            c.kv("Distance (median)", "${ta.medianDistanceM} m")
+            c.kv("Distance (min / max)", "${ta.minDistanceM} m / ${ta.maxDistanceM} m")
+            if (ta.zeroTaSamples > 0) {
+                c.kv("At the cell (TA 0)", "${ta.zeroTaSamples} samples")
+            }
+            if (ta.byCell.size > 1) {
+                c.gap()
+                c.text(
+                    String.format(Locale.US, "%-10s %8s %10s %10s", "PCI", "Samples", "Median", "Max"),
+                    c.monoBold,
+                )
+                for (cell in ta.byCell.take(8)) {
+                    c.text(
+                        String.format(
+                            Locale.US, "%-10s %8d %9dm %9dm",
+                            cell.pci?.toString() ?: "—", cell.samples, cell.medianDistanceM, cell.maxDistanceM,
+                        ),
+                        c.mono,
+                    )
+                }
+            }
+            c.gap(); c.rule()
+        }
+
         // ---- Dominance / best server --------------------------------------
         val dom = SessionStats.dominance(points)
         if (dom.samples > 0 && dom.servers.isNotEmpty()) {
