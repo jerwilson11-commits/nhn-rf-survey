@@ -1067,6 +1067,64 @@ object PdfReportGenerator {
             c.gap(); c.rule()
         }
 
+        // ---- Interference vs coverage, pilot pollution (C2) ---------------
+        //
+        // Separates weak-signal (coverage-limited) from overlap (interference-limited), which RSRP
+        // alone cannot, and works on 5G SA. Pilot-pollution count needs neighbours, so it is
+        // LTE/modem-only — the NR-neighbour limitation stated in the dominance section applies.
+        val interf = InterferenceClass.analyse(points)
+        if (interf.hasData) {
+            c.ensure(150f)
+            c.text("Interference vs coverage", c.h2)
+            c.para(
+                "A spot can be bad for opposite reasons needing opposite fixes. Coverage-limited " +
+                    "(RSRP below ${interf.rsrpFloorDbm} dBm) needs more signal; interference-limited " +
+                    "(RSRP adequate but SINR below ${interf.sinrFloorDb} dB) is overlap — adding " +
+                    "coverage makes it worse. Classified over samples carrying both RSRP and SINR.",
+            )
+            c.gap()
+            c.kv("Samples classified", interf.classified.toString())
+            c.kv("Clean", String.format(Locale.US, "%d  (%.1f %%)", interf.clean, interf.pct(interf.clean)))
+            c.kv(
+                "Interference-limited",
+                String.format(Locale.US, "%d  (%.1f %%)", interf.interferenceLimited, interf.pct(interf.interferenceLimited)),
+            )
+            c.kv(
+                "Coverage-limited",
+                String.format(Locale.US, "%d  (%.1f %%)", interf.coverageLimited, interf.pct(interf.coverageLimited)),
+            )
+            c.gap()
+            if (interf.pollutionAssessable > 0) {
+                c.para(
+                    "Pilot pollution: samples where ${interf.polluterThreshold} or more cells sit " +
+                        "within ${interf.windowDb} dB of the strongest (no clean server).",
+                )
+                c.kv(
+                    "Polluted samples",
+                    String.format(
+                        Locale.US, "%d of %d assessable  (%.1f %%)",
+                        interf.pollutedSamples, interf.pollutionAssessable,
+                        100.0 * interf.pollutedSamples / interf.pollutionAssessable,
+                    ),
+                )
+                c.kv("Most cells within window", interf.maxPolluters.toString())
+                if (interf.medianSinrPolluted != null && interf.medianSinrClear != null) {
+                    c.kv(
+                        "Median SINR polluted vs clear",
+                        "${interf.medianSinrPolluted} dB vs ${interf.medianSinrClear} dB",
+                    )
+                }
+            } else {
+                c.para(
+                    "Pilot pollution could not be counted: no sample carried two or more cells with " +
+                        "a level. On 5G SA this is expected — Android exposes no NR neighbours — and " +
+                        "means not assessable, not no pollution. The modem neighbour feed (Pro) is the " +
+                        "path to counting it on NR.",
+                )
+            }
+            c.gap(); c.rule()
+        }
+
         // ---- Dominance / best server --------------------------------------
         val dom = SessionStats.dominance(points)
         if (dom.samples > 0 && dom.servers.isNotEmpty()) {
