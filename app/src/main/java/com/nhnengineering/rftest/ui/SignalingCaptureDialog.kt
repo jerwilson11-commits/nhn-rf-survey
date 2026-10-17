@@ -311,7 +311,8 @@ private fun SignalingEventRow(e: ModemNrStream.SignalingEvent) {
                 e.nas.messageTypeName != null -> e.nas.messageTypeName
                 else -> "unrecognised (0x%02x)".format(e.nas.messageType ?: -1)
             }
-            "$dir NAS: $label"
+            val cause = e.nas.cause5gmm?.let { " — ${e.nas.cause5gmmName ?: "cause 0x%02x".format(it)}" } ?: ""
+            "$dir NAS: $label$cause"
         }
         e.rrc != null -> {
             val pdu = e.rrc.pduType?.label ?: "unrecognised PDU"

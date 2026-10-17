@@ -59,6 +59,44 @@ object Nas5gsOtaParser {
         0x66 to "Notification response", 0x67 to "UL NAS transport", 0x68 to "DL NAS transport",
     )
 
+    /**
+     * TS 24.501 Table 9.11.3.2.1 -- 5GMM cause values. The reason the network gave for a reject, which
+     * is the finding a survey is after: "Registration reject" alone says it failed; the cause says why
+     * (PLMN not allowed vs congestion vs no suitable cells are three different site problems). Standard
+     * 3GPP constants, not device-specific -- safe to hardcode, same as [MESSAGE_TYPES].
+     */
+    private val CAUSE_5GMM = mapOf(
+        0x03 to "Illegal UE", 0x05 to "PEI not accepted", 0x06 to "Illegal ME",
+        0x07 to "5GS services not allowed", 0x09 to "UE identity cannot be derived by the network",
+        0x0A to "Implicitly de-registered", 0x0B to "PLMN not allowed",
+        0x0C to "Tracking area not allowed", 0x0D to "Roaming not allowed in this tracking area",
+        0x0F to "No suitable cells in tracking area", 0x14 to "MAC failure", 0x15 to "Synch failure",
+        0x16 to "Congestion", 0x17 to "UE security capabilities mismatch",
+        0x18 to "Security mode rejected, unspecified", 0x1B to "N1 mode not allowed",
+        0x1C to "Restricted service area", 0x2B to "LADN not available",
+        0x48 to "Maximum number of PDU sessions reached",
+        0x49 to "Insufficient resources for specific slice and DNN",
+        0x4A to "Insufficient resources for specific slice",
+        0x4F to "ngKSI already in use", 0x5A to "Payload was not forwarded",
+        0x5B to "DNN not supported or not subscribed in the slice",
+        0x5C to "Insufficient user-plane resources for the PDU session",
+        0x5F to "Semantically incorrect message", 0x60 to "Invalid mandatory information",
+        0x61 to "Message type non-existent or not implemented",
+        0x62 to "Message type not compatible with protocol state",
+        0x63 to "Information element non-existent or not implemented",
+        0x64 to "Conditional IE error", 0x65 to "Message not compatible with protocol state",
+        0x6F to "Protocol error, unspecified",
+    )
+
+    /**
+     * Messages that carry a mandatory 5GMM cause as the first IE right after the message type, so the
+     * cause byte is at a fixed offset and needs no IE walking. TS 24.501 §8.2: Registration reject
+     * (§8.2.8), Service reject (§8.2.18) and 5GMM status (§8.2.24) all start "5GMM cause" immediately.
+     * Other causes (Deregistration's optional IE, 5GSM causes inside DL NAS transport) are IE-encoded
+     * and deliberately not guessed here.
+     */
+    private val CAUSE_AFTER_TYPE = setOf(0x44, 0x4D, 0x64)
+
     data class Result(
         val looksValid: Boolean = false,
         val direction: Direction? = null,
@@ -67,6 +105,9 @@ object Nas5gsOtaParser {
         /** Only set when [securityProtected] is false -- see the class doc for why. */
         val messageType: Int? = null,
         val messageTypeName: String? = null,
+        /** 5GMM cause value, for the reject/status messages that carry one as a fixed first IE. */
+        val cause5gmm: Int? = null,
+        val cause5gmmName: String? = null,
         /** The raw NAS-5GS message bytes (from payload byte 7 on), always present when reachable. */
         val rawNasHex: String? = null,
         val notes: List<String> = emptyList(),
@@ -129,17 +170,28 @@ object Nas5gsOtaParser {
             )
         }
         val messageType = u8(packet, NAS_AT + 2)
+        // 5GMM cause, where it is the fixed first IE after the message type (reject / status).
+        val cause = if (messageType in CAUSE_AFTER_TYPE && packet.size > NAS_AT + 3) {
+            u8(packet, NAS_AT + 3)
+        } else {
+            null
+        }
         return Result(
             looksValid = true,
             direction = direction,
             securityProtected = false,
             messageType = messageType,
             messageTypeName = MESSAGE_TYPES[messageType],
+            cause5gmm = cause,
+            cause5gmmName = cause?.let { CAUSE_5GMM[it] },
             rawNasHex = rawHex,
-            notes = if (MESSAGE_TYPES[messageType] == null) {
-                listOf("Message type 0x%02x is not in the known 5GMM table.".format(messageType))
-            } else {
-                emptyList()
+            notes = buildList {
+                if (MESSAGE_TYPES[messageType] == null) {
+                    add("Message type 0x%02x is not in the known 5GMM table.".format(messageType))
+                }
+                if (cause != null && CAUSE_5GMM[cause] == null) {
+                    add("5GMM cause 0x%02x is not in the known cause table.".format(cause))
+                }
             },
         )
     }

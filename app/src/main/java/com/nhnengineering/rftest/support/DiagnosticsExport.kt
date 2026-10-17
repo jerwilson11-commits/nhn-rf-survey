@@ -263,7 +263,12 @@ internal fun renderSignalingLog(events: List<ModemNrStream.SignalingEvent>): Str
                     e.nas.messageTypeName != null -> e.nas.messageTypeName
                     else -> "unrecognised (0x%02x)".format(e.nas.messageType ?: -1)
                 }
-                appendLine("[$t] NAS $dir: $summary")
+                // The cause is the finding: a reject with "PLMN not allowed" vs "Congestion" are
+                // different problems. Print it inline when the message carried one.
+                val cause = e.nas.cause5gmm?.let { c ->
+                    " — cause ${e.nas.cause5gmmName ?: "0x%02x".format(c)} (0x%02x)".format(c)
+                } ?: ""
+                appendLine("[$t] NAS $dir: $summary$cause")
                 appendLine("    raw: ${e.nas.rawNasHex ?: "(none)"}")
             }
             e.rrc != null -> {
