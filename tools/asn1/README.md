@@ -39,6 +39,12 @@ This mirrors the `tools/diag/` pattern: the sources and build recipe live here; 
 - **SA (`pduKind 1`, SIB1):** `BCCH-DL-SCH-Message → message.c1.systemInformationBlockType1 →
   servingCellConfigCommon` (ServingCellConfigCommonSIB) → `tdd-UL-DL-ConfigurationCommon`.
   (Shared leaf type `TDD_UL_DL_ConfigCommon`.)
+- **SA (`pduKind 1`, SystemInformation / SIB2-SIBx — B4):** same `BCCH-DL-SCH-Message`, other c1 arm
+  `message.c1.systemInformation → criticalExtensions.systemInformation.sib-TypeAndInfo` (SEQUENCE OF
+  CHOICE). Emits `{"root":"SystemInformation","sibs":[...],"sib2":{qHyst,qRxLevMin,sIntraSearchP,
+  tReselectionNR,threshServingLowP,cellReselectionPriority}}`. A short DL-DCCH frame can spuriously
+  satisfy this grammar and comes back `"error":"not_plain_si"`; the Kotlin side filters on a non-empty
+  `sibs` list (the modem's SI PDU-type code is unmapped, so SI logs as "unrecognised PDU type").
 
 ## Rebuilding
 

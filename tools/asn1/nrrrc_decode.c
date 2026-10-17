@@ -14,6 +14,9 @@
 #include "BCCH-DL-SCH-Message.h"
 #include "BCCH-DL-SCH-MessageType.h"
 #include "SIB1.h"
+#include "SystemInformation.h"
+#include "SystemInformation-IEs.h"
+#include "SIB2.h"
 #include "ServingCellConfigCommonSIB.h"
 #include "TDD-UL-DL-ConfigCommon.h"
 #include "TDD-UL-DL-Pattern.h"
@@ -165,6 +168,72 @@ static void emit_sib1_cellinfo(struct sb *s, const SIB1_t *sib1) {
     }
 }
 
+/* B4: SystemInformation (SIB2-SIBx). Which SIBs the cell broadcasts, plus SIB2's cell-reselection
+ * parameters -- the configuration that governs how the handset moves between cells, previously
+ * invisible (only SIB1 was decoded). Raw ASN.1 values; the Kotlin adapter scales/labels them. */
+static const char *sib_member_name(int pr) {
+    typedef SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR P;
+    switch (pr) {
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib2: return "sib2";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib3: return "sib3";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib4: return "sib4";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib5: return "sib5";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib6: return "sib6";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib7: return "sib7";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib8: return "sib8";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib9: return "sib9";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib10_v1610: return "sib10";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib11_v1610: return "sib11";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib12_v1610: return "sib12";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib13_v1610: return "sib13";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib14_v1610: return "sib14";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib15_v1700: return "sib15";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib16_v1700: return "sib16";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib17_v1700: return "sib17";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib18_v1700: return "sib18";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib19_v1700: return "sib19";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib20_v1700: return "sib20";
+        case SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib21_v1700: return "sib21";
+        default: (void)(P)0; return "sib?";
+    }
+}
+
+/* SIB2 cell-reselection parameters. All the headline values are NativeInteger (long). */
+static void emit_sib2(struct sb *s, const SIB2_t *sib2) {
+    sbput(s, "\"sib2\":{\"qHyst\":%ld", sib2->cellReselectionInfoCommon.q_Hyst);
+    const struct SIB2__intraFreqCellReselectionInfo *intra = &sib2->intraFreqCellReselectionInfo;
+    sbput(s, ",\"qRxLevMin\":%ld,\"sIntraSearchP\":%ld,\"tReselectionNR\":%ld",
+          intra->q_RxLevMin, intra->s_IntraSearchP, intra->t_ReselectionNR);
+    if (intra->q_QualMin) sbput(s, ",\"qQualMin\":%ld", *intra->q_QualMin);
+    const struct SIB2__cellReselectionServingFreqInfo *srv = &sib2->cellReselectionServingFreqInfo;
+    sbput(s, ",\"threshServingLowP\":%ld,\"cellReselectionPriority\":%ld",
+          srv->threshServingLowP, srv->cellReselectionPriority);
+    if (srv->s_NonIntraSearchP) sbput(s, ",\"sNonIntraSearchP\":%ld", *srv->s_NonIntraSearchP);
+    sbput(s, "}");
+}
+
+static void emit_system_information(struct sb *s, const SystemInformation_t *si) {
+    sbput(s, "\"root\":\"SystemInformation\",");
+    if (si->criticalExtensions.present != SystemInformation__criticalExtensions_PR_systemInformation) {
+        sbput(s, "\"error\":\"not_plain_si\"}"); return;
+    }
+    const SystemInformation_IEs_t *ies = &si->criticalExtensions.choice.systemInformation;
+    sbput(s, "\"sibs\":[");
+    for (int i = 0; i < ies->sib_TypeAndInfo.list.count; i++) {
+        if (i) sbput(s, ",");
+        sbput(s, "\"%s\"", sib_member_name(ies->sib_TypeAndInfo.list.array[i]->present));
+    }
+    sbput(s, "]");
+    for (int i = 0; i < ies->sib_TypeAndInfo.list.count; i++) {
+        const SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member *mem =
+            ies->sib_TypeAndInfo.list.array[i];
+        if (mem->present == SystemInformation_IEs__sib_TypeAndInfo__sib_TypeAndInfo_Member_PR_sib2) {
+            sbput(s, ","); emit_sib2(s, &mem->choice.sib2); break;
+        }
+    }
+    sbput(s, "}");
+}
+
 char *nrrrc_decode_tdd_json(int pduKind, const unsigned char *buf, size_t n) {
     struct sb s; s.cap = 8192; s.p = (char *)malloc(s.cap); s.len = 0; if (!s.p) return 0; s.p[0] = 0;
     sbput(&s, "{");
@@ -191,19 +260,26 @@ char *nrrrc_decode_tdd_json(int pduKind, const unsigned char *buf, size_t n) {
         return s.p;
     }
 
-    if (pduKind == 1) { /* BCCH-DL-SCH-Message / SIB1 (SA broadcast) */
+    if (pduKind == 1) { /* BCCH-DL-SCH-Message: SIB1, or SystemInformation (SIB2-SIBx) */
         BCCH_DL_SCH_Message_t *m = 0;
         asn_dec_rval_t rc = uper_decode_complete(0, &asn_DEF_BCCH_DL_SCH_Message, (void **)&m, buf, n);
         if (rc.code != RC_OK) { sbput(&s, "\"error\":\"bcch_decode\"}"); return s.p; }
-        if (!m->message || m->message->present != BCCH_DL_SCH_MessageType_PR_c1 ||
-            m->message->choice.c1.present != BCCH_DL_SCH_MessageType__c1_PR_systemInformationBlockType1) {
-            sbput(&s, "\"error\":\"not_sib1\"}"); return s.p; }
-        SIB1_t *sib1 = m->message->choice.c1.choice.systemInformationBlockType1;
-        if (!sib1 || !sib1->servingCellConfigCommon) { sbput(&s, "\"error\":\"no_scc_sib\"}"); return s.p; }
-        sbput(&s, "\"root\":\"SIB1\",");
-        emit_sib1_cellinfo(&s, sib1);
-        emit_from_sccsib(&s, sib1->servingCellConfigCommon);
-        return s.p;
+        if (!m->message || m->message->present != BCCH_DL_SCH_MessageType_PR_c1) {
+            sbput(&s, "\"error\":\"not_c1\"}"); return s.p; }
+        if (m->message->choice.c1.present == BCCH_DL_SCH_MessageType__c1_PR_systemInformationBlockType1) {
+            SIB1_t *sib1 = m->message->choice.c1.choice.systemInformationBlockType1;
+            if (!sib1 || !sib1->servingCellConfigCommon) { sbput(&s, "\"error\":\"no_scc_sib\"}"); return s.p; }
+            sbput(&s, "\"root\":\"SIB1\",");
+            emit_sib1_cellinfo(&s, sib1);
+            emit_from_sccsib(&s, sib1->servingCellConfigCommon);
+            return s.p;
+        }
+        if (m->message->choice.c1.present == BCCH_DL_SCH_MessageType__c1_PR_systemInformation) {
+            /* systemInformation is held by value in the c1 union, not by pointer. */
+            emit_system_information(&s, &m->message->choice.c1.choice.systemInformation);
+            return s.p;
+        }
+        sbput(&s, "\"error\":\"unknown_bcch_c1\"}"); return s.p;
     }
 
     sbput(&s, "\"error\":\"unsupported_pdukind\"}");

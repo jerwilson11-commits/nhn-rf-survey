@@ -66,6 +66,50 @@ object NrRrcTdd {
         return null
     }
 
+    /**
+     * SystemInformation (SIB2-SIBx) decoded from a BCCH-DL-SCH message (B4). The SIB inventory the
+     * cell broadcasts, plus SIB2's cell-reselection parameters -- the configuration that governs how
+     * the handset moves between cells, previously invisible (only SIB1/TDD was decoded).
+     */
+    data class SiInfo(val sibs: List<String>, val sib2: Map<String, Int>)
+
+    /**
+     * Parse the native decoder's SystemInformation JSON. Returns null for anything that is not a
+     * clean SI with a non-empty SIB list -- in particular the `not_plain_si` result a short DL-DCCH
+     * frame produces when it spuriously satisfies the BCCH-DL-SCH grammar, which is how an SI frame
+     * (logged as "unrecognised PDU type", since the modem's SI PDU-type code is not mapped) is told
+     * apart from a false positive without knowing that code up front.
+     */
+    internal fun systemInformationFromJson(json: String): SiInfo? {
+        val o = runCatching { JSONObject(json) }.getOrNull() ?: return null
+        if (o.optString("root") != "SystemInformation" || o.has("error")) return null
+        val arr = o.optJSONArray("sibs") ?: return null
+        if (arr.length() == 0) return null
+        val sibs = (0 until arr.length()).map { arr.getString(it) }
+        val sib2 = o.optJSONObject("sib2")?.let { s ->
+            buildMap { s.keys().forEach { k -> put(k, s.getInt(k)) } }
+        } ?: emptyMap()
+        return SiInfo(sibs, sib2)
+    }
+
+    /** Decode one captured RRC body as BCCH-DL-SCH and return its SystemInformation, or null. */
+    fun systemInformation(uper: ByteArray): SiInfo? =
+        NrRrcDecoder.decode(1, uper)?.let { systemInformationFromJson(it) }
+
+    /**
+     * The most recent decodable SystemInformation in a capture. Tries every RRC frame (SI frames are
+     * not PDU-type-classified), relying on [systemInformationFromJson]'s filter to reject the
+     * DL-DCCH false positives.
+     */
+    fun bestSystemInformation(events: List<ModemNrStream.SignalingEvent>): SiInfo? {
+        for (e in events.asReversed()) {
+            val hex = e.rrc?.rawUperHex ?: continue
+            val bytes = hexToBytes(hex) ?: continue
+            systemInformation(bytes)?.let { return it }
+        }
+        return null
+    }
+
     private fun hexToBytes(hex: String): ByteArray? {
         val s = hex.trim().replace(Regex("\\s"), "")
         if (s.isEmpty() || s.length % 2 != 0) return null

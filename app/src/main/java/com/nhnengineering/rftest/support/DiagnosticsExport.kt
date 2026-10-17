@@ -252,6 +252,17 @@ internal fun renderSignalingLog(events: List<ModemNrStream.SignalingEvent>): Str
         }
         appendLine()
     }
+    // B4: SystemInformation (SIB2-SIBx) -- which SIBs the cell broadcasts + SIB2 reselection params.
+    com.nhnengineering.rftest.modem.NrRrcTdd.bestSystemInformation(events)?.let { si ->
+        appendLine("===== SystemInformation (SIB2-SIBx) =====")
+        appendLine("  SIBs broadcast: ${si.sibs.joinToString(", ")}")
+        if (si.sib2.isNotEmpty()) {
+            appendLine("  SIB2 cell reselection:")
+            for ((k, v) in si.sib2) appendLine("    $k: $v")
+        }
+        appendLine()
+    }
+
     appendLine("===== Raw event timeline =====")
     for (e in events) {
         val t = "%6d ms".format(e.atElapsedMs)
