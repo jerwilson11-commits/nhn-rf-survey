@@ -807,6 +807,30 @@ fun WifiDashboard(modifier: Modifier = Modifier) {
                     shareDiagnosticsText(context, text, filePrefix = "signaling_capture")
                 }
             },
+            onExportPcap = { events ->
+                // D1, Pro: GSMTAP PCAP for Wireshark. The capture itself already needs root/Pro;
+                // the tier check keeps it consistent with the rest of the Pro gating.
+                if (!com.nhnengineering.rftest.billing.EntitlementRepository.tier.value.grantsPro) {
+                    com.nhnengineering.rftest.billing.UpgradePrompt.open()
+                } else {
+                    scope.launch {
+                        val bytes = withContext(Dispatchers.IO) {
+                            com.nhnengineering.rftest.modem.GsmtapPcapExport.build(events)
+                        }
+                        shareDiagnosticsBytes(
+                            context, bytes,
+                            filePrefix = "signaling_capture",
+                            ext = "pcap",
+                            mime = "application/vnd.tcpdump.pcap",
+                        )
+                        android.widget.Toast.makeText(
+                            context,
+                            "GSMTAP PCAP — open in Wireshark with the SCAT GSMTAPv3 plugin",
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }
+            },
             onSaveProfile = { profile ->
                 com.nhnengineering.rftest.profile.ProfileStore(
                     java.io.File(context.filesDir, "tdd-profiles.jsonl"),

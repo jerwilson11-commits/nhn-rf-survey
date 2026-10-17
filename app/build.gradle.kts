@@ -29,8 +29,8 @@ android {
         // behavior changes (mandatory ACCESS_LOCAL_NETWORK, large-screen orientation
         // enforcement) out of Phases 1-4. See docs/Android 17 Impact Notes.md.
         targetSdk = 36
-        versionCode = 25
-        versionName = "1.12"
+        versionCode = 26
+        versionName = "1.13"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

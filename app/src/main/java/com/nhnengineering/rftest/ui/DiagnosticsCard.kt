@@ -74,3 +74,25 @@ fun shareDiagnosticsText(context: Context, text: String, filePrefix: String = "d
     context.startActivity(Intent.createChooser(intent, "Share ${file.name}"))
     return file
 }
+
+/** Writes [bytes] to a timestamped file with the given extension and shares it. */
+fun shareDiagnosticsBytes(
+    context: Context,
+    bytes: ByteArray,
+    filePrefix: String,
+    ext: String,
+    mime: String,
+): File {
+    val dir = File(context.getExternalFilesDir(null), "exports").apply { mkdirs() }
+    val file = File(dir, "${filePrefix}_${System.currentTimeMillis()}.$ext")
+    file.writeBytes(bytes)
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = mime
+        putExtra(Intent.EXTRA_STREAM, uri)
+        putExtra(Intent.EXTRA_SUBJECT, file.name)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, "Share ${file.name}"))
+    return file
+}

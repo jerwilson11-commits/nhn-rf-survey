@@ -1,6 +1,7 @@
 package com.nhnengineering.rftest.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -24,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.nhnengineering.rftest.cellular.BandMapping
 import com.nhnengineering.rftest.modem.ExynosCapture
+import com.nhnengineering.rftest.modem.GsmtapPcapExport
 import com.nhnengineering.rftest.modem.ModemNrStream
 import com.nhnengineering.rftest.modem.Nas5gsOtaParser
 import com.nhnengineering.rftest.modem.NrRrcTdd
@@ -57,6 +59,8 @@ internal fun SignalingCaptureDialog(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onExport: (List<ModemNrStream.SignalingEvent>) -> Unit,
+    /** Exports the captured NR RRC / NAS-5GS messages as a GSMTAP PCAP for Wireshark (D1, Pro). */
+    onExportPcap: (List<ModemNrStream.SignalingEvent>) -> Unit = {},
     onSaveProfile: (TddProfile) -> Unit,
     onDismiss: () -> Unit,
     // Non-null only on a rooted Exynos/Shannon device with the beta flag on. When set, the dialog
@@ -135,13 +139,25 @@ internal fun SignalingCaptureDialog(
                 if (exynosCapture == null) {
                     // --- Qualcomm path (unchanged) ---
                     item {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = onStart, enabled = !capturing && captureSupported) { Text("Start") }
-                            OutlinedButton(onClick = onStop, enabled = capturing) { Text("Stop") }
-                            OutlinedButton(
-                                onClick = { onExport(events) },
-                                enabled = events.isNotEmpty(),
-                            ) { Text("Export") }
+                        // Two rows: capture controls, then the two export actions. Four buttons on one
+                        // row overflowed and clipped the PCAP export off the right edge.
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = onStart, enabled = !capturing && captureSupported) { Text("Start") }
+                                OutlinedButton(onClick = onStop, enabled = capturing) { Text("Stop") }
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(
+                                    onClick = { onExport(events) },
+                                    enabled = events.isNotEmpty(),
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("Export log") }
+                                OutlinedButton(
+                                    onClick = { onExportPcap(events) },
+                                    enabled = GsmtapPcapExport.frameCount(events) > 0,
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("Export PCAP") }
+                            }
                         }
                     }
                     item { HorizontalDivider() }
